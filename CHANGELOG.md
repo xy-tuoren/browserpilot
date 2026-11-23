@@ -2,6 +2,19 @@
 
 All notable changes to **DevPilot** are documented in this file.
 
+## [0.2.0] - 2026-11-23
+
+### Added
+- Implemented `@devpilot/core` pure-CDP browser engine (zero Playwright/Puppeteer dependencies):
+  - `DirectCDPTransport` & `CDPTransport` abstraction supporting direct Chrome `--remote-debugging-port` connections, target lifecycle sync, OOPIF child frame auto-attach (`Target.setAutoAttach` with `flatten: true`), and profile-wide safety guards.
+  - `TabCDPSession` managing CDP domains, child iframe sessions, JS dialog tracking (`Page.javascriptDialogOpening`), and event listeners.
+  - `PageController` with browser-trusted (`isTrusted === true`) CDP `Input.*` mouse/keyboard/hover/wheel/drag actions, auto-waiting element resolution (snapshot refs, CSS, `text=`, open Shadow DOM, OOPIF offsets), SPA-safe `fill()`, `<select>`, file upload (`DOM.setFileInputFiles`), CSS-scaled & pure-canvas-resized screenshots, viewport/CPU/network/media/geolocation emulation, page-scoped cookies, and Web Storage helpers.
+  - `SnapshotEngine` building compressed semantic AXTree snapshots with deterministic short refs (`e1`, `e2`...), OOPIF iframe merging, scoped subtree snapshots, regex search, and automatic unified diffs (`showDiffSinceLastCall`).
+  - `captureLabeledScreenshot` generating Vimium-style color-coded Set-of-Mark overlays in a closed shadow root synchronized with snapshot refs.
+  - `DOMExtractor` providing `getCleanHTML` (diffable), `getPageMarkdown` (Readability-style extraction, diffable), and `inspectElement`.
+  - `waitForPageLoad` smart load detector ignoring analytics/ad beacons, plus `waitForSelector`, `waitForText`, and `waitForCondition`.
+- Added unit tests and full real-Chromium E2E tests (`packages/core/test/browser-core.test.ts`) verifying trusted clicks, Shadow DOM, JS dialogs, file upload, drag gestures, snapshots/diffs, Set-of-Mark screenshots, DOM extraction, and cookie safety guards.
+
 ## [0.1.0] - 2026-11-23
 
 ### Added

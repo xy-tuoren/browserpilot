@@ -1,0 +1,28 @@
+{
+  "name": "@devpilot/core",
+  "version": "0.2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@devpilot/protocol": "workspace:*",
+    "diff": "^7.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/diff": "^7.0.0",
+    "@types/ws": "^8.5.14"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  }
+}
