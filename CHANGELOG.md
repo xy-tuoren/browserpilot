@@ -2,26 +2,29 @@
 
 All notable changes to **DevPilot** are documented in this file.
 
+## [0.3.0] - 2026-11-23
+
+### Added
+- Implemented complete pure-CDP DevTools Debugging Suite in `@devpilot/core`:
+  - `ConsoleCollector`: persistent ring buffer (up to 5,000 entries) capturing console API calls, uncaught exceptions, and browser logs with `sinceLastCall` cursor tracking, regex search, and stack traces.
+  - `NetworkInspector`: captures full request/response metadata, headers, ResourceTiming phase breakdowns, JS Initiator call stacks, `Network.getResponseBody`, `sinceLastCall` cursor tracking, and `Fetch` domain request blocking/mocking/header modification.
+  - `StylesInspector`: DevTools Styles panel parity (`CSS.getMatchedStylesForNode`, stylesheet `sourceUrl:line` mapping, cascade override detection, inherited rules, `CSS.forcePseudoState` for `:hover`/`:focus`/`:active`).
+  - `JSDebugger` & `LiveEditor`: script discovery, conditional breakpoints, pause/resume/stepOver/stepInto/stepOut, local scope variable inspection, `evaluateOnCallFrame`, grep across loaded scripts, and live in-memory script/CSS patching (`Debugger.setScriptSource`, `CSS.setStyleSheetText`).
+  - `getReactComponentInfo`: React Fiber traversal returning component name, dev `_debugSource` location, component hierarchy, and safely sanitized props.
+  - `PerformanceProfiler`: Core Web Vitals (`LCP`, `CLS`, `FCP`, `TTFB`), `Performance.getMetrics`, V8 heap summary, CPU profiling (`Profiler.start`/`stop`), and `Tracing` long-task insight analysis.
+  - `ScreenRecorder` & `createDemoVideo`: CDP `Page.startScreencast` piped to `ffmpeg` producing `.mp4`/`.webm` recordings surviving navigation, plus idle-speedup demo generation.
+  - `DevPilotTab` unified per-tab controller with automatic post-action error/failure feedback (`runWithFeedback`).
+  - `SessionManager` & stateful JS execution sandbox (`exec`) with per-session isolated `state`, Chrome Tab Group assignments, and full Playwriter-compatible helpers.
+- Verified every single DevTools, Recording, and Sandbox feature end-to-end against real Chromium (`packages/core/test/devtools-sandbox.test.ts`).
+
 ## [0.2.0] - 2026-11-23
 
 ### Added
 - Implemented `@devpilot/core` pure-CDP browser engine (zero Playwright/Puppeteer dependencies):
-  - `DirectCDPTransport` & `CDPTransport` abstraction supporting direct Chrome `--remote-debugging-port` connections, target lifecycle sync, OOPIF child frame auto-attach (`Target.setAutoAttach` with `flatten: true`), and profile-wide safety guards.
-  - `TabCDPSession` managing CDP domains, child iframe sessions, JS dialog tracking (`Page.javascriptDialogOpening`), and event listeners.
-  - `PageController` with browser-trusted (`isTrusted === true`) CDP `Input.*` mouse/keyboard/hover/wheel/drag actions, auto-waiting element resolution (snapshot refs, CSS, `text=`, open Shadow DOM, OOPIF offsets), SPA-safe `fill()`, `<select>`, file upload (`DOM.setFileInputFiles`), CSS-scaled & pure-canvas-resized screenshots, viewport/CPU/network/media/geolocation emulation, page-scoped cookies, and Web Storage helpers.
-  - `SnapshotEngine` building compressed semantic AXTree snapshots with deterministic short refs (`e1`, `e2`...), OOPIF iframe merging, scoped subtree snapshots, regex search, and automatic unified diffs (`showDiffSinceLastCall`).
-  - `captureLabeledScreenshot` generating Vimium-style color-coded Set-of-Mark overlays in a closed shadow root synchronized with snapshot refs.
-  - `DOMExtractor` providing `getCleanHTML` (diffable), `getPageMarkdown` (Readability-style extraction, diffable), and `inspectElement`.
-  - `waitForPageLoad` smart load detector ignoring analytics/ad beacons, plus `waitForSelector`, `waitForText`, and `waitForCondition`.
-- Added unit tests and full real-Chromium E2E tests (`packages/core/test/browser-core.test.ts`) verifying trusted clicks, Shadow DOM, JS dialogs, file upload, drag gestures, snapshots/diffs, Set-of-Mark screenshots, DOM extraction, and cookie safety guards.
+  - `DirectCDPTransport`, `TabCDPSession`, `PageController`, `SnapshotEngine`, `captureLabeledScreenshot`, `DOMExtractor`, and `waitForPageLoad`.
+  - Unit tests and real Chromium E2E tests (`packages/core/test/browser-core.test.ts`).
 
 ## [0.1.0] - 2026-11-23
 
 ### Added
-- Initialized `devpilot` TypeScript monorepo (`pnpm` workspace) with zero Playwright/Puppeteer runtime dependencies.
-- Added `@devpilot/protocol` package defining:
-  - Complete shared data contracts for Tabs, AXTree Snapshots, Console/Network capture, CSS Styles, Live JS Debugger, React Fiber inspection, Performance/Web Vitals, Screen Recording, and multi-session management.
-  - Bidirectional JSON-RPC bridge protocol between Chrome MV3 Extension, Native Messaging Host, and Local Daemon.
-  - Chrome Native Messaging 4-byte little-endian binary framing encoder/decoder (`encodeNativeMessage`, `NativeMessageDecoder`).
-  - Safety guard (`BLOCKED_PROFILE_WIDE_CDP_COMMANDS`) blocking destructive profile-wide CDP commands (`Network.clearBrowserCookies`, `Network.clearBrowserCache`).
-  - Unit tests verifying framing edge cases (chunked streams, multi-byte UTF-8, oversized message rejection) and protocol helpers.
+- Initialized `devpilot` TypeScript monorepo and `@devpilot/protocol` package with Chrome Native Messaging binary framing and profile-wide CDP safety guards.
