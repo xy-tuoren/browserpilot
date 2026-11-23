@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+.DS_Store
+*.log
+*.tsbuildinfo
+*.mp4
+*.webm
+*.png
+!packages/extension/icons/*.png
+.env
+.env.*
