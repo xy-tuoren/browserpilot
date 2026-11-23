@@ -65,6 +65,16 @@ let nativeRetryAfter = 0
 const attachedTabs = new Map<number, AttachedTabRecord>()
 const inFlightAttaches = new Map<number, Promise<AttachedTabRecord>>()
 const recentActivity: ActivityLogEntry[] = []
+const recentErrors: Array<{ timestamp: number; tabId: number; text: string; url?: string }> = []
+const recentFailedRequests: Array<{
+  timestamp: number
+  tabId: number
+  method: string
+  status?: number
+  url: string
+  errorText?: string
+}> = []
+const pendingRequestsByTab = new Map<string, { url: string; method: string }>()
 const tabGroupIds = new Map<string, number>()
 
 // ============================================================================
@@ -99,6 +109,8 @@ async function getExtensionState(): Promise<ExtensionState> {
     config,
     attachedTabs: tabs.filter((t) => t.attached),
     recentActivity: recentActivity.slice(-80),
+    recentErrors: recentErrors.slice(-50),
+    recentFailedRequests: recentFailedRequests.slice(-50),
   }
 }
 
@@ -682,18 +694,72 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   const tabId = source.tabId
   if (tabId === undefined) return
   const sessionId = (source as chrome.debugger.DebuggerSession).sessionId
+  const p = (params as Record<string, unknown>) ?? {}
 
   const rec = attachedTabs.get(tabId)
-  if (rec && method === 'Target.attachedToTarget' && params && typeof (params as { sessionId?: string }).sessionId === 'string') {
-    rec.childSessions.add((params as { sessionId: string }).sessionId)
-  } else if (rec && method === 'Target.detachedFromTarget' && params && typeof (params as { sessionId?: string }).sessionId === 'string') {
-    rec.childSessions.delete((params as { sessionId: string }).sessionId)
+  if (rec && method === 'Target.attachedToTarget' && typeof p.sessionId === 'string') {
+    rec.childSessions.add(p.sessionId)
+  } else if (rec && method === 'Target.detachedFromTarget' && typeof p.sessionId === 'string') {
+    rec.childSessions.delete(p.sessionId)
+  }
+
+  // Capture live errors & failed requests for the Companion Side Panel
+  if (method === 'Runtime.consoleAPICalled' && p.type === 'error') {
+    const args = (p.args as Array<{ value?: unknown; description?: string }> | undefined) ?? []
+    const text = args.map((a) => (a.value !== undefined ? String(a.value) : a.description || '')).join(' ').slice(0, 300)
+    recentErrors.push({ timestamp: Date.now(), tabId, text })
+    if (recentErrors.length > 100) recentErrors.splice(0, recentErrors.length - 100)
+    broadcastUiUpdate()
+  } else if (method === 'Runtime.exceptionThrown') {
+    const d = (p.exceptionDetails ?? {}) as { text?: string; url?: string; exception?: { description?: string } }
+    recentErrors.push({
+      timestamp: Date.now(),
+      tabId,
+      text: (d.exception?.description || d.text || 'Uncaught exception').slice(0, 300),
+      url: d.url,
+    })
+    if (recentErrors.length > 100) recentErrors.splice(0, recentErrors.length - 100)
+    broadcastUiUpdate()
+  } else if (method === 'Network.requestWillBeSent') {
+    const req = (p.request ?? {}) as { url?: string; method?: string }
+    if (typeof p.requestId === 'string' && req.url) {
+      pendingRequestsByTab.set(`${tabId}:${p.requestId}`, { url: req.url, method: req.method || 'GET' })
+      if (pendingRequestsByTab.size > 500) {
+        const firstKey = pendingRequestsByTab.keys().next().value
+        if (firstKey) pendingRequestsByTab.delete(firstKey)
+      }
+    }
+  } else if (method === 'Network.responseReceived') {
+    const res = (p.response ?? {}) as { status?: number; url?: string }
+    if (typeof res.status === 'number' && res.status >= 400) {
+      const reqInfo = typeof p.requestId === 'string' ? pendingRequestsByTab.get(`${tabId}:${p.requestId}`) : undefined
+      recentFailedRequests.push({
+        timestamp: Date.now(),
+        tabId,
+        method: reqInfo?.method || 'GET',
+        status: res.status,
+        url: res.url || reqInfo?.url || '',
+      })
+      if (recentFailedRequests.length > 100) recentFailedRequests.splice(0, recentFailedRequests.length - 100)
+      broadcastUiUpdate()
+    }
+  } else if (method === 'Network.loadingFailed') {
+    const reqInfo = typeof p.requestId === 'string' ? pendingRequestsByTab.get(`${tabId}:${p.requestId}`) : undefined
+    recentFailedRequests.push({
+      timestamp: Date.now(),
+      tabId,
+      method: reqInfo?.method || 'GET',
+      url: reqInfo?.url || '',
+      errorText: String(p.errorText || 'Failed'),
+    })
+    if (recentFailedRequests.length > 100) recentFailedRequests.splice(0, recentFailedRequests.length - 100)
+    broadcastUiUpdate()
   }
 
   sendEvent('cdp.event', {
     tabId,
     method,
-    params: (params as Record<string, unknown>) ?? {},
+    params: p,
     ...(sessionId ? { sessionId } : {}),
   })
 })

@@ -52,6 +52,7 @@ const EXISTING_PAGE_HTML = `<!doctype html>
   <h1>Already Open Tab</h1>
   <input id="note" placeholder="Write note" />
   <button id="action-btn">Run Action</button>
+  <button id="popup-btn" onclick="window.open('/popup', '_blank')">Open Popup</button>
   <div id="result">initial</div>
   <script>
     document.getElementById('action-btn').addEventListener('click', async (e) => {
@@ -87,6 +88,11 @@ describe('@devpilot/extension real Chrome MV3 zero-click E2E', () => {
       if (req.url === '/api/ping') {
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ pong: 'ok-from-extension-e2e' }))
+        return
+      }
+      if (req.url === '/popup') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.end('<!doctype html><html><head><title>Popup Child</title></head><body><h2>Popup Ready</h2></body></html>')
         return
       }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
@@ -232,7 +238,24 @@ describe('@devpilot/extension real Chrome MV3 zero-click E2E', () => {
     const shot = await tab.page.screenshot()
     expect(shot.base64.length).toBeGreaterThan(500)
 
-    // 6. Pause kill-switch blocks new attaches cleanly
+    // 6. Popup auto-tracking & zero-click attach
+    const popupOpened = new Promise<{ openerTabId: number; tabId: number; url: string }>((resolve) => {
+      const off = transport!.onPopupOpened((info) => {
+        off()
+        resolve(info)
+      })
+    })
+    await tab.page.click('#popup-btn')
+    const popupInfo = await Promise.race([
+      popupOpened,
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Popup did not auto-attach')), 5000)),
+    ])
+    expect(popupInfo.openerTabId).toBe(existing!.tabId)
+    const popupTab = await manager.getOrAttachTab(popupInfo.tabId)
+    expect(await popupTab.page.evaluate<string>('document.body.innerText')).toContain('Popup Ready')
+    await manager.closeTab(popupInfo.tabId)
+
+    // 7. Pause kill-switch blocks new attaches cleanly
     await transport.rpc('extension.setConfig', { paused: true })
     await expect(transport.rpc('tabs.create', { url: `${baseUrl}/blocked` })).rejects.toThrow(/paused/i)
     await transport.rpc('extension.setConfig', { paused: false })

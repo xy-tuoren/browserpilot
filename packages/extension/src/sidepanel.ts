@@ -2,10 +2,14 @@ import type { ExtensionState } from '@devpilot/protocol'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 let state: ExtensionState | null = null
+let activeTab: 'activity' | 'errors' | 'network' = 'activity'
 
 function fmtTime(ts: number): string {
-  const d = new Date(ts)
-  return d.toTimeString().slice(0, 8)
+  return new Date(ts).toTimeString().slice(0, 8)
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 function render(next: ExtensionState): void {
@@ -24,6 +28,15 @@ function render(next: ExtensionState): void {
     statusEl.className = 'pill'
   }
 
+  const errs = next.recentErrors ?? []
+  const nets = next.recentFailedRequests ?? []
+  $('err-count').textContent = String(errs.length)
+  $('net-count').textContent = String(nets.length)
+
+  $('tab-activity').classList.toggle('active', activeTab === 'activity')
+  $('tab-errors').classList.toggle('active', activeTab === 'errors')
+  $('tab-network').classList.toggle('active', activeTab === 'network')
+
   const tabsEl = $('sp-tabs')
   tabsEl.innerHTML = ''
   if (next.attachedTabs.length === 0) {
@@ -37,12 +50,17 @@ function render(next: ExtensionState): void {
     }
   }
 
+  const heading = $('feed-heading')
   const feedEl = $('sp-feed')
   feedEl.innerHTML = ''
-  const entries = [...next.recentActivity].reverse()
-  if (entries.length === 0) {
-    feedEl.textContent = 'Waiting for agent commands…'
-  } else {
+
+  if (activeTab === 'activity') {
+    heading.textContent = 'Live AI Activity Timeline'
+    const entries = [...next.recentActivity].reverse()
+    if (!entries.length) {
+      feedEl.textContent = 'Waiting for agent commands…'
+      return
+    }
     for (const item of entries) {
       const card = document.createElement('div')
       card.className = 'card'
@@ -52,17 +70,57 @@ function render(next: ExtensionState): void {
         (item.detail ? `<div class="detail">${escapeHtml(item.detail)}</div>` : '')
       feedEl.appendChild(card)
     }
+  } else if (activeTab === 'errors') {
+    heading.textContent = 'Captured Console Errors & Exceptions'
+    const list = [...errs].reverse()
+    if (!list.length) {
+      feedEl.textContent = 'No console errors captured.'
+      return
+    }
+    for (const item of list) {
+      const card = document.createElement('div')
+      card.className = 'card'
+      card.innerHTML =
+        `<div class="entry-head"><span class="error">Tab #${item.tabId}</span><span class="time">${fmtTime(item.timestamp)}</span></div>` +
+        `<div class="detail">${escapeHtml(item.text)}</div>`
+      feedEl.appendChild(card)
+    }
+  } else {
+    heading.textContent = 'Failed Network Requests (4xx / 5xx / Blocked)'
+    const list = [...nets].reverse()
+    if (!list.length) {
+      feedEl.textContent = 'No failed requests captured.'
+      return
+    }
+    for (const item of list) {
+      const card = document.createElement('div')
+      card.className = 'card'
+      const badge = item.status ? `${item.method} ${item.status}` : `${item.method} ${item.errorText || 'ERR'}`
+      card.innerHTML =
+        `<div class="entry-head"><span class="error">${escapeHtml(badge)}</span><span class="time">${fmtTime(item.timestamp)}</span></div>` +
+        `<div class="detail">${escapeHtml(item.url)}</div>`
+      feedEl.appendChild(card)
+    }
   }
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 async function refresh(): Promise<void> {
   const s = (await chrome.runtime.sendMessage({ type: 'devpilot:get-state' })) as ExtensionState
   if (s) render(s)
 }
+
+$('tab-activity').addEventListener('click', () => {
+  activeTab = 'activity'
+  if (state) render(state)
+})
+$('tab-errors').addEventListener('click', () => {
+  activeTab = 'errors'
+  if (state) render(state)
+})
+$('tab-network').addEventListener('click', () => {
+  activeTab = 'network'
+  if (state) render(state)
+})
 
 $('sp-pick').addEventListener('click', () => {
   void chrome.runtime.sendMessage({ type: 'devpilot:start-picker' })

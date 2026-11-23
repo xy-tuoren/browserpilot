@@ -22,6 +22,9 @@ const CHROME_CANDIDATES = [
   ),
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   '/Applications/Chromium.app/Contents/MacOS/Chromium',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium-browser',
+  '/usr/bin/chromium',
 ].filter(Boolean) as string[]
 
 async function findChromeBinary(): Promise<string | null> {
@@ -157,6 +160,7 @@ describe('@devpilot/core real Chromium E2E', () => {
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-gpu',
+        ...(process.env.CI ? ['--no-sandbox'] : []),
         `--remote-debugging-port=${debugPort}`,
         `--user-data-dir=${userDataDir}`,
         'about:blank',

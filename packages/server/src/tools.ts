@@ -678,6 +678,54 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ['code'],
     },
   },
+  {
+    name: 'browser_batch',
+    description:
+      'Execute a sequence of browser actions (navigate, click, fill, type, press_key, select_option, hover, scroll, wait) in a single round-trip and optionally return the post-batch snapshot and error feedback.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        steps: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              action: {
+                type: 'string',
+                enum: ['navigate', 'click', 'fill', 'type', 'press_key', 'select_option', 'hover', 'scroll', 'wait'],
+              },
+              target: { type: 'string' },
+              value: { type: 'string' },
+              url: { type: 'string' },
+              key: { type: 'string' },
+              text: { type: 'string' },
+              selector: { type: 'string' },
+              direction: { type: 'string' },
+              amount: { type: 'number' },
+              ms: { type: 'number' },
+            },
+            required: ['action'],
+          },
+        },
+        returnSnapshot: { type: 'boolean', description: 'Include post-batch AXTree snapshot (default true)' },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+      required: ['steps'],
+    },
+  },
+  {
+    name: 'browser_pinned',
+    description:
+      'Inspect the element last pinned by the user via right-click -> "Pin Element for DevPilot" (returns outerHTML, inspect box/styles, and React Fiber info).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+    },
+  },
 ]
 
 export async function executeTool(
@@ -1293,6 +1341,97 @@ export async function executeTool(
           return { content: [{ type: 'text', text: `${chunks.join('\n')}\nERROR: ${res.error}`.trim() }], isError: true }
         }
         return textResult(chunks.join('\n') || '(ok)')
+      }
+
+      case 'browser_batch': {
+        const tab = await resolveTab()
+        const steps = (args.steps as Array<Record<string, unknown>>) ?? []
+        const completed: string[] = []
+        const { feedback } = await tab.runWithFeedback(async () => {
+          for (let i = 0; i < steps.length; i++) {
+            const s = steps[i]
+            const act = String(s.action)
+            switch (act) {
+              case 'navigate':
+                await tab.page.navigate(String(s.url))
+                completed.push(`${i + 1}. navigate(${s.url})`)
+                break
+              case 'click':
+                await tab.page.click(String(s.target))
+                completed.push(`${i + 1}. click(${s.target})`)
+                break
+              case 'fill':
+                await tab.page.fill(String(s.target), String(s.value ?? ''))
+                completed.push(`${i + 1}. fill(${s.target})`)
+                break
+              case 'type':
+                await tab.page.type((s.target as string | undefined) ?? null, String(s.text ?? s.value ?? ''))
+                completed.push(`${i + 1}. type(${s.target ?? 'focused'})`)
+                break
+              case 'press_key':
+                await tab.page.pressKey(String(s.key))
+                completed.push(`${i + 1}. press_key(${s.key})`)
+                break
+              case 'select_option':
+                await tab.page.selectOption(String(s.target), String(s.value))
+                completed.push(`${i + 1}. select_option(${s.target}, ${s.value})`)
+                break
+              case 'hover':
+                await tab.page.hover(String(s.target))
+                completed.push(`${i + 1}. hover(${s.target})`)
+                break
+              case 'scroll':
+                await tab.page.scroll({
+                  target: s.target as string | undefined,
+                  direction: s.direction as 'up' | 'down' | 'left' | 'right' | undefined,
+                  amount: s.amount as number | undefined,
+                })
+                completed.push(`${i + 1}. scroll`)
+                break
+              case 'wait':
+                if (typeof s.ms === 'number') await new Promise((r) => setTimeout(r, s.ms as number))
+                else if (typeof s.selector === 'string') await waitForSelector(tab.session, s.selector)
+                else if (typeof s.text === 'string') await waitForText(tab.session, s.text)
+                else await waitForPageLoad(tab.session)
+                completed.push(`${i + 1}. wait`)
+                break
+              default:
+                throw new Error(`Unsupported batch step action: ${act}`)
+            }
+          }
+        })
+
+        const outParts = [`Completed ${completed.length} batch steps:\n${completed.join('\n')}`, formatFeedbackSuffix(feedback)]
+        if (args.returnSnapshot !== false) {
+          const snap = await tab.snapshots.capture(tab.session)
+          outParts.push(`\n${snap.text}`)
+        }
+        return textResult(outParts.join('\n'))
+      }
+
+      case 'browser_pinned': {
+        const tab = await resolveTab()
+        const pinnedMeta = await tab.session.transport.getPinnedElement?.(tab.tabId).catch(() => null)
+        const target = pinnedMeta?.globalVar || 'pinned'
+        const html = await tab.page.evaluate<string | null>(`(() => {
+          const el = ${target === 'pinned' ? '(() => { const ks = Object.keys(globalThis).filter(k => k.startsWith("__devpilotPinned")); return ks.length ? globalThis[ks[ks.length - 1]] : null; })()' : target};
+          return el ? el.outerHTML.slice(0, 2000) : null;
+        })()`)
+        if (!html) {
+          return textResult('No pinned element found on this tab. Right-click an element and choose "Pin Element for DevPilot".')
+        }
+        const inspected = await tab.extractor.inspectElement(tab.session, tab.snapshots, target).catch(() => null)
+        const reactInfo = await tab.getReactInfo(target).catch(() => null)
+        return textResult(
+          [
+            `Pinned Element (${target}):`,
+            html,
+            inspected ? `\n${inspected.formatted}` : '',
+            reactInfo ? `\nReact: ${JSON.stringify(reactInfo, null, 2)}` : '',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        )
       }
 
       default:

@@ -17,6 +17,9 @@ const CHROME_CANDIDATES = [
     'Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
   ),
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium-browser',
+  '/usr/bin/chromium',
 ].filter(Boolean) as string[]
 
 async function findChromeBinary(): Promise<string | null> {
@@ -152,6 +155,7 @@ describe('@devpilot/core full DevTools, Recorder & Sandbox E2E', () => {
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-gpu',
+        ...(process.env.CI ? ['--no-sandbox'] : []),
         `--remote-debugging-port=${debugPort}`,
         `--user-data-dir=${userDataDir}`,
         'about:blank',

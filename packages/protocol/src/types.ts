@@ -53,6 +53,8 @@ export interface ExtensionState {
   config: ExtensionConfig
   attachedTabs: TabInfo[]
   recentActivity: ActivityLogEntry[]
+  recentErrors?: Array<{ timestamp: number; tabId: number; text: string; url?: string }>
+  recentFailedRequests?: Array<{ timestamp: number; tabId: number; method: string; status?: number; url: string; errorText?: string }>
 }
 
 export interface ActivityLogEntry {

@@ -298,8 +298,8 @@ export class PageController {
         if (!box || (box.width === 0 && box.height === 0)) return null
 
         // If element is inside a child OOPIF session, add iframe viewport offset in top frame
-        if (sessionId && refTarget?.frameId) {
-          const frameOffset = await this.getIframeOffset(refTarget.frameId)
+        if (sessionId) {
+          const frameOffset = await this.getIframeOffset(refTarget?.frameId, sessionId)
           box = {
             x: box.x + frameOffset.x,
             y: box.y + frameOffset.y,
@@ -323,54 +323,193 @@ export class PageController {
     )
   }
 
-  private async getIframeOffset(frameId: string): Promise<{ x: number; y: number }> {
-    try {
-      const owner = await this.session.send<{ backendNodeId?: number }>('DOM.getFrameOwner', { frameId })
-      if (!owner.backendNodeId) return { x: 0, y: 0 }
-      const box = await this.session.send<{ model?: { content?: number[] } }>('DOM.getBoxModel', {
-        backendNodeId: owner.backendNodeId,
-      })
-      const c = box.model?.content
-      if (c && c.length >= 2) return { x: c[0], y: c[1] }
-    } catch {
-      // fallback
+  private async getIframeOffset(frameId?: string, childSessionId?: string): Promise<{ x: number; y: number }> {
+    const child = childSessionId
+      ? this.session.getChildSessions().find((c) => c.sessionId === childSessionId)
+      : undefined
+    const effectiveFrameId = frameId || child?.targetId
+    if (effectiveFrameId) {
+      try {
+        const owner = await this.session.send<{ backendNodeId?: number }>('DOM.getFrameOwner', {
+          frameId: effectiveFrameId,
+        })
+        if (owner.backendNodeId) {
+          const box = await this.session.send<{ model?: { content?: number[] } }>('DOM.getBoxModel', {
+            backendNodeId: owner.backendNodeId,
+          })
+          const c = box.model?.content
+          if (c && c.length >= 2) return { x: c[0], y: c[1] }
+        }
+      } catch {
+        // fall through to URL-based iframe rect lookup
+      }
+    }
+
+    if (child?.url) {
+      try {
+        const rect = await this.evaluate<{ x: number; y: number } | null>(`(() => {
+          const targetUrl = ${JSON.stringify(child.url)};
+          for (const f of document.querySelectorAll('iframe')) {
+            const src = f.src || f.getAttribute('src') || '';
+            if (src && (src === targetUrl || targetUrl.startsWith(src) || src.startsWith(targetUrl))) {
+              const r = f.getBoundingClientRect();
+              return { x: r.left, y: r.top };
+            }
+          }
+          return null;
+        })()`)
+        if (rect) return rect
+      } catch {
+        // ignore
+      }
     }
     return { x: 0, y: 0 }
   }
 
-  private async queryElementObjectId(selector: string): Promise<string | undefined> {
-    // Support text=..., role=..., and standard CSS selectors (including Shadow DOM fallback)
+  private async queryElementObjectId(rawSelector: string): Promise<string | undefined> {
+    // Support optional ">> nth=N" suffix (Playwright/Playwriter compatibility)
+    let selector = rawSelector.trim()
+    let nth = 0
+    const nthMatch = selector.match(/^(.*?)\s*>>\s*nth=(\d+)\s*$/)
+    if (nthMatch) {
+      selector = nthMatch[1].trim()
+      nth = Number(nthMatch[2])
+    }
+
+    // Pinned element shortcut (e.g. "globalThis.__devpilotPinned1" or "pinned")
+    if (selector === 'pinned' || selector.startsWith('globalThis.__devpilotPinned')) {
+      const expr =
+        selector === 'pinned'
+          ? `(() => {
+              const keys = Object.keys(globalThis).filter((k) => k.startsWith('__devpilotPinned'));
+              return keys.length ? globalThis[keys[keys.length - 1]] : null;
+            })()`
+          : selector
+      const res = await this.session.send<{ result?: { objectId?: string } }>('Runtime.evaluate', {
+        expression: expr,
+        returnByValue: false,
+      })
+      return res.result?.objectId
+    }
+
+    // role=button[name="Save"] locator
+    const roleMatch = selector.match(/^role=([a-zA-Z0-9_-]+)(?:\[name=["'](.+?)["']\])?$/i)
+    if (roleMatch) {
+      const role = roleMatch[1].toLowerCase()
+      const nameNeedle = (roleMatch[2] || '').trim().toLowerCase()
+      const res = await this.session.send<{ result?: { objectId?: string } }>('Runtime.evaluate', {
+        expression: `(() => {
+          const targetRole = ${JSON.stringify(role)};
+          const needle = ${JSON.stringify(nameNeedle)};
+          const nthIdx = ${nth};
+          const ROLE_TAGS = {
+            button: 'button, [role="button"], input[type="button"], input[type="submit"]',
+            link: 'a[href], [role="link"]',
+            textbox: 'input:not([type]), input[type="text"], input[type="email"], input[type="search"], input[type="password"], textarea, [role="textbox"], [contenteditable="true"]',
+            checkbox: 'input[type="checkbox"], [role="checkbox"]',
+            radio: 'input[type="radio"], [role="radio"]',
+            combobox: 'select, [role="combobox"]',
+            heading: 'h1, h2, h3, h4, h5, h6, [role="heading"]',
+            tab: '[role="tab"]',
+            menuitem: '[role="menuitem"]',
+          };
+          const css = ROLE_TAGS[targetRole] || ('[role="' + targetRole + '"]');
+          const hits = [];
+          function walk(root) {
+            for (const el of root.querySelectorAll(css)) {
+              const accName = (
+                el.getAttribute('aria-label') ||
+                el.getAttribute('title') ||
+                el.getAttribute('placeholder') ||
+                el.innerText ||
+                el.value ||
+                el.textContent || ''
+              ).replace(/\\s+/g, ' ').trim().toLowerCase();
+              if (!needle || accName === needle || accName.includes(needle)) hits.push(el);
+            }
+            for (const el of root.querySelectorAll('*')) {
+              if (el.shadowRoot) walk(el.shadowRoot);
+            }
+          }
+          walk(document);
+          return hits[nthIdx] || null;
+        })()`,
+        returnByValue: false,
+      })
+      return res.result?.objectId
+    }
+
+    // label=... locator
+    if (selector.startsWith('label=')) {
+      const needle = selector.slice(6).trim().toLowerCase()
+      const res = await this.session.send<{ result?: { objectId?: string } }>('Runtime.evaluate', {
+        expression: `(() => {
+          const needle = ${JSON.stringify(needle)};
+          const hits = [];
+          for (const lbl of document.querySelectorAll('label')) {
+            const t = (lbl.innerText || lbl.textContent || '').trim().toLowerCase();
+            if (t === needle || t.includes(needle)) {
+              const forId = lbl.getAttribute('for');
+              const ctrl = forId ? document.getElementById(forId) : lbl.querySelector('input, textarea, select');
+              if (ctrl) hits.push(ctrl);
+            }
+          }
+          for (const el of document.querySelectorAll('[aria-label]')) {
+            const t = (el.getAttribute('aria-label') || '').trim().toLowerCase();
+            if (t === needle || t.includes(needle)) hits.push(el);
+          }
+          return hits[${nth}] || null;
+        })()`,
+        returnByValue: false,
+      })
+      return res.result?.objectId
+    }
+
+    // placeholder=... locator
+    if (selector.startsWith('placeholder=')) {
+      const needle = selector.slice(12).trim().toLowerCase()
+      const res = await this.session.send<{ result?: { objectId?: string } }>('Runtime.evaluate', {
+        expression: `(() => {
+          const needle = ${JSON.stringify(needle)};
+          const hits = Array.from(document.querySelectorAll('[placeholder]')).filter((el) =>
+            (el.getAttribute('placeholder') || '').trim().toLowerCase().includes(needle)
+          );
+          return hits[${nth}] || null;
+        })()`,
+        returnByValue: false,
+      })
+      return res.result?.objectId
+    }
+
+    // text=... or standard CSS selector (with Shadow DOM + nth support)
     const expr = selector.startsWith('text=')
       ? `(() => {
           const needle = ${JSON.stringify(selector.slice(5))}.trim().toLowerCase();
+          const exact = [];
+          const partial = [];
           function walk(root) {
-            const els = root.querySelectorAll('*');
-            let best = null;
-            for (const el of els) {
-              if (el.shadowRoot) { const hit = walk(el.shadowRoot); if (hit) return hit; }
+            for (const el of root.querySelectorAll('*')) {
+              if (el.shadowRoot) walk(el.shadowRoot);
               const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
-              if (txt === needle) return el;
-              if (!best && txt.includes(needle) && el.children.length === 0) best = el;
+              if (txt === needle) exact.push(el);
+              else if (txt.includes(needle) && el.children.length === 0) partial.push(el);
             }
-            return best;
           }
-          return walk(document);
+          walk(document);
+          const list = exact.length ? exact : partial;
+          return list[${nth}] || null;
         })()`
       : `(() => {
           const sel = ${JSON.stringify(selector)};
-          const direct = document.querySelector(sel);
-          if (direct) return direct;
-          // Deep search open shadow roots
-          function walkShadow(root) {
+          const hits = [];
+          function walk(root) {
+            try { hits.push(...root.querySelectorAll(sel)); } catch {}
             for (const el of root.querySelectorAll('*')) {
-              if (el.shadowRoot) {
-                const hit = el.shadowRoot.querySelector(sel) || walkShadow(el.shadowRoot);
-                if (hit) return hit;
-              }
+              if (el.shadowRoot) walk(el.shadowRoot);
             }
-            return null;
           }
-          return walkShadow(document);
+          walk(document);
+          return hits[${nth}] || null;
         })()`
 
     const res = await this.session.send<{ result?: { objectId?: string } }>('Runtime.evaluate', {

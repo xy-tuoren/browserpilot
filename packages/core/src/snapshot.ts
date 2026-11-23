@@ -322,12 +322,37 @@ export class SnapshotEngine {
     await session.ensureBaseDomains()
     await session.enableDomain('Accessibility').catch(() => {})
 
-    const meta = await session.send<{ result?: { value?: { url: string; title: string } } }>('Runtime.evaluate', {
-      expression: '({ url: location.href, title: document.title })',
+    const meta = await session.send<{
+      result?: {
+        value?: {
+          url: string
+          title: string
+          vw: number
+          vh: number
+          scrollY: number
+          scrollHeight: number
+        }
+      }
+    }>('Runtime.evaluate', {
+      expression: `({
+        url: location.href,
+        title: document.title,
+        vw: window.innerWidth,
+        vh: window.innerHeight,
+        scrollY: Math.round(window.scrollY || document.documentElement.scrollTop || 0),
+        scrollHeight: Math.round(document.documentElement.scrollHeight || document.body?.scrollHeight || 0),
+      })`,
       returnByValue: true,
     })
-    const url = meta.result?.value?.url ?? ''
-    const title = meta.result?.value?.title ?? ''
+    const m = meta.result?.value
+    const url = m?.url ?? ''
+    const title = m?.title ?? ''
+    const scrollInfo =
+      m && m.scrollHeight > m.vh + 20
+        ? ` | Viewport: ${m.vw}x${m.vh} | Scroll: ${m.scrollY}/${m.scrollHeight}px (${Math.min(100, Math.round(((m.scrollY + m.vh) / m.scrollHeight) * 100))}%)`
+        : m?.vw
+          ? ` | Viewport: ${m.vw}x${m.vh}`
+          : ''
 
     // Resolve optional scope element
     let scopeBackendNodeId: number | undefined
@@ -396,7 +421,7 @@ export class SnapshotEngine {
 
     this.refMaps.set(session.tabId, allRefs)
 
-    const headerLine = `URL: ${url}${title ? ` | Title: ${title}` : ''}`
+    const headerLine = `URL: ${url}${title ? ` | Title: ${title}` : ''}${scrollInfo}`
     const fullText = `${headerLine}\n\n${allLines.join('\n') || '(empty accessibility tree)'}`
 
     const prevFull = this.lastFullSnapshot.get(session.tabId)

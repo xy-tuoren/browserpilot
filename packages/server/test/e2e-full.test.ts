@@ -270,6 +270,30 @@ describe('@devpilot/server full stack: Daemon, Native Host, MCP stdio, CLI & Rea
       const execText = (execRes.content as Array<{ text?: string }>)[0]?.text ?? ''
       expect(execText).toContain('hi from sandbox')
       expect(execText).toContain('123')
+
+      // Compound batch tool (fill + click + wait + post-batch snapshot in 1 MCP round-trip!)
+      const batchRes = await client.callTool({
+        name: 'browser_batch',
+        arguments: {
+          steps: [
+            { action: 'fill', target: '#query', value: 'batch-win' },
+            { action: 'click', target: '#go-btn' },
+            { action: 'wait', ms: 150 },
+          ],
+          returnSnapshot: true,
+        },
+      })
+      const batchText = (batchRes.content as Array<{ text?: string }>)[0]?.text ?? ''
+      expect(batchText).toContain('Completed 3 batch steps')
+      expect(batchText).toContain('ok:batch-win')
+
+      // Pinned element inspection tool
+      await client.callTool({
+        name: 'browser_evaluate',
+        arguments: { expression: 'globalThis.__devpilotPinned1 = document.getElementById("go-btn"); true' },
+      })
+      const pinnedRes = await client.callTool({ name: 'browser_pinned', arguments: {} })
+      expect((pinnedRes.content as Array<{ text?: string }>)[0]?.text).toContain('Search Now')
     } finally {
       await client.close()
     }

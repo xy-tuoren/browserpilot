@@ -2,26 +2,31 @@
 
 All notable changes to **DevPilot** are documented in this file.
 
+## [0.6.0] - 2026-11-23
+
+### Added
+- **Cross-Origin OOPIF Iframe Resolution**: enhanced `PageController.getIframeOffset` with `DOM.getFrameOwner` + iframe URL rect fallback, verified end-to-end clicking a button inside a real cross-origin OOPIF iframe (`127.0.0.1` -> `localhost` with `--site-per-process`).
+- **Rich Playwriter-Compatible Locators**: added `role=button[name="..."]`, `label=...`, `placeholder=...`, `>> nth=N` index disambiguation, and `pinned` (`globalThis.__devpilotPinnedN`) locators across open Shadow DOM and standard DOM.
+- **Viewport & Scroll Context in Snapshots**: `SnapshotEngine` header now includes `Viewport: WxH | Scroll: Y/Total (Pct%)` so agents immediately know fold position and remaining scrollable content.
+- **Compound Batch Tool (`browser_batch`) & Pinned Inspector (`browser_pinned`)**: execute multi-step action sequences in a single MCP round-trip with post-batch snapshot & error feedback, plus inspect right-click-pinned elements (HTML + box + styles + React Fiber). Total MCP tools expanded to **41**.
+- **Companion Side Panel Live Diagnostics**: upgraded `background.ts` and `sidepanel.html`/`sidepanel.ts` with real-time **Activity | Errors | Failed Net** tabs capturing console errors, exceptions, and 4xx/5xx/blocked requests directly in the sidebar.
+- **GitHub Actions CI (`.github/workflows/ci.yml`)**: automated typecheck, build, and test pipeline on push/PR.
+- Added comprehensive real-browser E2E tests for cross-origin OOPIF iframes, rich locators, `browser_batch`, `browser_pinned`, and extension popup auto-attach (`window.open`).
+
 ## [0.5.0] - 2026-11-23
 
 ### Added
-- Implemented `@devpilot/server` — complete local Daemon, Chrome Native Messaging Host, MCP Server, CLI (`devpilot`), and TypeScript SDK:
-  - **Authenticated Local Daemon (`daemon.ts`, `config.ts`)**: runs on `127.0.0.1:19888` with 256-bit random auth token (`~/.devpilot/daemon.json`, mode `0600`), managing both Extension WebSocket/Native connections and Direct CDP browser instances.
-  - **Chrome Native Messaging Host & Installer (`native-host.ts`, `native-install.ts`)**: 4-byte length-prefixed stdio host (`com.devpilot.bridge`) auto-spawning the local daemon and injecting auth tokens transparently; cross-platform installer generating NVM-safe wrapper script and browser manifests for Chrome, Chrome for Testing, Chromium, Brave, Edge, and Arc.
-  - **Full MCP Server (`mcp.ts`, `tools.ts`)**: exposes 39 high-signal browser automation & DevTools tools over MCP stdio (with native multimodal `image` blocks for screenshots & Set-of-Mark overlays, post-action console/network error feedback, live debugger, live script/CSS edit, React Fiber inspection, performance/Web Vitals, recording, and stateful JS sandbox).
-  - **Ergonomic CLI (`cli.ts`)**: `devpilot setup`, `daemon`, `mcp`, `browser start`, `connect-cdp`, stateful `session new|list|reset|close` + `exec -s <id> -e '<js>'`, direct shortcuts (`tabs`, `open`, `snapshot`, `click`, `fill`, `screenshot`, `labeled-screenshot`, `console`, `network`, `styles`, `react`, `eval`, `perf`), and `devpilot skill`.
-  - **Agent Skill (`skills/devpilot/SKILL.md`)**: ready-to-deploy skill instructions for AI coding agents.
-- Verified full stack end-to-end (`packages/server/test/e2e-full.test.ts`): Daemon Bearer auth, real Native Messaging stdio framing binary, real MCP stdio client invoking tools + multimodal image blocks, and real CLI driving the compiled MV3 extension with zero clicks.
+- Implemented `@devpilot/server` (authenticated local Daemon, Chrome Native Messaging Host & cross-platform installer, 39-tool MCP stdio server, ergonomic CLI, and `skills/devpilot/SKILL.md`).
 
 ## [0.4.0] - 2026-11-23
 
 ### Added
-- Implemented `@devpilot/extension` (zero-click Chrome MV3 extension with Native Messaging + authenticated WS, Side Panel, Popup, closed-shadow-DOM visual highlights & ghost cursor) and `ExtensionBridgeTransport`, verified in real Google Chrome for Testing.
+- Implemented `@devpilot/extension` (zero-click Chrome MV3 extension with Native Messaging + authenticated WS, Side Panel, Popup, closed-shadow-DOM visual highlights & ghost cursor) and `ExtensionBridgeTransport`.
 
 ## [0.3.0] - 2026-11-23
 
 ### Added
-- Implemented complete pure-CDP DevTools Debugging Suite (`ConsoleCollector`, `NetworkInspector`, `StylesInspector`, `JSDebugger`, `LiveEditor`, `getReactComponentInfo`, `PerformanceProfiler`, `ScreenRecorder`, `DevPilotTab`, `SessionManager`) verified against real Chromium.
+- Implemented complete pure-CDP DevTools Debugging Suite (`ConsoleCollector`, `NetworkInspector`, `StylesInspector`, `JSDebugger`, `LiveEditor`, `getReactComponentInfo`, `PerformanceProfiler`, `ScreenRecorder`, `DevPilotTab`, `SessionManager`).
 
 ## [0.2.0] - 2026-11-23
 
