@@ -18,11 +18,17 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - name: Install Chrome for Testing (for full Direct-CDP & MV3 Extension E2E)
+        run: |
+          CHROME_OUT=$(npx --yes @puppeteer/browsers install chrome@stable --path "$HOME/.cache/devpilot-chrome")
+          CHROME_BIN=$(echo "$CHROME_OUT" | awk '{print $2}' | tail -n 1)
+          echo "DEVPILOT_CHROME_BIN=$CHROME_BIN" >> "$GITHUB_ENV"
+          echo "Using Chrome for Testing: $CHROME_BIN"
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Build all packages
         run: pnpm build
       - name: Typecheck
         run: pnpm typecheck
-      - name: Run unit & real Chromium tests
-        run: pnpm test
+      - name: Run unit & real Chromium + MV3 Extension E2E tests
+        run: pnpm -r --workspace-concurrency=1 test

@@ -2,16 +2,23 @@
 
 All notable changes to **DevPilot** are documented in this file.
 
+## [1.0.0] - 2026-11-23
+
+### Added
+- Added `devpilot doctor` CLI diagnostics command (`--json` supported) inspecting Node.js version, compiled MV3 extension bundle, Chrome binary, `ffmpeg`, local daemon status, connected browsers, and Chrome Native Messaging host manifests.
+- Added full end-to-end verification of `devpilot doctor` and `devpilot setup --dry-run` in `@devpilot/server`.
+- Upgraded GitHub Actions CI workflow (`.github/workflows/ci.yml`) to provision Chrome for Testing on Ubuntu so **all 4 packages — including real Direct-CDP AND real loaded MV3 Extension E2E suites — execute live on every push and PR**.
+- Synchronized all workspace packages and Chrome Extension manifest to **v1.0.0** for initial production release.
+
 ## [0.6.0] - 2026-11-23
 
 ### Added
-- **Cross-Origin OOPIF Iframe Resolution**: enhanced `PageController.getIframeOffset` with `DOM.getFrameOwner` + iframe URL rect fallback, verified end-to-end clicking a button inside a real cross-origin OOPIF iframe (`127.0.0.1` -> `localhost` with `--site-per-process`).
-- **Rich Playwriter-Compatible Locators**: added `role=button[name="..."]`, `label=...`, `placeholder=...`, `>> nth=N` index disambiguation, and `pinned` (`globalThis.__devpilotPinnedN`) locators across open Shadow DOM and standard DOM.
-- **Viewport & Scroll Context in Snapshots**: `SnapshotEngine` header now includes `Viewport: WxH | Scroll: Y/Total (Pct%)` so agents immediately know fold position and remaining scrollable content.
-- **Compound Batch Tool (`browser_batch`) & Pinned Inspector (`browser_pinned`)**: execute multi-step action sequences in a single MCP round-trip with post-batch snapshot & error feedback, plus inspect right-click-pinned elements (HTML + box + styles + React Fiber). Total MCP tools expanded to **41**.
-- **Companion Side Panel Live Diagnostics**: upgraded `background.ts` and `sidepanel.html`/`sidepanel.ts` with real-time **Activity | Errors | Failed Net** tabs capturing console errors, exceptions, and 4xx/5xx/blocked requests directly in the sidebar.
-- **GitHub Actions CI (`.github/workflows/ci.yml`)**: automated typecheck, build, and test pipeline on push/PR.
-- Added comprehensive real-browser E2E tests for cross-origin OOPIF iframes, rich locators, `browser_batch`, `browser_pinned`, and extension popup auto-attach (`window.open`).
+- **Cross-Origin OOPIF Iframe Resolution**: enhanced `PageController.getIframeOffset` with `DOM.getFrameOwner` + iframe URL rect fallback, verified clicking inside a real cross-origin OOPIF iframe (`--site-per-process`).
+- **Rich Playwriter-Compatible Locators**: `role=button[name="..."]`, `label=...`, `placeholder=...`, `>> nth=N`, and `pinned` across Shadow DOM and standard DOM.
+- **Viewport & Scroll Context** in AXTree snapshot headers (`Viewport: WxH | Scroll: Y/Total (Pct%)`).
+- **`browser_batch` & `browser_pinned` MCP tools** (41 total MCP tools).
+- **Companion Side Panel Live Diagnostics**: real-time **Activity | Errors | Failed Net** tabs powered by extension-side CDP event tracking.
+- Added GitHub Actions CI workflow and real-browser E2E tests for OOPIF iframes, rich locators, popup auto-attach, `browser_batch`, and `browser_pinned`.
 
 ## [0.5.0] - 2026-11-23
 

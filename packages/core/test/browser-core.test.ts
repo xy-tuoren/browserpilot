@@ -160,7 +160,7 @@ describe('@devpilot/core real Chromium E2E', () => {
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-gpu',
-        ...(process.env.CI ? ['--no-sandbox'] : []),
+        ...(process.env.CI ? ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] : []),
         `--remote-debugging-port=${debugPort}`,
         `--user-data-dir=${userDataDir}`,
         'about:blank',
@@ -170,7 +170,7 @@ describe('@devpilot/core real Chromium E2E', () => {
 
     // Wait for CDP endpoint
     const endpoint = `http://127.0.0.1:${debugPort}`
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 100; i++) {
       try {
         const res = await fetch(`${endpoint}/json/version`)
         if (res.ok) break

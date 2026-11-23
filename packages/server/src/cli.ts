@@ -9,8 +9,9 @@ import { DaemonClient } from './client.js'
 import { isDaemonReachable, loadOrCreateDaemonConfig, readDaemonConfig } from './config.js'
 import { DevPilotDaemon } from './daemon.js'
 import { startMcpServer } from './mcp.js'
-import { installNativeHost } from './native-install.js'
+import { installNativeHost, getNativeMessagingHostDirs } from './native-install.js'
 import { DEVPILOT_SKILL_DOC } from './skill-doc.js'
+import { NATIVE_HOST_NAME } from '@devpilot/protocol'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -92,6 +93,7 @@ function printHelp(): void {
 
 Usage:
   devpilot setup [--extension-id <id>] [--dry-run]   Install Native Messaging host & print MCP setup
+  devpilot doctor                                    Diagnose extension, Native Messaging, Chrome, ffmpeg & daemon
   devpilot daemon start | stop | status | run        Manage local authenticated bridge daemon
   devpilot mcp [--cdp <url>]                         Start MCP stdio server (for Claude/Cursor/Codex/Antigravity)
   devpilot connect-cdp <url>                         Attach daemon directly to a --remote-debugging-port Chrome
@@ -137,6 +139,81 @@ async function main(): Promise<void> {
 
   if (cmd === 'skill') {
     console.log(DEVPILOT_SKILL_DOC)
+    return
+  }
+
+  if (cmd === 'doctor') {
+    const extDist = getExtensionDistPath()
+    let extBuilt = false
+    try {
+      await fs.access(path.join(extDist, 'manifest.json'))
+      await fs.access(path.join(extDist, 'background.js'))
+      extBuilt = true
+    } catch {}
+
+    const chromeBin = await findChromeBinary()
+
+    let hasFfmpeg = false
+    for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+      if (!dir) continue
+      try {
+        await fs.access(path.join(dir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'))
+        hasFfmpeg = true
+        break
+      } catch {}
+    }
+
+    const nativeHosts: Array<{ browser: string; installed: boolean; path: string }> = []
+    for (const target of getNativeMessagingHostDirs()) {
+      const mp = path.join(target.dir, `${NATIVE_HOST_NAME}.json`)
+      let installed = false
+      try {
+        await fs.access(mp)
+        installed = true
+      } catch {}
+      nativeHosts.push({ browser: target.name, installed, path: mp })
+    }
+
+    const cfg = await readDaemonConfig()
+    const daemonRunning = cfg ? await isDaemonReachable(cfg) : false
+    let connectedClients = 0
+    if (daemonRunning && cfg) {
+      const h = await new DaemonClient(cfg).health().catch(() => null)
+      connectedClients = h?.clients.length ?? 0
+    }
+
+    const report = {
+      version: DEVPILOT_VERSION,
+      node: process.version,
+      extensionBuilt: extBuilt,
+      extensionDistPath: extDist,
+      chromeBinary: chromeBin,
+      ffmpegAvailable: hasFfmpeg,
+      daemonConfigPresent: Boolean(cfg),
+      daemonRunning,
+      connectedBrowsers: connectedClients,
+      nativeMessagingInstalled: nativeHosts.filter((n) => n.installed).map((n) => n.browser),
+    }
+
+    if (flags.json) {
+      console.log(JSON.stringify(report, null, 2))
+      return
+    }
+
+    console.log(`DevPilot Doctor (v${DEVPILOT_VERSION})`)
+    console.log(`──────────────────────────────────────────`)
+    console.log(`Node.js          : ${report.node}`)
+    console.log(`Extension dist/  : ${extBuilt ? 'OK' : 'MISSING (run pnpm build)'} (${extDist})`)
+    console.log(`Chrome binary    : ${chromeBin ?? 'Not found (set DEVPILOT_CHROME_BIN)'}`)
+    console.log(`ffmpeg           : ${hasFfmpeg ? 'OK (video recording ready)' : 'Not found (optional for recording)'}`)
+    console.log(`Daemon status    : ${daemonRunning ? `RUNNING (browsers: ${connectedClients})` : 'STOPPED'}`)
+    console.log(
+      `Native Messaging : ${
+        report.nativeMessagingInstalled.length
+          ? `Installed (${report.nativeMessagingInstalled.join(', ')})`
+          : 'Not installed (run: devpilot setup --extension-id <id>)'
+      }`,
+    )
     return
   }
 

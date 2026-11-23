@@ -1,4 +1,4 @@
-export const DEVPILOT_VERSION = '0.1.0'
+export const DEVPILOT_VERSION = '1.0.0'
 export const CDP_PROTOCOL_VERSION = '1.3'
 
 export const DEFAULT_DAEMON_HOST = '127.0.0.1'

@@ -100,7 +100,7 @@ describe('@devpilot/core edge cases: Cross-Origin OOPIF Iframe, Rich Locators & 
         '--no-default-browser-check',
         '--disable-gpu',
         '--site-per-process',
-        ...(process.env.CI ? ['--no-sandbox'] : []),
+        ...(process.env.CI ? ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] : []),
         `--remote-debugging-port=${debugPort}`,
         `--user-data-dir=${userDataDir}`,
         'about:blank',
@@ -109,7 +109,7 @@ describe('@devpilot/core edge cases: Cross-Origin OOPIF Iframe, Rich Locators & 
     )
 
     const endpoint = `http://127.0.0.1:${debugPort}`
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 100; i++) {
       try {
         if ((await fetch(`${endpoint}/json/version`)).ok) break
       } catch {}

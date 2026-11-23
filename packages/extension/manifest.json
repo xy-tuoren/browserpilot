@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DevPilot",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "description": "Zero-click pure-CDP browser control and DevTools debugging bridge for AI agents.",
   "permissions": [
     "debugger",

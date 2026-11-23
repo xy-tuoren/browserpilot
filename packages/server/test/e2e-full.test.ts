@@ -12,10 +12,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { encodeNativeMessage, NativeMessageDecoder } from '@devpilot/protocol'
 import { DaemonClient, DevPilotDaemon, installNativeHost, TOOL_DEFINITIONS } from '../src/index.js'
 
-const CHROME_FOR_TESTING = path.join(
-  os.homedir(),
-  'Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-)
+const CHROME_FOR_TESTING =
+  process.env.DEVPILOT_CHROME_BIN ||
+  path.join(
+    os.homedir(),
+    'Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+  )
 
 async function hasChrome(): Promise<boolean> {
   try {
@@ -113,6 +115,7 @@ describe('@devpilot/server full stack: Daemon, Native Host, MCP stdio, CLI & Rea
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-gpu',
+        ...(process.env.CI ? ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] : []),
         `--remote-debugging-port=${debugPort}`,
         `--user-data-dir=${directDir}`,
         'about:blank',
@@ -120,7 +123,7 @@ describe('@devpilot/server full stack: Daemon, Native Host, MCP stdio, CLI & Rea
       { stdio: 'ignore' },
     )
     directEndpoint = `http://127.0.0.1:${debugPort}`
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 100; i++) {
       try {
         if ((await fetch(`${directEndpoint}/json/version`)).ok) break
       } catch {}
@@ -324,6 +327,7 @@ describe('@devpilot/server full stack: Daemon, Native Host, MCP stdio, CLI & Rea
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-gpu',
+        ...(process.env.CI ? ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] : []),
         `--disable-extensions-except=${tempExtDir}`,
         `--load-extension=${tempExtDir}`,
         `--user-data-dir=${extProfile}`,
@@ -378,5 +382,15 @@ describe('@devpilot/server full stack: Daemon, Native Host, MCP stdio, CLI & Rea
 
     const skillOut = await runCli('skill')
     expect(skillOut).toContain('DevPilot')
+
+    const doctorOut = await runCli('doctor', '--json')
+    const doctor = JSON.parse(doctorOut) as { extensionBuilt: boolean; daemonRunning: boolean; connectedBrowsers: number }
+    expect(doctor.extensionBuilt).toBe(true)
+    expect(doctor.daemonRunning).toBe(true)
+    expect(doctor.connectedBrowsers).toBeGreaterThanOrEqual(1)
+
+    const setupOut = await runCli('setup', '--extension-id', 'abcdefghijklmnopabcdefghijklmnop', '--dry-run')
+    expect(setupOut).toContain('com.devpilot.bridge')
+    expect(setupOut).toContain('mcpServers')
   }, 35_000)
 })

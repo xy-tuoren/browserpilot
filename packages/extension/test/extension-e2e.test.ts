@@ -12,10 +12,12 @@ import {
 } from '@devpilot/core'
 import type { BridgeMessage } from '@devpilot/protocol'
 
-const CHROME_FOR_TESTING = path.join(
-  os.homedir(),
-  'Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-)
+const CHROME_FOR_TESTING =
+  process.env.DEVPILOT_CHROME_BIN ||
+  path.join(
+    os.homedir(),
+    'Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+  )
 
 async function hasChromeForTesting(): Promise<boolean> {
   try {
@@ -146,6 +148,7 @@ describe('@devpilot/extension real Chrome MV3 zero-click E2E', () => {
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-gpu',
+        ...(process.env.CI ? ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] : []),
         `--disable-extensions-except=${tempExtDir}`,
         `--load-extension=${tempExtDir}`,
         `--user-data-dir=${userDataDir}`,
