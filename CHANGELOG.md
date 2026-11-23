@@ -7,7 +7,7 @@ All notable changes to **DevPilot** are documented in this file.
 ### Added
 - Added `devpilot doctor` CLI diagnostics command (`--json` supported) inspecting Node.js version, compiled MV3 extension bundle, Chrome binary, `ffmpeg`, local daemon status, connected browsers, and Chrome Native Messaging host manifests.
 - Added full end-to-end verification of `devpilot doctor` and `devpilot setup --dry-run` in `@devpilot/server`.
-- Upgraded GitHub Actions CI workflow (`.github/workflows/ci.yml`) to provision Chrome for Testing on Ubuntu so **all 4 packages — including real Direct-CDP AND real loaded MV3 Extension E2E suites — execute live on every push and PR**.
+- Upgraded GitHub Actions CI workflow (`.github/workflows/ci.yml`) to provision `ffmpeg` and Chrome for Testing on Ubuntu so **all 4 packages — including real Direct-CDP, MP4 video recording, AND real loaded MV3 Extension E2E suites — execute live on every push and PR**.
 - Synchronized all workspace packages and Chrome Extension manifest to **v1.0.0** for initial production release.
 
 ## [0.6.0] - 2026-11-23
