@@ -98,21 +98,16 @@ describe('@devpilot/extension real Chrome MV3 zero-click E2E', () => {
     const wsPort = await getFreePort()
     const token = 'test-secret-token-123'
 
-    // Build extension into dist with test daemon URL & token, then copy into temp dir
+    // Build extension directly into isolated temp dir so shared dist/ is never mutated
     const extPkgDir = path.resolve(import.meta.dirname, '..')
+    tempExtDir = await fs.mkdtemp(path.join(os.tmpdir(), 'devpilot-ext-dist-'))
     execFileSync(process.execPath, [path.join(extPkgDir, 'build.mjs')], {
       env: {
         ...process.env,
+        DEVPILOT_OUT_DIR: tempExtDir,
         DEVPILOT_DAEMON_URL: `ws://127.0.0.1:${wsPort}/extension`,
         DEVPILOT_AUTH_TOKEN: token,
       },
-    })
-    tempExtDir = await fs.mkdtemp(path.join(os.tmpdir(), 'devpilot-ext-dist-'))
-    await fs.cp(path.join(extPkgDir, 'dist'), tempExtDir, { recursive: true })
-
-    // Restore clean default build in packages/extension/dist
-    execFileSync(process.execPath, [path.join(extPkgDir, 'build.mjs')], {
-      env: { ...process.env, DEVPILOT_DAEMON_URL: '', DEVPILOT_AUTH_TOKEN: '' },
     })
 
     // Start test WebSocket bridge server waiting for real extension connection

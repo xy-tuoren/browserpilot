@@ -2,18 +2,21 @@
 
 All notable changes to **DevPilot** are documented in this file.
 
+## [0.5.0] - 2026-11-23
+
+### Added
+- Implemented `@devpilot/server` — complete local Daemon, Chrome Native Messaging Host, MCP Server, CLI (`devpilot`), and TypeScript SDK:
+  - **Authenticated Local Daemon (`daemon.ts`, `config.ts`)**: runs on `127.0.0.1:19888` with 256-bit random auth token (`~/.devpilot/daemon.json`, mode `0600`), managing both Extension WebSocket/Native connections and Direct CDP browser instances.
+  - **Chrome Native Messaging Host & Installer (`native-host.ts`, `native-install.ts`)**: 4-byte length-prefixed stdio host (`com.devpilot.bridge`) auto-spawning the local daemon and injecting auth tokens transparently; cross-platform installer generating NVM-safe wrapper script and browser manifests for Chrome, Chrome for Testing, Chromium, Brave, Edge, and Arc.
+  - **Full MCP Server (`mcp.ts`, `tools.ts`)**: exposes 39 high-signal browser automation & DevTools tools over MCP stdio (with native multimodal `image` blocks for screenshots & Set-of-Mark overlays, post-action console/network error feedback, live debugger, live script/CSS edit, React Fiber inspection, performance/Web Vitals, recording, and stateful JS sandbox).
+  - **Ergonomic CLI (`cli.ts`)**: `devpilot setup`, `daemon`, `mcp`, `browser start`, `connect-cdp`, stateful `session new|list|reset|close` + `exec -s <id> -e '<js>'`, direct shortcuts (`tabs`, `open`, `snapshot`, `click`, `fill`, `screenshot`, `labeled-screenshot`, `console`, `network`, `styles`, `react`, `eval`, `perf`), and `devpilot skill`.
+  - **Agent Skill (`skills/devpilot/SKILL.md`)**: ready-to-deploy skill instructions for AI coding agents.
+- Verified full stack end-to-end (`packages/server/test/e2e-full.test.ts`): Daemon Bearer auth, real Native Messaging stdio framing binary, real MCP stdio client invoking tools + multimodal image blocks, and real CLI driving the compiled MV3 extension with zero clicks.
+
 ## [0.4.0] - 2026-11-23
 
 ### Added
-- Implemented `@devpilot/extension` — zero-click Chrome Manifest V3 extension:
-  - **Zero-Click Auto-Attach** (`background.ts`): automatically attaches `chrome.debugger` (CDP v1.3) on demand to any existing tab or newly opened tab without requiring manual icon clicks or Chrome `--autoConnect` dialogs.
-  - **Dual Transport**: connects automatically via Chrome Native Messaging (`com.devpilot.bridge`) with instant fallback to authenticated localhost WebSocket (`127.0.0.1`) + MV3 alarm & heartbeat keepalive.
-  - **Resilience & Safety**: cleans foreign third-party `chrome-extension://` iframes before attaching, forwards OOPIF child `sessionId` events, auto-tracks popups into Chrome Tab Groups, enforces domain allowlist/denylist rules, and provides an instant Pause/Resume kill switch.
-  - **Visual Feedback (`content-script.ts`)**: closed Shadow Root overlay rendering action highlight boxes, animated ghost cursor with click feedback, right-click "Pin Element for DevPilot" context menu, interactive element picker, and toast notifications without polluting page DOM.
-  - **Popup & Companion Side Panel (`popup.html`, `sidepanel.html`)**: Claude/ChatGPT-style companion sidebar showing real-time AI activity timeline, active controlled tabs, element picker trigger, and domain safety controls.
-  - **Zero-Dep Icon Generator & esbuild Bundler**: builds self-contained unpacked extension in `packages/extension/dist/`.
-- Added `ExtensionBridgeTransport` to `@devpilot/core` connecting any `ExtensionChannel` cleanly to the full pure-CDP `SessionManager` & DevTools suite.
-- Verified zero-click auto-attach and full CDP/DevTools execution with the real compiled MV3 extension loaded inside real Google Chrome for Testing (`packages/extension/test/extension-e2e.test.ts`).
+- Implemented `@devpilot/extension` (zero-click Chrome MV3 extension with Native Messaging + authenticated WS, Side Panel, Popup, closed-shadow-DOM visual highlights & ghost cursor) and `ExtensionBridgeTransport`, verified in real Google Chrome for Testing.
 
 ## [0.3.0] - 2026-11-23
 

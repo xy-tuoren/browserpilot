@@ -1,0 +1,358 @@
+import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { promisify } from 'node:util'
+import fs from 'node:fs/promises'
+
+const execFileAsync = promisify(execFile)
+import http from 'node:http'
+import os from 'node:os'
+import path from 'node:path'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { encodeNativeMessage, NativeMessageDecoder } from '@devpilot/protocol'
+import { DaemonClient, DevPilotDaemon, installNativeHost, TOOL_DEFINITIONS } from '../src/index.js'
+
+const CHROME_FOR_TESTING = path.join(
+  os.homedir(),
+  'Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+)
+
+async function hasChrome(): Promise<boolean> {
+  try {
+    await fs.access(CHROME_FOR_TESTING)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function getFreePort(): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    const srv = http.createServer()
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address()
+      if (addr && typeof addr === 'object') {
+        const port = addr.port
+        srv.close(() => resolve(port))
+      } else reject(new Error('port error'))
+    })
+  })
+}
+
+const SERVER_TEST_HTML = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>DevPilot Full Stack Test</title>
+  <style>.hero-btn { background: #2563eb; color: #fff; padding: 8px 14px; }</style>
+</head>
+<body>
+  <h1>DevPilot Full Stack</h1>
+  <input id="query" placeholder="Search term" />
+  <button id="go-btn" class="hero-btn">Search Now</button>
+  <div id="out">ready</div>
+  <script>
+    document.getElementById('go-btn').addEventListener('click', async (e) => {
+      console.error('simulated-ui-error');
+      const r = await fetch('/api/search?q=' + encodeURIComponent(document.getElementById('query').value));
+      const j = await r.json();
+      document.getElementById('out').textContent = (e.isTrusted ? 'ok:' : 'bad:') + j.echo;
+    });
+  </script>
+</body>
+</html>`
+
+describe('@devpilot/server full stack: Daemon, Native Host, MCP stdio, CLI & Real Extension', () => {
+  let httpServer: http.Server
+  let baseUrl = ''
+  let daemon: DevPilotDaemon
+  let daemonPort = 0
+  let daemonToken = 'e2e-secret-token-xyz'
+  let chromeDirectProc: ChildProcess | null = null
+  let chromeExtProc: ChildProcess | null = null
+  let directEndpoint = ''
+  let tmpDirs: string[] = []
+  let chromeOk = false
+
+  beforeAll(async () => {
+    chromeOk = await hasChrome()
+    if (!chromeOk) return
+
+    const httpPort = await getFreePort()
+    httpServer = http.createServer((req, res) => {
+      if (req.url?.startsWith('/api/search')) {
+        const u = new URL(req.url, 'http://127.0.0.1')
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ echo: u.searchParams.get('q') ?? '' }))
+        return
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(SERVER_TEST_HTML)
+    })
+    await new Promise<void>((r) => httpServer.listen(httpPort, '127.0.0.1', r))
+    baseUrl = `http://127.0.0.1:${httpPort}`
+
+    // 1. Start local DevPilot Daemon on a free port
+    daemonPort = await getFreePort()
+    daemon = new DevPilotDaemon()
+    await daemon.start({
+      host: '127.0.0.1',
+      port: daemonPort,
+      token: daemonToken,
+      persistRuntime: false,
+    })
+
+    // 2. Start headless Chrome with --remote-debugging-port for MCP Direct CDP tests
+    const debugPort = await getFreePort()
+    const directDir = await fs.mkdtemp(path.join(os.tmpdir(), 'devpilot-srv-direct-'))
+    tmpDirs.push(directDir)
+    chromeDirectProc = spawn(
+      CHROME_FOR_TESTING,
+      [
+        '--headless=new',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-gpu',
+        `--remote-debugging-port=${debugPort}`,
+        `--user-data-dir=${directDir}`,
+        'about:blank',
+      ],
+      { stdio: 'ignore' },
+    )
+    directEndpoint = `http://127.0.0.1:${debugPort}`
+    for (let i = 0; i < 40; i++) {
+      try {
+        if ((await fetch(`${directEndpoint}/json/version`)).ok) break
+      } catch {}
+      await new Promise((r) => setTimeout(r, 150))
+    }
+  }, 30_000)
+
+  afterAll(async () => {
+    await daemon?.stop()
+    if (chromeDirectProc) chromeDirectProc.kill('SIGTERM')
+    if (chromeExtProc) chromeExtProc.kill('SIGTERM')
+    if (httpServer) await new Promise<void>((r) => httpServer.close(() => r()))
+    for (const d of tmpDirs) {
+      await fs.rm(d, { recursive: true, force: true }).catch(() => {})
+    }
+  })
+
+  it('enforces Bearer token authentication on Daemon HTTP endpoints', async () => {
+    if (!chromeOk) return
+    const unauth = await fetch(`http://127.0.0.1:${daemonPort}/api/health`)
+    expect(unauth.status).toBe(401)
+
+    const auth = await fetch(`http://127.0.0.1:${daemonPort}/api/health`, {
+      headers: { Authorization: `Bearer ${daemonToken}` },
+    })
+    expect(auth.status).toBe(200)
+    const body = (await auth.json()) as { ok: boolean }
+    expect(body.ok).toBe(true)
+  })
+
+  it('generates valid Native Messaging host manifest in dry-run and bridges real stdio native frames', async () => {
+    if (!chromeOk) return
+    const dry = await installNativeHost({ extensionIds: ['abcdefghijklmnopabcdefghijklmnop'], dryRun: true })
+    expect(dry.manifestJson.name).toBe('com.devpilot.bridge')
+    expect(dry.manifestJson.allowed_origins).toEqual(['chrome-extension://abcdefghijklmnopabcdefghijklmnop/'])
+    expect(dry.installedManifests.length).toBeGreaterThan(0)
+
+    // Test real native-host.js binary framing with an isolated DEVPILOT_HOME pointing to our test daemon
+    const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), 'devpilot-home-'))
+    tmpDirs.push(fakeHome)
+    await fs.writeFile(
+      path.join(fakeHome, 'daemon.json'),
+      JSON.stringify({ host: '127.0.0.1', port: daemonPort, token: daemonToken }),
+    )
+
+    const nativeHostBin = path.resolve(import.meta.dirname, '..', 'dist', 'native-host.js')
+    const proc = spawn(process.execPath, [nativeHostBin], {
+      env: { ...process.env, DEVPILOT_HOME: fakeHome },
+      stdio: ['pipe', 'pipe', 'ignore'],
+    })
+
+    const decoder = new NativeMessageDecoder()
+    const received = new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Native host did not reply with pong')), 8_000)
+      proc.stdout.on('data', (chunk: Buffer) => {
+        for (const msg of decoder.push(chunk) as Array<Record<string, unknown>>) {
+          if (msg.type === 'pong') {
+            clearTimeout(timer)
+            resolve(msg)
+          }
+        }
+      })
+    })
+
+    proc.stdin.write(
+      encodeNativeMessage({
+        type: 'hello',
+        token: '',
+        extensionId: 'native-test-ext',
+        extensionVersion: '0.5.0',
+        browser: 'Chrome',
+        transport: 'native',
+      }),
+    )
+    proc.stdin.write(encodeNativeMessage({ type: 'ping', ts: 424242 }))
+
+    const pong = await received
+    expect(pong.ts).toBe(424242)
+    proc.stdin.end()
+    await new Promise<void>((r) => proc.once('close', () => r()))
+  }, 15_000)
+
+  it('exposes all 39 tools over real MCP stdio server and executes full browser workflow + screenshot image blocks', async () => {
+    if (!chromeOk) return
+
+    const cliBin = path.resolve(import.meta.dirname, '..', 'dist', 'cli.js')
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [cliBin, 'mcp', '--cdp', directEndpoint],
+    })
+    const client = new Client({ name: 'devpilot-test-client', version: '1.0.0' })
+    await client.connect(transport)
+
+    try {
+      const { tools } = await client.listTools()
+      expect(tools.length).toBe(TOOL_DEFINITIONS.length)
+      expect(tools.some((t) => t.name === 'browser_snapshot')).toBe(true)
+      expect(tools.some((t) => t.name === 'browser_debugger')).toBe(true)
+      expect(tools.some((t) => t.name === 'browser_exec')).toBe(true)
+
+      // Open tab & navigate
+      await client.callTool({ name: 'browser_open_tab', arguments: { url: baseUrl } })
+      await client.callTool({ name: 'browser_wait', arguments: { selector: '#go-btn' } })
+
+      // Snapshot -> find refs -> fill + click -> verify post-action feedback includes simulated console error!
+      const snapRes = await client.callTool({ name: 'browser_snapshot', arguments: { showDiffSinceLastCall: false } })
+      const snapText = (snapRes.content as Array<{ text?: string }>)[0]?.text ?? ''
+      expect(snapText).toContain('DevPilot Full Stack')
+
+      await client.callTool({ name: 'browser_fill', arguments: { target: '#query', value: 'mcp-power' } })
+      const clickRes = await client.callTool({ name: 'browser_click', arguments: { target: '#go-btn' } })
+      const clickText = (clickRes.content as Array<{ text?: string }>)[0]?.text ?? ''
+      expect(clickText).toContain('simulated-ui-error')
+
+      await new Promise((r) => setTimeout(r, 150))
+      const evalRes = await client.callTool({
+        name: 'browser_evaluate',
+        arguments: { expression: 'document.getElementById("out").textContent' },
+      })
+      expect((evalRes.content as Array<{ text?: string }>)[0]?.text).toBe('ok:mcp-power')
+
+      // Network & Styles via MCP
+      const netRes = await client.callTool({ name: 'browser_network', arguments: { search: '/api/search' } })
+      expect((netRes.content as Array<{ text?: string }>)[0]?.text).toContain('/api/search?q=mcp-power')
+
+      const styleRes = await client.callTool({ name: 'browser_styles', arguments: { target: '#go-btn' } })
+      expect((styleRes.content as Array<{ text?: string }>)[0]?.text).toContain('.hero-btn')
+
+      // Multimodal Screenshot & Labeled Screenshot return real MCP image blocks!
+      const shotRes = await client.callTool({ name: 'browser_screenshot', arguments: {} })
+      const shotContent = shotRes.content as Array<{ type: string; data?: string; mimeType?: string }>
+      expect(shotContent.some((c) => c.type === 'image' && c.mimeType === 'image/png' && (c.data?.length ?? 0) > 500)).toBe(true)
+
+      const somRes = await client.callTool({ name: 'browser_labeled_screenshot', arguments: {} })
+      const somContent = somRes.content as Array<{ type: string; text?: string; data?: string }>
+      expect(somContent.some((c) => c.type === 'image' && (c.data?.length ?? 0) > 500)).toBe(true)
+
+      // Performance metrics via MCP
+      const perfRes = await client.callTool({ name: 'browser_performance', arguments: { action: 'metrics' } })
+      expect((perfRes.content as Array<{ text?: string }>)[0]?.text).toContain('domNodes')
+
+      // Stateful Sandbox exec via MCP
+      const execRes = await client.callTool({
+        name: 'browser_exec',
+        arguments: { sessionId: 'mcp1', code: 'state.val = 123; console.log("hi from sandbox"); return state.val' },
+      })
+      const execText = (execRes.content as Array<{ text?: string }>)[0]?.text ?? ''
+      expect(execText).toContain('hi from sandbox')
+      expect(execText).toContain('123')
+    } finally {
+      await client.close()
+    }
+  }, 30_000)
+
+  it('connects real loaded MV3 Extension to Daemon and executes CLI commands end-to-end', async () => {
+    if (!chromeOk) return
+
+    // Build extension directly into isolated temp dir pointed at our running Daemon WS port + token
+    const extPkgDir = path.resolve(import.meta.dirname, '..', '..', 'extension')
+    const tempExtDir = await fs.mkdtemp(path.join(os.tmpdir(), 'devpilot-srv-ext-'))
+    tmpDirs.push(tempExtDir)
+    execFileSync(process.execPath, [path.join(extPkgDir, 'build.mjs')], {
+      env: {
+        ...process.env,
+        DEVPILOT_OUT_DIR: tempExtDir,
+        DEVPILOT_DAEMON_URL: `ws://127.0.0.1:${daemonPort}/extension`,
+        DEVPILOT_AUTH_TOKEN: daemonToken,
+      },
+    })
+
+    const extProfile = await fs.mkdtemp(path.join(os.tmpdir(), 'devpilot-srv-profile-'))
+    tmpDirs.push(extProfile)
+    chromeExtProc = spawn(
+      CHROME_FOR_TESTING,
+      [
+        '--headless=new',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-gpu',
+        `--disable-extensions-except=${tempExtDir}`,
+        `--load-extension=${tempExtDir}`,
+        `--user-data-dir=${extProfile}`,
+        baseUrl,
+      ],
+      { stdio: 'ignore' },
+    )
+
+    // Wait for real MV3 extension to register with Daemon
+    const client = new DaemonClient({ host: '127.0.0.1', port: daemonPort, token: daemonToken })
+    let connected = false
+    for (let i = 0; i < 40; i++) {
+      const h = await client.health()
+      if (h.clients.some((c) => c.transport === 'extension-ws')) {
+        connected = true
+        break
+      }
+      await new Promise((r) => setTimeout(r, 150))
+    }
+    expect(connected).toBe(true)
+
+    // Run real CLI binary against the daemon using isolated DEVPILOT_HOME
+    const cliHome = await fs.mkdtemp(path.join(os.tmpdir(), 'devpilot-cli-home-'))
+    tmpDirs.push(cliHome)
+    await fs.writeFile(
+      path.join(cliHome, 'daemon.json'),
+      JSON.stringify({ host: '127.0.0.1', port: daemonPort, token: daemonToken }),
+    )
+    const cliBin = path.resolve(import.meta.dirname, '..', 'dist', 'cli.js')
+    const runCli = async (...args: string[]) => {
+      const { stdout } = await execFileAsync(process.execPath, [cliBin, ...args], {
+        env: { ...process.env, DEVPILOT_HOME: cliHome },
+        encoding: 'utf8',
+      })
+      return stdout
+    }
+
+    const tabsOut = await runCli('tabs')
+    expect(tabsOut).toContain('DevPilot Full Stack Test')
+
+    const sid = (await runCli('session', 'new', '--tab-group', 'cli-e2e')).trim()
+    expect(sid).toBeTruthy()
+
+    const execOut = await runCli(
+      'exec',
+      '-s',
+      sid,
+      '-e',
+      `const t = await tabs.use('127.0.0.1'); await t.page.fill('#query', 'cli-zero-click'); await t.page.click('#go-btn'); await sleep(150); console.log(await t.page.evaluate('document.getElementById("out").textContent'))`,
+    )
+    expect(execOut.trim()).toContain('ok:cli-zero-click')
+
+    const skillOut = await runCli('skill')
+    expect(skillOut).toContain('DevPilot')
+  }, 35_000)
+})

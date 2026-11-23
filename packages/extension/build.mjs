@@ -3,7 +3,7 @@ import path from 'node:path'
 import esbuild from 'esbuild'
 
 const root = import.meta.dirname
-const distDir = path.join(root, 'dist')
+const distDir = process.env.DEVPILOT_OUT_DIR ? path.resolve(process.env.DEVPILOT_OUT_DIR) : path.join(root, 'dist')
 
 await fs.rm(distDir, { recursive: true, force: true })
 await fs.mkdir(path.join(distDir, 'icons'), { recursive: true })
