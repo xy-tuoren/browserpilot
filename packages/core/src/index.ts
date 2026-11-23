@@ -1,4 +1,5 @@
 export * from './transport.js'
+export * from './extension-transport.js'
 export * from './cdp-client.js'
 export * from './wait.js'
 export * from './snapshot.js'

@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>DevPilot</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      width: 340px;
+      background: #0b1120;
+      color: #e2e8f0;
+      font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      border-bottom: 1px solid #1e293b;
+      background: #0f172a;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 650;
+      font-size: 14px;
+      letter-spacing: -0.01em;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #64748b;
+    }
+    .dot.on { background: #10b981; box-shadow: 0 0 8px rgba(16, 185, 129, 0.7); }
+    .dot.paused { background: #f59e0b; }
+    .badge {
+      font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #1e293b;
+      color: #94a3b8;
+    }
+    .badge.on { background: rgba(16, 185, 129, 0.16); color: #34d399; }
+    .badge.paused { background: rgba(245, 158, 11, 0.18); color: #fbbf24; }
+    .section {
+      padding: 12px 14px;
+      border-bottom: 1px solid #1e293b;
+    }
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #64748b;
+      margin: 0 0 8px;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 5px 0;
+    }
+    .btn-row {
+      display: flex;
+      gap: 8px;
+    }
+    button {
+      cursor: pointer;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: #f8fafc;
+      font: 500 12px/1 inherit;
+      padding: 8px 10px;
+      border-radius: 6px;
+      flex: 1;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    button:hover { background: #273449; border-color: #475569; }
+    button.primary { background: #059669; border-color: #10b981; color: #fff; }
+    button.primary:hover { background: #10b981; }
+    button.warn { background: #b45309; border-color: #f59e0b; color: #fff; }
+    button.sm { flex: 0; padding: 4px 8px; font-size: 11px; }
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      background: #0f172a;
+      border: 1px solid #334155;
+      color: #f1f5f9;
+      border-radius: 6px;
+      padding: 6px 8px;
+      font: 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+      margin-bottom: 6px;
+    }
+    input[type="checkbox"] {
+      accent-color: #10b981;
+      width: 15px;
+      height: 15px;
+      cursor: pointer;
+    }
+    .tab-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 5px 8px;
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 6px;
+      margin-bottom: 5px;
+    }
+    .tab-meta {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
+    }
+    .muted { color: #64748b; font-size: 11px; }
+    .ext-id {
+      font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #94a3b8;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <span id="status-dot" class="dot"></span>
+      <span>DevPilot</span>
+    </div>
+    <span id="status-badge" class="badge">OFFLINE</span>
+  </div>
+
+  <div class="section">
+    <div class="btn-row">
+      <button id="btn-pause">Pause</button>
+      <button id="btn-sidepanel" class="primary">Side Panel</button>
+      <button id="btn-reconnect">Reconnect</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Controls</div>
+    <label class="row"><span>Zero-click Auto-Attach</span><input id="opt-auto-attach" type="checkbox" /></label>
+    <label class="row"><span>Action Highlight Box</span><input id="opt-highlights" type="checkbox" /></label>
+    <label class="row"><span>Ghost Cursor Overlay</span><input id="opt-cursor" type="checkbox" /></label>
+    <label class="row"><span>Group Controlled Tabs</span><input id="opt-groups" type="checkbox" /></label>
+  </div>
+
+  <div class="section">
+    <div class="row" style="padding-top:0">
+      <span class="section-title" style="margin:0">Attached Tabs (<span id="tab-count">0</span>)</span>
+      <button id="btn-detach-all" class="sm">Detach All</button>
+    </div>
+    <div id="tab-list"><div class="muted">No tabs currently attached.</div></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Daemon &amp; Domain Safety</div>
+    <input id="inp-daemon-url" type="text" placeholder="ws://127.0.0.1:19888/extension" />
+    <input id="inp-auth-token" type="password" placeholder="Auth token (auto via Native Messaging)" />
+    <input id="inp-blocked-domains" type="text" placeholder="Blocked domains (comma-separated, e.g. *.bank.com)" />
+    <div class="btn-row">
+      <button id="btn-save-settings">Save Settings</button>
+    </div>
+    <div style="margin-top:8px" class="ext-id">Extension ID: <span id="ext-id">—</span></div>
+  </div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

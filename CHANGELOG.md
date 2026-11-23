@@ -2,27 +2,28 @@
 
 All notable changes to **DevPilot** are documented in this file.
 
+## [0.4.0] - 2026-11-23
+
+### Added
+- Implemented `@devpilot/extension` — zero-click Chrome Manifest V3 extension:
+  - **Zero-Click Auto-Attach** (`background.ts`): automatically attaches `chrome.debugger` (CDP v1.3) on demand to any existing tab or newly opened tab without requiring manual icon clicks or Chrome `--autoConnect` dialogs.
+  - **Dual Transport**: connects automatically via Chrome Native Messaging (`com.devpilot.bridge`) with instant fallback to authenticated localhost WebSocket (`127.0.0.1`) + MV3 alarm & heartbeat keepalive.
+  - **Resilience & Safety**: cleans foreign third-party `chrome-extension://` iframes before attaching, forwards OOPIF child `sessionId` events, auto-tracks popups into Chrome Tab Groups, enforces domain allowlist/denylist rules, and provides an instant Pause/Resume kill switch.
+  - **Visual Feedback (`content-script.ts`)**: closed Shadow Root overlay rendering action highlight boxes, animated ghost cursor with click feedback, right-click "Pin Element for DevPilot" context menu, interactive element picker, and toast notifications without polluting page DOM.
+  - **Popup & Companion Side Panel (`popup.html`, `sidepanel.html`)**: Claude/ChatGPT-style companion sidebar showing real-time AI activity timeline, active controlled tabs, element picker trigger, and domain safety controls.
+  - **Zero-Dep Icon Generator & esbuild Bundler**: builds self-contained unpacked extension in `packages/extension/dist/`.
+- Added `ExtensionBridgeTransport` to `@devpilot/core` connecting any `ExtensionChannel` cleanly to the full pure-CDP `SessionManager` & DevTools suite.
+- Verified zero-click auto-attach and full CDP/DevTools execution with the real compiled MV3 extension loaded inside real Google Chrome for Testing (`packages/extension/test/extension-e2e.test.ts`).
+
 ## [0.3.0] - 2026-11-23
 
 ### Added
-- Implemented complete pure-CDP DevTools Debugging Suite in `@devpilot/core`:
-  - `ConsoleCollector`: persistent ring buffer (up to 5,000 entries) capturing console API calls, uncaught exceptions, and browser logs with `sinceLastCall` cursor tracking, regex search, and stack traces.
-  - `NetworkInspector`: captures full request/response metadata, headers, ResourceTiming phase breakdowns, JS Initiator call stacks, `Network.getResponseBody`, `sinceLastCall` cursor tracking, and `Fetch` domain request blocking/mocking/header modification.
-  - `StylesInspector`: DevTools Styles panel parity (`CSS.getMatchedStylesForNode`, stylesheet `sourceUrl:line` mapping, cascade override detection, inherited rules, `CSS.forcePseudoState` for `:hover`/`:focus`/`:active`).
-  - `JSDebugger` & `LiveEditor`: script discovery, conditional breakpoints, pause/resume/stepOver/stepInto/stepOut, local scope variable inspection, `evaluateOnCallFrame`, grep across loaded scripts, and live in-memory script/CSS patching (`Debugger.setScriptSource`, `CSS.setStyleSheetText`).
-  - `getReactComponentInfo`: React Fiber traversal returning component name, dev `_debugSource` location, component hierarchy, and safely sanitized props.
-  - `PerformanceProfiler`: Core Web Vitals (`LCP`, `CLS`, `FCP`, `TTFB`), `Performance.getMetrics`, V8 heap summary, CPU profiling (`Profiler.start`/`stop`), and `Tracing` long-task insight analysis.
-  - `ScreenRecorder` & `createDemoVideo`: CDP `Page.startScreencast` piped to `ffmpeg` producing `.mp4`/`.webm` recordings surviving navigation, plus idle-speedup demo generation.
-  - `DevPilotTab` unified per-tab controller with automatic post-action error/failure feedback (`runWithFeedback`).
-  - `SessionManager` & stateful JS execution sandbox (`exec`) with per-session isolated `state`, Chrome Tab Group assignments, and full Playwriter-compatible helpers.
-- Verified every single DevTools, Recording, and Sandbox feature end-to-end against real Chromium (`packages/core/test/devtools-sandbox.test.ts`).
+- Implemented complete pure-CDP DevTools Debugging Suite (`ConsoleCollector`, `NetworkInspector`, `StylesInspector`, `JSDebugger`, `LiveEditor`, `getReactComponentInfo`, `PerformanceProfiler`, `ScreenRecorder`, `DevPilotTab`, `SessionManager`) verified against real Chromium.
 
 ## [0.2.0] - 2026-11-23
 
 ### Added
-- Implemented `@devpilot/core` pure-CDP browser engine (zero Playwright/Puppeteer dependencies):
-  - `DirectCDPTransport`, `TabCDPSession`, `PageController`, `SnapshotEngine`, `captureLabeledScreenshot`, `DOMExtractor`, and `waitForPageLoad`.
-  - Unit tests and real Chromium E2E tests (`packages/core/test/browser-core.test.ts`).
+- Implemented `@devpilot/core` pure-CDP engine (`DirectCDPTransport`, `TabCDPSession`, `PageController`, `SnapshotEngine`, `captureLabeledScreenshot`, `DOMExtractor`, `waitForPageLoad`).
 
 ## [0.1.0] - 2026-11-23
 
