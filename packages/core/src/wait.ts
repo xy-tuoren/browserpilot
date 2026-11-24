@@ -28,6 +28,8 @@ export interface WaitForPageLoadOptions {
   pollIntervalMs?: number
   minWaitMs?: number
   idleMs?: number
+  /** Ignore transient `about:blank` initial state while a newly opened tab navigates to a real URL. */
+  ignoreAboutBlank?: boolean
 }
 
 export interface WaitForPageLoadResult {
@@ -78,17 +80,20 @@ export async function waitForPageLoad(
     }
 
     while (Date.now() - start < timeoutMs) {
+      let href = ''
       try {
-        const res = await session.send<{ result?: { value?: string } }>('Runtime.evaluate', {
-          expression: 'document.readyState',
+        const res = await session.send<{ result?: { value?: { readyState?: string; href?: string } } }>('Runtime.evaluate', {
+          expression: '({ readyState: document.readyState, href: location.href })',
           returnByValue: true,
         })
-        readyState = res.result?.value ?? 'loading'
+        readyState = res.result?.value?.readyState ?? 'loading'
+        href = res.result?.value?.href ?? ''
       } catch {
         readyState = 'loading'
       }
 
-      if ((readyState === 'complete' || readyState === 'interactive') && inflight.size === 0) {
+      const stillOnBlank = Boolean(options.ignoreAboutBlank) && (!href || href === 'about:blank')
+      if (!stillOnBlank && (readyState === 'complete' || readyState === 'interactive') && inflight.size === 0) {
         if (idleSince === null) idleSince = Date.now()
         if (Date.now() - idleSince >= idleMs || readyState === 'complete') {
           if (Date.now() - idleSince >= Math.min(idleMs, 150)) {

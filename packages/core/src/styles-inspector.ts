@@ -13,6 +13,9 @@ interface RawCSSProperty {
   value: string
   important?: boolean
   disabled?: boolean
+  implicit?: boolean
+  text?: string
+  range?: { startLine?: number; startColumn?: number }
 }
 
 interface RawCSSRule {
@@ -100,9 +103,12 @@ export class StylesInspector {
 
     const extractDecls = (props?: RawCSSProperty[]): StyleDeclaration[] => {
       if (!props) return []
+      const hasAuthoredRanges = props.some((p) => Boolean(p.range || p.text))
       const out: StyleDeclaration[] = []
       for (const p of props) {
-        if (p.disabled || !p.name || p.name.startsWith('-webkit-') || !p.value) continue
+        if (p.disabled || p.implicit || !p.name || p.name.startsWith('-webkit-') || !p.value) continue
+        // Skip CDP shorthand-expanded longhands when authored declarations with source ranges are present
+        if (hasAuthoredRanges && !p.range && !p.text) continue
         const overridden = seenProps.has(p.name)
         seenProps.add(p.name)
         out.push({

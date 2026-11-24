@@ -818,7 +818,7 @@ export async function executeTool(
         })
         if (sessionId) manager.getOrCreateSession(sessionId).activeTabId = tab.tabId
         if (/^https?:\/\//i.test(targetUrl)) {
-          await waitForPageLoad(tab.session, { timeoutMs: 6_000, idleMs: 200 }).catch(() => {})
+          await waitForPageLoad(tab.session, { timeoutMs: 10_000, idleMs: 250, ignoreAboutBlank: true }).catch(() => {})
         }
         const meta = await tab.page.getUrlAndTitle().catch(() => ({ url: targetUrl, title: '' }))
         return textResult(`Opened and attached tab [${tab.tabId}]: ${meta.url}${meta.title ? ` ("${meta.title}")` : ''}`, {

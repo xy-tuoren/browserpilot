@@ -32,6 +32,7 @@ export async function captureLabeledScreenshot(
   options: { path?: string; maxLabels?: number; maxDimension?: number } = {},
 ): Promise<LabeledScreenshotResult> {
   const maxLabels = options.maxLabels ?? 120
+  await page.session.enableDomain('DOM')
   const snapshot = await page.snapshotEngine.capture(page.session, { showDiffSinceLastCall: false })
   const viewport = await page.evaluate<{ width: number; height: number }>(
     '({ width: window.innerWidth, height: window.innerHeight })',

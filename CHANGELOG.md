@@ -2,6 +2,14 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
+## [1.2.2] - 2026-11-24
+
+### Fixed
+- **New-Tab `about:blank` Load Race (`waitForPageLoad` + `browser_open_tab`)**: added `ignoreAboutBlank` support so opening an `http(s)://` tab no longer resolves early on Chrome's transient initial `about:blank` document before the target page commits.
+- **Cleaner `browser_styles` Output (`StylesInspector`)**: filtered out CDP implicit shorthand-expanded longhand properties (`implicit: true` / missing authored source `range`), cutting noise and LLM token usage by ~5x while preserving exact author-written CSS rules.
+- **Set-of-Mark Screenshot Reliability (`captureLabeledScreenshot`)**: explicitly enables the CDP `DOM` domain before querying `DOM.getContentQuads`, ensuring `browser_labeled_screenshot` works even as the very first call on a fresh tab.
+- **Default Desktop Viewport for `browserpilot browser start`**: passes `--window-size=1280,800` so headless/launched browsers render full desktop layouts instead of tiny default windows.
+
 ## [1.2.1] - 2026-11-24
 
 ### Added
