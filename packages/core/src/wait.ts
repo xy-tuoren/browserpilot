@@ -17,6 +17,12 @@ const IGNORED_ANALYTICS_PATTERNS = [
   /datadoghq\.com/i,
   /hm\.baidu\.com/i,
   /\/collect\b|\/analytics\b|\/telemetry\b|\/beacon\b/i,
+  // Long-polling & real-time push endpoints (Discourse message-bus, Socket.IO, SignalR, SSE)
+  /\/message-bus\//i,
+  /\/(long-?poll|polling|heartbeat|keepalive)\b/i,
+  /socket\.io/i,
+  /[?&]EIO=\d/i,
+  /\/signalr\//i,
 ]
 
 export function isIgnoredAnalyticsUrl(url: string): boolean {
@@ -54,7 +60,7 @@ export async function waitForPageLoad(
   const idleMs = options.idleMs ?? 300
 
   const start = Date.now()
-  const inflight = new Map<string, string>()
+  const inflight = new Map<string, { url: string; startedAt: number }>()
 
   const offReq = session.on('Network.requestWillBeSent', (params) => {
     const id = String(params.requestId ?? '')
@@ -62,7 +68,7 @@ export async function waitForPageLoad(
     const type = String(params.type ?? '')
     if (!id || !url || url.startsWith('data:') || type === 'EventSource' || type === 'WebSocket') return
     if (isIgnoredAnalyticsUrl(url)) return
-    inflight.set(id, url)
+    inflight.set(id, { url, startedAt: Date.now() })
   })
   const offFin = session.on('Network.loadingFinished', (params) => {
     inflight.delete(String(params.requestId ?? ''))
@@ -70,6 +76,16 @@ export async function waitForPageLoad(
   const offFail = session.on('Network.loadingFailed', (params) => {
     inflight.delete(String(params.requestId ?? ''))
   })
+
+  const countActiveInflight = (now: number, docComplete: boolean): number => {
+    if (!docComplete) return inflight.size
+    // Once document.readyState === 'complete', ignore hanging long-poll requests open > 2.5s
+    let active = 0
+    for (const item of inflight.values()) {
+      if (now - item.startedAt < 2_500) active++
+    }
+    return active
+  }
 
   let readyState = 'loading'
   let idleSince: number | null = null
@@ -92,16 +108,18 @@ export async function waitForPageLoad(
         readyState = 'loading'
       }
 
+      const now = Date.now()
       const stillOnBlank = Boolean(options.ignoreAboutBlank) && (!href || href === 'about:blank')
-      if (!stillOnBlank && (readyState === 'complete' || readyState === 'interactive') && inflight.size === 0) {
-        if (idleSince === null) idleSince = Date.now()
-        if (Date.now() - idleSince >= idleMs || readyState === 'complete') {
-          if (Date.now() - idleSince >= Math.min(idleMs, 150)) {
+      const activePending = countActiveInflight(now, readyState === 'complete')
+      if (!stillOnBlank && (readyState === 'complete' || readyState === 'interactive') && activePending === 0) {
+        if (idleSince === null) idleSince = now
+        if (now - idleSince >= idleMs || readyState === 'complete') {
+          if (now - idleSince >= Math.min(idleMs, 150)) {
             return {
               success: true,
               readyState,
               pendingRequests: 0,
-              waitTimeMs: Date.now() - start,
+              waitTimeMs: now - start,
               timedOut: false,
             }
           }

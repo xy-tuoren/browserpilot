@@ -41,10 +41,13 @@ browserpilot connect-cdp http://127.0.0.1:9222
 browserpilot tabs
 browserpilot open <url> [--tab-group <name>]
 browserpilot navigate <url> [--tab <id>]
+browserpilot back | forward | reload [--ignore-cache] [--tab <id>]
 browserpilot close <tabId>
 
 # Perception & screenshots
 browserpilot snapshot [--tab <id>] [--search "<regex>"] [--scope "<css|ref>"] [--full]
+browserpilot markdown [--search "<regex>"] [--full] [--tab <id>]
+browserpilot html [--selector "<css>"] [--search "<regex>"] [--full] [--tab <id>]
 browserpilot screenshot [outputPath] [--full-page] [--tab <id>]
 browserpilot labeled-screenshot [outputPath] [--tab <id>]
 
@@ -52,6 +55,9 @@ browserpilot labeled-screenshot [outputPath] [--tab <id>]
 browserpilot click <ref|locator> [--tab <id>]
 browserpilot fill <ref|locator> <value> [--tab <id>]
 browserpilot type [target] <text> [--tab <id>]
+browserpilot hover <ref|locator> [--tab <id>]
+browserpilot scroll [down|up|left|right] [--amount <px>] [--target <ref|sel>] [--tab <id>]
+browserpilot wait [--selector "<css>"] [--text "<str>"] [--ms <N>] [--timeout <ms>] [--tab <id>]
 browserpilot key <Enter|Escape|Tab|...> [--tab <id>]
 
 # DevTools & profiling

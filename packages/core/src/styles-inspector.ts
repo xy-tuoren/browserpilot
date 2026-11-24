@@ -207,7 +207,8 @@ export function formatStylesAsText(styles: ElementStylesResult): string {
   if (styles.inlineStyles.length) {
     lines.push('  element.style {')
     for (const d of styles.inlineStyles) {
-      lines.push(`    ${d.name}: ${d.value}${d.important ? ' !important' : ''};`)
+      const imp = d.important && !/!important\s*$/i.test(d.value) ? ' !important' : ''
+      lines.push(`    ${d.name}: ${d.value}${imp};`)
     }
     lines.push('  }')
   }
@@ -217,7 +218,8 @@ export function formatStylesAsText(styles: ElementStylesResult): string {
     lines.push(`  ${r.selector} {${loc}`)
     for (const d of r.declarations) {
       const strike = d.overridden ? ' /* overridden */' : ''
-      lines.push(`    ${d.name}: ${d.value}${d.important ? ' !important' : ''};${strike}`)
+      const imp = d.important && !/!important\s*$/i.test(d.value) ? ' !important' : ''
+      lines.push(`    ${d.name}: ${d.value}${imp};${strike}`)
     }
     lines.push('  }')
   }

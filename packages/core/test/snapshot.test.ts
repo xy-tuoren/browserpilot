@@ -28,6 +28,28 @@ describe('Snapshot & Wait helpers', () => {
     expect(result.refs.e2.backendDOMNodeId).toBe(102)
   })
 
+  it('suppresses split StaticText highlight children already covered by parent link/button name', () => {
+    const nodes: RawAXNode[] = [
+      { nodeId: '1', role: { value: 'RootWebArea' }, name: { value: 'Forum' }, childIds: ['2', '6'] },
+      {
+        nodeId: '2',
+        role: { value: 'link' },
+        name: { value: 'Jio Pro Gemini 4 讨论' },
+        backendDOMNodeId: 201,
+        childIds: ['3', '4', '5'],
+      },
+      { nodeId: '3', role: { value: 'StaticText' }, name: { value: 'Jio Pro' } },
+      { nodeId: '4', role: { value: 'StaticText' }, name: { value: 'Gemini' } },
+      { nodeId: '5', role: { value: 'StaticText' }, name: { value: '4 讨论' } },
+      { nodeId: '6', role: { value: 'StaticText' }, name: { value: 'Standalone summary text' } },
+    ]
+    const result = formatAXTree(nodes)
+    expect(result.lines).toEqual([
+      '- [e1] link "Jio Pro Gemini 4 讨论"',
+      '- text: "Standalone summary text"',
+    ])
+  })
+
   it('filters snapshot lines by regex with context', () => {
     const text = [
       'URL: https://example.com',
@@ -67,9 +89,11 @@ describe('Snapshot & Wait helpers', () => {
     expect(diff.text).toContain('- [e15] button "Item 15 (Updated)"')
   })
 
-  it('identifies ignored analytics/ad URLs for smart waitForPageLoad', () => {
+  it('identifies ignored analytics/ad and long-polling URLs for smart waitForPageLoad', () => {
     expect(isIgnoredAnalyticsUrl('https://www.google-analytics.com/g/collect?v=2')).toBe(true)
     expect(isIgnoredAnalyticsUrl('https://cdn.sentry.io/api/1/envelope')).toBe(true)
+    expect(isIgnoredAnalyticsUrl('https://linux.do/message-bus/abc123/poll')).toBe(true)
+    expect(isIgnoredAnalyticsUrl('https://app.example.com/socket.io/?EIO=4&transport=polling')).toBe(true)
     expect(isIgnoredAnalyticsUrl('https://api.myapp.com/v1/users')).toBe(false)
   })
 })

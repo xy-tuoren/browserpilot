@@ -173,7 +173,16 @@ export class ConsoleCollector {
     }
 
     if (options.search !== undefined) {
-      const regex = options.search instanceof RegExp ? options.search : new RegExp(options.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      let regex: RegExp
+      if (options.search instanceof RegExp) {
+        regex = options.search
+      } else {
+        try {
+          regex = new RegExp(options.search, 'i')
+        } catch {
+          regex = new RegExp(options.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+        }
+      }
       list = list.filter((e) => regex.test(e.text) || (e.url && regex.test(e.url)) || (e.stackTrace && regex.test(e.stackTrace)))
     }
 

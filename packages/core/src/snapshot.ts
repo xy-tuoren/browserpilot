@@ -87,14 +87,36 @@ const LANDMARK_AND_STRUCTURE_ROLES = new Set([
 
 const SKIPPED_ROLES = new Set(['InlineTextBox', 'LineBreak', 'LayoutTable', 'LayoutTableRow', 'LayoutTableCell'])
 
+const LEAF_LABELED_ROLES = new Set([
+  'link',
+  'button',
+  'heading',
+  'tab',
+  'menuitem',
+  'menuitemcheckbox',
+  'menuitemradio',
+  'option',
+  'checkbox',
+  'radio',
+  'switch',
+  'textbox',
+  'searchbox',
+  'combobox',
+])
+
 function getProp(node: RawAXNode, name: string): unknown {
   const prop = node.properties?.find((p) => p.name === name)
   return prop?.value?.value
 }
 
-function cleanText(raw: unknown, maxLen: number = 140): string {
+function normalizeWs(raw: unknown): string {
   if (raw === undefined || raw === null) return ''
-  const s = String(raw).replace(/\s+/g, ' ').trim()
+  return String(raw).replace(/\s+/g, ' ').trim()
+}
+
+function cleanText(raw: unknown, maxLen: number = 140): string {
+  const s = normalizeWs(raw)
+  if (!s) return ''
   if (s.length <= maxLen) return s
   return `${s.slice(0, maxLen - 1)}…`
 }
@@ -143,7 +165,7 @@ export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = 
 
   const visited = new Set<string>()
 
-  function renderNode(node: RawAXNode, depth: number, parentName: string): void {
+  function renderNode(node: RawAXNode, depth: number, parentName: string, parentLeafText: string): void {
     if (depth > maxDepth || visited.has(node.nodeId)) return
     visited.add(node.nodeId)
 
@@ -155,32 +177,33 @@ export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = 
       .filter((c): c is RawAXNode => Boolean(c))
 
     if (node.ignored) {
-      for (const child of children) renderNode(child, depth, parentName)
+      for (const child of children) renderNode(child, depth, parentName, parentLeafText)
       return
     }
 
-    const name = cleanText(node.name?.value)
+    const fullRawName = normalizeWs(node.name?.value)
+    const name = cleanText(fullRawName)
     const value = cleanText(node.value?.value, 100)
     const isInteractive = INTERACTIVE_ROLES.has(role) || getProp(node, 'focusable') === true
 
     // Root container: recurse transparently
     if (role === 'RootWebArea' || role === 'WebArea') {
-      for (const child of children) renderNode(child, depth, name)
+      for (const child of children) renderNode(child, depth, name, '')
       return
     }
 
-    // Static text: emit only when meaningful and not duplicating parent accessible name
+    // Static text: skip when already represented inside a parent accessible name or split highlight fragment
     if (role === 'StaticText') {
-      if (includeText && name && name !== parentName) {
-        lines.push(`${'  '.repeat(depth)}- text: "${name}"`)
-      }
+      if (!includeText || !name || name === parentName) return
+      if (parentLeafText && parentLeafText.includes(fullRawName)) return
+      lines.push(`${'  '.repeat(depth)}- text: "${name}"`)
       return
     }
 
     // Transparent generic / structural wrappers
     const isMeaningful = isInteractive || LANDMARK_AND_STRUCTURE_ROLES.has(role)
     if (!isMeaningful) {
-      for (const child of children) renderNode(child, depth, parentName)
+      for (const child of children) renderNode(child, depth, parentName, parentLeafText)
       return
     }
 
@@ -233,9 +256,10 @@ export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = 
     const attrPart = attrs.length > 0 ? ` (${attrs.join(', ')})` : ''
     lines.push(`${indent}- ${refPrefix}${role}${namePart}${attrPart}`)
 
-    // Recurse children (skip redundant static text child when interactive node already has its name)
+    // Recurse children (suppress duplicate/split StaticText fragments already covered by leaf-labeled ancestor)
+    const nextLeafText = fullRawName && LEAF_LABELED_ROLES.has(role) ? fullRawName : parentLeafText
     for (const child of children) {
-      renderNode(child, depth + 1, name || parentName)
+      renderNode(child, depth + 1, name || parentName, nextLeafText)
     }
 
     // Prune completely empty non-interactive landmark containers
@@ -244,11 +268,11 @@ export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = 
     }
   }
 
-  renderNode(rootNode, 0, '')
+  renderNode(rootNode, 0, '', '')
   return { lines, refs, nextRefIndex: refCounter }
 }
 
-export function filterSnapshotLines(fullText: string, search: string | RegExp, maxMatches = 25): string {
+export function filterSnapshotLines(fullText: string, search: string | RegExp, maxMatches = 40): string {
   const allLines = fullText.split('\n')
   const header = allLines[0]?.startsWith('URL:') ? allLines[0] : ''
   const body = header ? allLines.slice(1) : allLines

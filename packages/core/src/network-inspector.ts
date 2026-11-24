@@ -221,10 +221,16 @@ export class NetworkInspector {
       list = list.filter((e) => e.resourceType?.toLowerCase() === rt)
     }
     if (options.search !== undefined) {
-      const regex =
-        options.search instanceof RegExp
-          ? options.search
-          : new RegExp(options.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      let regex: RegExp
+      if (options.search instanceof RegExp) {
+        regex = options.search
+      } else {
+        try {
+          regex = new RegExp(options.search, 'i')
+        } catch {
+          regex = new RegExp(options.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+        }
+      }
       list = list.filter((e) => regex.test(e.url) || (e.errorText && regex.test(e.errorText)))
     }
 

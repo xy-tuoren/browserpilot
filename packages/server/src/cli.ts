@@ -158,9 +158,15 @@ Direct Quick Commands:
   browserpilot open <url> [--tab-group <name>]
   browserpilot close <tabId>
   browserpilot navigate <url> [--tab <id>]
+  browserpilot back | forward | reload [--ignore-cache] [--tab <id>]
   browserpilot snapshot [--tab <id>] [--search <regex>] [--scope <css>] [--full]
+  browserpilot markdown [--search <regex>] [--full] [--tab <id>]
+  browserpilot html [--selector <css>] [--search <regex>] [--full] [--tab <id>]
   browserpilot click <ref|selector> [--tab <id>]
   browserpilot fill <ref|selector> <value> [--tab <id>]
+  browserpilot hover <ref|selector> [--tab <id>]
+  browserpilot scroll [down|up|left|right] [--amount <px>] [--target <ref|sel>] [--tab <id>]
+  browserpilot wait [--selector <css>] [--text <str>] [--ms <N>] [--timeout <ms>] [--tab <id>]
   browserpilot screenshot [outputPath] [--full-page] [--tab <id>]
   browserpilot labeled-screenshot [outputPath] [--tab <id>]
   browserpilot console [--level error] [--search <str>] [--since-last] [--tab <id>]
@@ -583,6 +589,22 @@ async function main(): Promise<void> {
     case 'goto':
       printToolOutput(await client.callTool('browser_navigate', { url: positional[1], tabId, sessionId }))
       return
+    case 'back':
+      printToolOutput(await client.callTool('browser_history', { action: 'back', tabId, sessionId }))
+      return
+    case 'forward':
+      printToolOutput(await client.callTool('browser_history', { action: 'forward', tabId, sessionId }))
+      return
+    case 'reload':
+      printToolOutput(
+        await client.callTool('browser_history', {
+          action: 'reload',
+          ignoreCache: Boolean(flags['ignore-cache']),
+          tabId,
+          sessionId,
+        }),
+      )
+      return
     case 'snapshot':
       printToolOutput(
         await client.callTool('browser_snapshot', {
@@ -594,8 +616,60 @@ async function main(): Promise<void> {
         }),
       )
       return
+    case 'markdown':
+      printToolOutput(
+        await client.callTool('browser_markdown', {
+          tabId,
+          sessionId,
+          search: typeof flags.search === 'string' ? flags.search : undefined,
+          showDiffSinceLastCall: flags.full ? false : undefined,
+        }),
+      )
+      return
+    case 'html':
+      printToolOutput(
+        await client.callTool('browser_clean_html', {
+          tabId,
+          sessionId,
+          selector: typeof flags.selector === 'string' ? flags.selector : undefined,
+          search: typeof flags.search === 'string' ? flags.search : undefined,
+          showDiffSinceLastCall: flags.full ? false : undefined,
+          includeStyles: Boolean(flags['include-styles']),
+        }),
+      )
+      return
     case 'click':
       printToolOutput(await client.callTool('browser_click', { target: positional[1], tabId, sessionId }))
+      return
+    case 'hover':
+      printToolOutput(await client.callTool('browser_hover', { target: positional[1], tabId, sessionId }))
+      return
+    case 'scroll': {
+      const dir = positional[1]
+      const direction =
+        dir === 'up' || dir === 'down' || dir === 'left' || dir === 'right' ? dir : 'down'
+      printToolOutput(
+        await client.callTool('browser_scroll', {
+          direction,
+          amount: typeof flags.amount === 'string' ? Number(flags.amount) : undefined,
+          target: typeof flags.target === 'string' ? flags.target : undefined,
+          tabId,
+          sessionId,
+        }),
+      )
+      return
+    }
+    case 'wait':
+      printToolOutput(
+        await client.callTool('browser_wait', {
+          selector: typeof flags.selector === 'string' ? flags.selector : undefined,
+          text: typeof flags.text === 'string' ? flags.text : undefined,
+          ms: typeof flags.ms === 'string' ? Number(flags.ms) : undefined,
+          timeoutMs: typeof flags.timeout === 'string' ? Number(flags.timeout) : undefined,
+          tabId,
+          sessionId,
+        }),
+      )
       return
     case 'fill':
       printToolOutput(await client.callTool('browser_fill', { target: positional[1], value: positional[2] ?? '', tabId, sessionId }))

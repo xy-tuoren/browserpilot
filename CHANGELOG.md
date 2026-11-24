@@ -2,15 +2,22 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
-## [Unreleased]
+## [1.2.4] - 2026-11-24
 
 ### Added
+- **Direct CLI Navigation & Extraction Shortcuts (`cli.ts`)**: added `browserpilot scroll`, `markdown`, `html`, `back`, `forward`, `reload`, `hover`, and `wait` top-level commands, and updated `skills/browserpilot/REFERENCE.md`.
 - **Progressive-Disclosure Agent Skill (`skills/browserpilot/SKILL.md` + `REFERENCE.md`)**: rewrote skill description with concrete action triggers and negative boundary, added MCP vs CLI selection flow, explicit pure-CDP `browserpilot exec` sandbox API (preventing Playwright API hallucination), safety/pitfall guards, and split full 43-tool/locator/troubleshooting reference into `skills/browserpilot/REFERENCE.md` (with `packages/server/src/skill-doc.ts` kept in sync).
 - **Simplified Chinese Documentation (`README.zh-CN.md`)**: added full Chinese README with top-level `English | 简体中文` switcher, plus npm version, GitHub Actions CI, and Node.js badges in `README.md`.
 - **GitHub Repository Metadata**: configured repository homepage (`https://www.npmjs.com/package/browserpilot-cdp`) and discovery topics (`chrome-extension`, `cdp`, `mcp`, `ai-agent`, `browser-automation`, `devtools`, etc.).
 
 ### Changed
 - **Clear Non-Invasive Onboarding Docs (`README.md` & `browserpilot setup`)**: documented the 3-step new-user setup flow explicitly separating **Option A (opt-in Agent Skill + CLI via `npx skills add xy-tuoren/browserpilot`)** and **Option B (MCP Server)**, and clarifying that `browserpilot setup` never modifies any agent config or skill directory.
+
+### Fixed
+- **Fast Load Detection on Long-Polling SPAs (`waitForPageLoad`)**: ignores Discourse `/message-bus/`, `longpoll`, `socket.io`, `signalr`, and hanging >2.5s requests once `document.readyState === 'complete'`, cutting `browserpilot open` time on live forums/apps from ~10s timeout down to ~1–2s.
+- **30–40% Leaner AXTree Snapshots (`formatAXTree`)**: suppresses redundant/split highlight `StaticText` children already represented inside a parent `link`, `button`, `heading`, or interactive control's accessible name, and raised `filterSnapshotLines` default match cap from 25 to 40.
+- **Consistent Regex Search in `network` & `console`**: `NetworkInspector.getRequests` and `ConsoleCollector.getLogs` now compile string `search` filters as case-insensitive regular expressions (with literal fallback on invalid regex syntax).
+- **CSS `!important` Deduplication (`formatStylesAsText`)**: prevents duplicate `!important !important` when CDP property values already contain `!important`.
 
 ## [1.2.3] - 2026-11-24
 
