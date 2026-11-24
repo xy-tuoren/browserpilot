@@ -6,6 +6,11 @@ let currentState: ExtensionState | null = null
 
 function render(state: ExtensionState): void {
   currentState = state
+  const isDark = state.config.theme !== 'light'
+  document.documentElement.dataset.theme = isDark ? 'dark' : 'light'
+  $<HTMLInputElement>('opt-dark-mode').checked = isDark
+  $('theme-mode-label').textContent = isDark ? 'Dark' : 'Light'
+
   const dot = $('status-dot')
   const badge = $('status-badge')
   const btnPause = $<HTMLButtonElement>('btn-pause')
@@ -98,6 +103,12 @@ $('btn-detach-all').addEventListener('click', () => {
   void chrome.runtime.sendMessage({ type: 'devpilot:detach-all' }).then(() => refresh())
 })
 
+$('opt-dark-mode').addEventListener('change', (e) => {
+  const isDark = (e.target as HTMLInputElement).checked
+  document.documentElement.dataset.theme = isDark ? 'dark' : 'light'
+  $('theme-mode-label').textContent = isDark ? 'Dark' : 'Light'
+  updateConfig({ theme: isDark ? 'dark' : 'light' })
+})
 $('opt-auto-attach').addEventListener('change', (e) => {
   updateConfig({ autoAttach: (e.target as HTMLInputElement).checked })
 })

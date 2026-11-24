@@ -34,7 +34,10 @@ export interface DomainRules {
   allowedDomains: string[]
 }
 
+export type ExtensionTheme = 'dark' | 'light'
+
 export interface ExtensionConfig {
+  theme: ExtensionTheme
   autoAttach: boolean
   paused: boolean
   showHighlights: boolean

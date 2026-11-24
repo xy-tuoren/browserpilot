@@ -258,7 +258,15 @@ describe('@devpilot/extension real Chrome MV3 zero-click E2E', () => {
     expect(await popupTab.page.evaluate<string>('document.body.innerText')).toContain('Popup Ready')
     await manager.closeTab(popupInfo.tabId)
 
-    // 7. Pause kill-switch blocks new attaches cleanly
+    // 7. Theme persistence toggle (dark <-> light)
+    await transport.rpc('extension.setConfig', { theme: 'light' })
+    const lightState = (await transport.rpc('extension.getState')) as { config: { theme: string } }
+    expect(lightState.config.theme).toBe('light')
+    await transport.rpc('extension.setConfig', { theme: 'dark' })
+    const darkState = (await transport.rpc('extension.getState')) as { config: { theme: string } }
+    expect(darkState.config.theme).toBe('dark')
+
+    // 8. Pause kill-switch blocks new attaches cleanly
     await transport.rpc('extension.setConfig', { paused: true })
     await expect(transport.rpc('tabs.create', { url: `${baseUrl}/blocked` })).rejects.toThrow(/paused/i)
     await transport.rpc('extension.setConfig', { paused: false })

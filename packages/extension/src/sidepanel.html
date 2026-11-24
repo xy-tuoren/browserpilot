@@ -1,47 +1,95 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <title>DevPilot Companion</title>
   <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1120;
+      --surface: #0f172a;
+      --border: #1e293b;
+      --border-strong: #334155;
+      --text: #e2e8f0;
+      --text-strong: #f8fafc;
+      --detail: #cbd5e1;
+      --muted: #64748b;
+      --muted-strong: #94a3b8;
+      --btn-bg: #1e293b;
+      --pill-bg: #1e293b;
+      --pill-text: #94a3b8;
+      --pill-on-bg: rgba(16, 185, 129, 0.18);
+      --pill-on-text: #34d399;
+      --accent: #34d399;
+      --ok: #34d399;
+      --err: #f87171;
+      --info: #38bdf8;
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --border: #e2e8f0;
+      --border-strong: #cbd5e1;
+      --text: #1e293b;
+      --text-strong: #0f172a;
+      --detail: #334155;
+      --muted: #64748b;
+      --muted-strong: #475569;
+      --btn-bg: #ffffff;
+      --pill-bg: #e2e8f0;
+      --pill-text: #475569;
+      --pill-on-bg: #d1fae5;
+      --pill-on-text: #047857;
+      --accent: #059669;
+      --ok: #059669;
+      --err: #dc2626;
+      --info: #0284c7;
+    }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: #0b1120;
-      color: #e2e8f0;
+      background: var(--bg);
+      color: var(--text);
       font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       display: flex;
       flex-direction: column;
       height: 100vh;
+      transition: background 140ms ease, color 140ms ease;
     }
     header {
       padding: 12px 14px;
-      background: #0f172a;
-      border-bottom: 1px solid #1e293b;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
     }
-    .title { font-weight: 650; font-size: 14px; }
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .title { font-weight: 650; font-size: 14px; color: var(--text-strong); }
     .pill {
       font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
       padding: 4px 8px;
       border-radius: 999px;
-      background: #1e293b;
-      color: #94a3b8;
+      background: var(--pill-bg);
+      color: var(--pill-text);
     }
-    .pill.on { background: rgba(16, 185, 129, 0.18); color: #34d399; }
+    .pill.on { background: var(--pill-on-bg); color: var(--pill-on-text); }
     .toolbar {
       padding: 10px 14px;
       display: flex;
       gap: 8px;
-      border-bottom: 1px solid #1e293b;
+      border-bottom: 1px solid var(--border);
     }
     .tabs {
       display: flex;
-      border-bottom: 1px solid #1e293b;
-      background: #0f172a;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
       padding: 0 10px;
       gap: 4px;
     }
@@ -50,26 +98,30 @@
       border: 0;
       border-bottom: 2px solid transparent;
       border-radius: 0;
-      color: #94a3b8;
+      color: var(--muted-strong);
       padding: 8px 10px;
       font-size: 12px;
       font-weight: 600;
     }
     .tab-btn.active {
-      color: #34d399;
-      border-bottom-color: #34d399;
+      color: var(--accent);
+      border-bottom-color: var(--accent);
     }
     button {
       cursor: pointer;
-      border: 1px solid #334155;
-      background: #1e293b;
-      color: #f8fafc;
+      border: 1px solid var(--border-strong);
+      background: var(--btn-bg);
+      color: var(--text-strong);
       font: 500 12px/1 inherit;
       padding: 7px 10px;
       border-radius: 6px;
     }
-    button.primary { background: #0284c7; border-color: #38bdf8; }
-    button:hover { opacity: 0.92; }
+    button.theme-btn {
+      padding: 4px 8px;
+      font-size: 11px;
+    }
+    button.primary { background: #0284c7; border-color: #0284c7; color: #fff; }
+    button:hover { opacity: 0.9; }
     main {
       flex: 1;
       overflow-y: auto;
@@ -84,11 +136,11 @@
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.06em;
-      color: #64748b;
+      color: var(--muted);
     }
     .card {
-      background: #0f172a;
-      border: 1px solid #1e293b;
+      background: var(--surface);
+      border: 1px solid var(--border);
       border-radius: 8px;
       padding: 8px 10px;
       margin-bottom: 6px;
@@ -100,23 +152,26 @@
       gap: 8px;
       font: 600 12px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
     }
-    .ok { color: #34d399; }
-    .error { color: #f87171; }
-    .info { color: #38bdf8; }
-    .time { color: #64748b; font-weight: 400; font-size: 11px; }
+    .ok { color: var(--ok); }
+    .error { color: var(--err); }
+    .info { color: var(--info); }
+    .time { color: var(--muted); font-weight: 400; font-size: 11px; }
     .detail {
       margin-top: 4px;
       font-size: 12px;
-      color: #cbd5e1;
+      color: var(--detail);
       word-break: break-word;
     }
-    .muted { color: #64748b; font-size: 12px; }
+    .muted { color: var(--muted); font-size: 12px; }
   </style>
 </head>
 <body>
   <header>
     <div class="title">DevPilot Companion</div>
-    <span id="sp-status" class="pill">OFFLINE</span>
+    <div class="header-right">
+      <button id="sp-theme" class="theme-btn" title="Switch Dark / Light Mode">Light</button>
+      <span id="sp-status" class="pill">OFFLINE</span>
+    </div>
   </header>
 
   <div class="toolbar">

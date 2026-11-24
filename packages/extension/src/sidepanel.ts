@@ -14,6 +14,10 @@ function escapeHtml(s: string): string {
 
 function render(next: ExtensionState): void {
   state = next
+  const isDark = next.config.theme !== 'light'
+  document.documentElement.dataset.theme = isDark ? 'dark' : 'light'
+  $('sp-theme').textContent = isDark ? 'Light' : 'Dark'
+
   const statusEl = $('sp-status')
   if (next.config.paused) {
     statusEl.textContent = 'PAUSED'
@@ -122,6 +126,15 @@ $('tab-network').addEventListener('click', () => {
   if (state) render(state)
 })
 
+$('sp-theme').addEventListener('click', () => {
+  if (!state) return
+  const nextTheme = state.config.theme === 'light' ? 'dark' : 'light'
+  document.documentElement.dataset.theme = nextTheme
+  void chrome.runtime.sendMessage({
+    type: 'devpilot:update-config',
+    patch: { theme: nextTheme },
+  })
+})
 $('sp-pick').addEventListener('click', () => {
   void chrome.runtime.sendMessage({ type: 'devpilot:start-picker' })
 })

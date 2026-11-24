@@ -2,6 +2,12 @@
 
 All notable changes to **DevPilot** are documented in this file.
 
+## [1.0.1] - 2026-11-23
+
+### Added
+- Added a persistent **Dark / Light theme switch** to the Chrome Extension settings (`popup.html` / `popup.ts`) and a quick theme toggle in the **Companion Side Panel** (`sidepanel.html` / `sidepanel.ts`), backed by `ExtensionConfig.theme` (`'dark' | 'light'`) in `@devpilot/protocol` and synced in real time via `chrome.storage.local`.
+- Added E2E verification in `packages/extension/test/extension-e2e.test.ts` confirming `theme` persistence (`dark` <-> `light`).
+
 ## [1.0.0] - 2026-11-23
 
 ### Added

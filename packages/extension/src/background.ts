@@ -29,6 +29,7 @@ const KEEPALIVE_ALARM = 'devpilot-keepalive'
 const CONTEXT_MENU_PIN_ID = 'devpilot-pin-element'
 
 const DEFAULT_CONFIG: ExtensionConfig = {
+  theme: 'dark',
   autoAttach: true,
   paused: false,
   showHighlights: true,
