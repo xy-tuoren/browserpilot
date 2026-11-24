@@ -5,6 +5,7 @@ All notable changes to **BrowserPilot** (formerly DevPilot) are documented in th
 ## [Unreleased]
 
 ### Added
+- **Progressive-Disclosure Agent Skill (`skills/browserpilot/SKILL.md` + `REFERENCE.md`)**: rewrote skill description with concrete action triggers and negative boundary, added MCP vs CLI selection flow, explicit pure-CDP `browserpilot exec` sandbox API (preventing Playwright API hallucination), safety/pitfall guards, and split full 43-tool/locator/troubleshooting reference into `skills/browserpilot/REFERENCE.md` (with `packages/server/src/skill-doc.ts` kept in sync).
 - **Simplified Chinese Documentation (`README.zh-CN.md`)**: added full Chinese README with top-level `English | 简体中文` switcher, plus npm version, GitHub Actions CI, and Node.js badges in `README.md`.
 - **GitHub Repository Metadata**: configured repository homepage (`https://www.npmjs.com/package/browserpilot-cdp`) and discovery topics (`chrome-extension`, `cdp`, `mcp`, `ai-agent`, `browser-automation`, `devtools`, etc.).
 
