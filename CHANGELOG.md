@@ -2,6 +2,11 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
+## [Unreleased]
+
+### Changed
+- **Clear Non-Invasive Onboarding Docs (`README.md` & `browserpilot setup`)**: documented the 3-step new-user setup flow explicitly separating **Option A (opt-in Agent Skill + CLI via `npx skills add xy-tuoren/browserpilot`)** and **Option B (MCP Server)**, and clarifying that `browserpilot setup` never modifies any agent config or skill directory.
+
 ## [1.2.3] - 2026-11-24
 
 ### Fixed

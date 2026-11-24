@@ -50,28 +50,47 @@ AI Coding Agents (Claude Code / Cursor / Codex / Antigravity / Custom SDK)
 
 ## Quick Start (1 Minute)
 
-### Option 1: Install from npm (Recommended)
+### Step 1: Install CLI & Initialize
 
 ```bash
 npm install -g browserpilot-cdp
 browserpilot setup
 ```
 
-1. `browserpilot setup` automatically syncs the bundled extension to a stable upgrade-proof folder (`~/.browserpilot/extension`), computes its deterministic Chrome Extension ID, and registers the **Chrome Native Messaging Host** (`com.browserpilot.bridge`) — **no copying Extension IDs or manual auth tokens required**.
-2. Open `chrome://extensions` in Chrome, enable **Developer mode**, click **Load unpacked**, and select `~/.browserpilot/extension`. It connects automatically on the first millisecond!
-3. Add `browserpilot` to your AI coding agent MCP config (Claude Code / Cursor / Codex / Antigravity):
-   ```json
-   {
-     "mcpServers": {
-       "browserpilot": {
-         "command": "browserpilot",
-         "args": ["mcp"]
-       }
-     }
-   }
-   ```
+> **Prerequisites:** Node.js >= 22 (`ffmpeg` is optional, only required for video recording).  
+> **Non-invasive by design:** `browserpilot setup` only syncs the bundled Chrome extension to `~/.browserpilot/extension`, computes its deterministic Chrome Extension ID, and registers the **Chrome Native Messaging Host** (`com.browserpilot.bridge`). It **never** modifies your AI agents' settings or skill folders.
 
-### Option 2: Build from Source
+### Step 2: Load the Chrome Extension (1-Time)
+
+1. Open `chrome://extensions` in Chrome and enable **Developer mode**.
+2. Click **Load unpacked** and select `~/.browserpilot/extension`.
+3. It connects automatically via Native Messaging on the first millisecond — **no copying Extension IDs or manual auth tokens required**, and future upgrades keep the same path & ID.
+
+*(Skip Step 2 if you only want to drive a separate `--remote-debugging-port` Chromium instance via `browserpilot browser start` or `--cdp`.)*
+
+### Step 3: Connect Only the AI Agent(s) You Want (Choose Option A or B)
+
+- **Option A — Agent Skill + CLI (Lightweight, lowest context token usage):**  
+  Install [`skills/browserpilot/SKILL.md`](./skills/browserpilot/SKILL.md) only into the specific agent or project where you want it — for example:
+  ```bash
+  npx skills add xy-tuoren/browserpilot
+  ```
+  Or copy `skills/browserpilot/SKILL.md` (or the output of `browserpilot skill`) into a single project's `.claude/skills/browserpilot/`, `.agents/skills/browserpilot/`, etc. No MCP configuration required.
+
+- **Option B — MCP Server (43 native `browser_*` tools + direct multimodal screenshot blocks):**  
+  Add this snippet to the MCP config of whichever agent you want (Claude Code, Cursor, Codex, Antigravity):
+  ```json
+  {
+    "mcpServers": {
+      "browserpilot": {
+        "command": "browserpilot",
+        "args": ["mcp"]
+      }
+    }
+  }
+  ```
+
+### Alternative: Build from Source / Direct CDP (No Extension)
 
 ```bash
 git clone https://github.com/xy-tuoren/browserpilot.git
@@ -81,7 +100,7 @@ pnpm build
 node packages/server/dist/cli.js setup
 ```
 
-Or connect directly to a `--remote-debugging-port` Chrome without an extension:
+Or connect MCP directly to a `--remote-debugging-port` Chrome without loading the extension:
 
 ```json
 {

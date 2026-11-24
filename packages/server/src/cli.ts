@@ -372,7 +372,11 @@ async function main(): Promise<void> {
     }
 
     const cliBin = path.resolve(__dirname, 'cli.js')
-    console.log(`\n4. MCP Server Config (Claude Code / Cursor / Codex / Antigravity):`)
+    console.log(`\n4. Connect Your AI Agent (Choose Option A or B — setup never modifies your agent configs):`)
+    console.log(`\n   Option A — Agent Skill + CLI (install only where you want):`)
+    console.log(`     npx skills add xy-tuoren/browserpilot`)
+    console.log(`     (or print skill instructions with: browserpilot skill)`)
+    console.log(`\n   Option B — MCP Server (43 native tools + direct screenshot images):`)
     console.log(
       JSON.stringify(
         {
