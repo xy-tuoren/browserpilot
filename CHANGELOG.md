@@ -2,6 +2,16 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
+## [1.2.6] - 2026-11-24
+
+### Fixed
+- **Eliminated Chrome Extension 401 WebSocket Error Badge (`background.ts` + `daemon.ts`)**:
+  - Skipped unauthenticated WebSocket fallback in `background.ts` when `config.authToken` is empty (standard Native Messaging mode), cleanly scheduling Native Messaging reconnect instead of triggering Chrome's uncatchable `WebSocket connection failed: HTTP Authentication failed` error in `chrome://extensions`.
+  - Updated daemon WebSocket upgrade auth rejection from `401 Unauthorized` to `403 Forbidden` for cleaner browser error handling.
+
+### Changed
+- **Fresh Geek Extension Icon Redesign (`packages/extension/scripts/gen-icons.mjs`)**: replaced the legacy aliased dark icon with a supersampled SDF anti-aliased fresh glacier-mint to sky-cyan squircle featuring a crisp pure-white `>_` terminal prompt and 4-point pilot spark (`16px`, `32px`, `48px`, `128px`).
+
 ## [1.2.5] - 2026-11-24
 
 ### Fixed

@@ -286,6 +286,16 @@ function scheduleConnect(delayMs: number): void {
   }, delayMs)
 }
 
+function hasWebSocketToken(): boolean {
+  if (config.authToken.trim()) return true
+  try {
+    const url = new URL(config.daemonUrl)
+    return Boolean(url.searchParams.get('token')?.trim())
+  } catch {
+    return false
+  }
+}
+
 async function connectBridge(): Promise<void> {
   if (transportMode !== 'disconnected') return
 
@@ -305,11 +315,19 @@ async function connectBridge(): Promise<void> {
       port.onDisconnect.addListener(() => {
         const err = chrome.runtime.lastError?.message
         if (!receivedValidTraffic && err) {
-          // Native host likely not installed; immediately try WebSocket fallback
           nativePort = null
           if (transportMode === 'native') transportMode = 'disconnected'
-          nativeRetryAfter = Date.now() + 60_000
-          void connectWebSocket()
+          updateBadge()
+          broadcastUiUpdate()
+          if (hasWebSocketToken()) {
+            // Native host unavailable, fall back to authenticated WebSocket
+            nativeRetryAfter = Date.now() + 60_000
+            void connectWebSocket()
+          } else {
+            // Native Messaging mode without manual WS token: retry native cleanly without 401 console errors
+            nativeRetryAfter = Date.now() + (nativeEverConnected ? 1_500 : 10_000)
+            scheduleConnect(nativeEverConnected ? 1_500 : 10_000)
+          }
           return
         }
         handleTransportDisconnected('native')
@@ -325,7 +343,7 @@ async function connectBridge(): Promise<void> {
     }
   }
 
-  // 2. Fallback to authenticated local WebSocket daemon
+  // 2. Fallback to authenticated local WebSocket daemon (only when an auth token is configured)
   await connectWebSocket()
 }
 
@@ -333,11 +351,24 @@ async function connectWebSocket(): Promise<void> {
   if (transportMode !== 'disconnected') return
   if (!config.daemonUrl) return
 
+  let url: URL
   try {
-    const url = new URL(config.daemonUrl)
-    if (config.authToken) {
-      url.searchParams.set('token', config.authToken)
-    }
+    url = new URL(config.daemonUrl)
+  } catch {
+    return
+  }
+
+  const effectiveToken = config.authToken.trim() || url.searchParams.get('token')?.trim() || ''
+  if (!effectiveToken) {
+    // Avoid unauthenticated WS requests that cause Chrome 401 errors in chrome://extensions
+    updateBadge()
+    broadcastUiUpdate()
+    scheduleConnect(nativeEverConnected ? 1_500 : 10_000)
+    return
+  }
+
+  try {
+    url.searchParams.set('token', effectiveToken)
     const socket = new WebSocket(url.toString())
     ws = socket
 

@@ -74,7 +74,7 @@ export class BrowserPilotDaemon {
       const headerToken = (req.headers.authorization || '').replace(/^Bearer\s+/i, '')
       const provided = queryToken || headerToken
       if (cfg.token && provided !== cfg.token) {
-        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
         socket.destroy()
         return
       }
