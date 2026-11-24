@@ -156,6 +156,17 @@ export class BrowserPilotDaemon {
       this.backends.set(clientId, { info, transport, manager })
       this.primaryClientId = clientId
 
+      // Confirm end-to-end daemon handshake immediately so extension knows bridge is live
+      if (ws.readyState === ws.OPEN) {
+        ws.send(
+          JSON.stringify({
+            type: 'event',
+            event: 'bridge.ready',
+            params: { version: BROWSERPILOT_VERSION, clientId },
+          }),
+        )
+      }
+
       ws.on('close', () => {
         manager.dispose()
         this.backends.delete(clientId)
@@ -201,7 +212,10 @@ export class BrowserPilotDaemon {
   }
 
   listClients(): BrowserClientInfo[] {
-    return Array.from(this.backends.values()).map((b) => b.info)
+    return Array.from(this.backends.values()).map((b) => ({
+      ...b.info,
+      attachedTabCount: b.manager.getAttachedTabCount(),
+    }))
   }
 
   getManager(clientId?: string): SessionManager {
@@ -239,6 +253,7 @@ export class BrowserPilotDaemon {
         this.sendJson(res, 200, {
           ok: true,
           version: BROWSERPILOT_VERSION,
+          pid: process.pid,
           uptimeMs: Date.now() - this.startedAt,
           clients: this.listClients(),
         })

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BrowserPilot",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Zero-click pure-CDP browser control and DevTools debugging bridge for AI agents.",
   "permissions": [
     "debugger",

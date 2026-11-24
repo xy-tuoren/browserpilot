@@ -423,7 +423,20 @@ async function assignTabGroup(tabId: number, groupTitle?: string, groupColor?: T
   const title = (groupTitle || DEFAULT_TAB_GROUP_TITLE).trim()
   const color: chrome.tabGroups.ColorEnum = (groupColor || 'green') as chrome.tabGroups.ColorEnum
   try {
-    const existingGroupId = tabGroupIds.get(title)
+    const tab = await chrome.tabs.get(tabId).catch(() => null)
+    const windowId = tab?.windowId
+    const cacheKey = windowId !== undefined ? `${windowId}:${title}` : title
+    let existingGroupId = tabGroupIds.get(cacheKey)
+
+    if (existingGroupId === undefined && chrome.tabGroups?.query) {
+      const groups = await chrome.tabGroups
+        .query(windowId !== undefined ? { title, windowId } : { title })
+        .catch(() => [])
+      if (groups.length > 0) {
+        existingGroupId = groups[0].id
+      }
+    }
+
     let groupId: number
     if (existingGroupId !== undefined) {
       try {
@@ -435,7 +448,7 @@ async function assignTabGroup(tabId: number, groupTitle?: string, groupColor?: T
     } else {
       groupId = await chrome.tabs.group({ tabIds: [tabId] })
     }
-    tabGroupIds.set(title, groupId)
+    tabGroupIds.set(cacheKey, groupId)
     await chrome.tabGroups.update(groupId, { title, color })
   } catch {
     // Tab groups may be unsupported in minimal windows
@@ -471,6 +484,11 @@ async function ensureAttached(
       await chrome.debugger.attach({ tabId }, CDP_PROTOCOL_VERSION)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
+      if (/another debugger is already attached/i.test(msg)) {
+        throw new Error(
+          `Another debugger (Chrome DevTools or another extension such as Playwriter) is already attached to tab #${tabId}. Close DevTools / detach the other extension on that tab, or open a new tab.`,
+        )
+      }
       if (!/already attached/i.test(msg)) {
         throw err
       }
@@ -535,6 +553,15 @@ async function handleBridgeMessage(msg: BridgeMessage): Promise<void> {
     return
   }
   if (msg.type === 'pong') return
+  if (msg.type === 'event') {
+    if (msg.event === 'bridge.ready') {
+      const ver = typeof msg.params?.version === 'string' ? ` (daemon v${msg.params.version})` : ''
+      logActivity('bridge.ready', 'ok', `Connected via ${transportMode === 'native' ? 'Native Messaging' : 'WebSocket'}${ver}`)
+      updateBadge()
+      broadcastUiUpdate()
+    }
+    return
+  }
   if (msg.type !== 'request') return
 
   const req = msg as BridgeRequest

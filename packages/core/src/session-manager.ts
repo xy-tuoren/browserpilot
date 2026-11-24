@@ -3,6 +3,7 @@ import util from 'node:util'
 import vm from 'node:vm'
 import {
   DEFAULT_TAB_GROUP_TITLE,
+  isRestrictedUrl,
   TAB_GROUP_COLORS,
   type SessionInfo,
   type TabGroupColor,
@@ -66,6 +67,10 @@ export class SessionManager {
 
   getTransport(): CDPTransport {
     return this.transport
+  }
+
+  getAttachedTabCount(): number {
+    return this.tabs.size
   }
 
   async getOrAttachTab(
@@ -140,7 +145,12 @@ export class SessionManager {
     }
 
     const allTabs = await this.listTabs()
-    const candidate = allTabs.find((t) => t.active && !t.url.startsWith('chrome://')) ?? allTabs.find((t) => !t.url.startsWith('chrome://'))
+    const attachable = allTabs.filter((t) => !isRestrictedUrl(t.url))
+    const candidate =
+      attachable.find((t) => t.active && /^https?:\/\//i.test(t.url)) ??
+      attachable.find((t) => t.active) ??
+      attachable.find((t) => /^https?:\/\//i.test(t.url)) ??
+      attachable[0]
     if (candidate) {
       const tab = await this.getOrAttachTab(candidate.tabId, groupOpts)
       if (session) session.activeTabId = tab.tabId

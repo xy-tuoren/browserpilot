@@ -63,7 +63,7 @@ export class DaemonClient {
     return data
   }
 
-  async health(): Promise<{ ok: boolean; version: string; uptimeMs: number; clients: BrowserClientInfo[] }> {
+  async health(): Promise<{ ok: boolean; version: string; pid?: number; uptimeMs: number; clients: BrowserClientInfo[] }> {
     return await this.request('GET', '/api/health')
   }
 

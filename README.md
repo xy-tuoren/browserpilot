@@ -27,7 +27,7 @@
 
 ```text
 AI Coding Agents (Claude Code / Cursor / Codex / Antigravity / Custom SDK)
-        │   MCP stdio (39 tools + images)   /   CLI (`browserpilot`)   /   TypeScript SDK
+        │   MCP stdio (43 tools + images)   /   CLI (`browserpilot`)   /   TypeScript SDK
         ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │  @browserpilot/server   Authenticated Local Daemon (127.0.0.1 + 256-bit token)   │
@@ -57,18 +57,15 @@ npm install -g browserpilot-cdp
 browserpilot setup
 ```
 
-1. Open `chrome://extensions` in Chrome, enable **Developer mode**, click **Load unpacked**, and select the bundled `extension/` path printed by `browserpilot setup`.
-2. Copy the Extension ID from Chrome and run:
-   ```bash
-   browserpilot setup --extension-id <YOUR_EXTENSION_ID>
-   ```
+1. `browserpilot setup` automatically syncs the bundled extension to a stable upgrade-proof folder (`~/.browserpilot/extension`), computes its deterministic Chrome Extension ID, and registers the **Chrome Native Messaging Host** (`com.browserpilot.bridge`) — **no copying Extension IDs or manual auth tokens required**.
+2. Open `chrome://extensions` in Chrome, enable **Developer mode**, click **Load unpacked**, and select `~/.browserpilot/extension`. It connects automatically on the first millisecond!
 3. Add `browserpilot` to your AI coding agent MCP config (Claude Code / Cursor / Codex / Antigravity):
    ```json
    {
      "mcpServers": {
        "browserpilot": {
-         "command": "npx",
-         "args": ["-y", "browserpilot-cdp@latest", "mcp"]
+         "command": "browserpilot",
+         "args": ["mcp"]
        }
      }
    }

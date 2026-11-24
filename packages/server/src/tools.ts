@@ -44,6 +44,17 @@ function textResult(text: string, meta?: Record<string, unknown>): ToolExecution
   return { content: [{ type: 'text', text }], meta }
 }
 
+export function normalizeNavigationUrl(raw: string | undefined): string {
+  const trimmed = (raw ?? '').trim()
+  if (!trimmed) return 'about:blank'
+  if (/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(trimmed)) {
+    return `http://${trimmed}`
+  }
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) return trimmed
+  if (/^(about|data|file|javascript|mailto|blob|view-source):/i.test(trimmed)) return trimmed
+  return `https://${trimmed}`
+}
+
 function formatFeedbackSuffix(fb: ActionFeedback): string {
   const parts: string[] = [`URL: ${fb.url}`]
   if (fb.newConsoleErrors.length > 0) {
@@ -798,15 +809,22 @@ export async function executeTool(
       }
 
       case 'browser_open_tab': {
+        const targetUrl = normalizeNavigationUrl(args.url as string | undefined)
         const tab = await manager.openTab({
-          url: args.url as string | undefined,
+          url: targetUrl,
           active: args.active as boolean | undefined,
           tabGroup: args.tabGroup as string | undefined,
           tabGroupColor: args.tabGroupColor as TabGroupColor | undefined,
         })
         if (sessionId) manager.getOrCreateSession(sessionId).activeTabId = tab.tabId
-        const meta = await tab.page.getUrlAndTitle().catch(() => ({ url: String(args.url ?? 'about:blank'), title: '' }))
-        return textResult(`Opened and attached tab [${tab.tabId}]: ${meta.url}`, { tabId: tab.tabId, ...meta })
+        if (/^https?:\/\//i.test(targetUrl)) {
+          await waitForPageLoad(tab.session, { timeoutMs: 6_000, idleMs: 200 }).catch(() => {})
+        }
+        const meta = await tab.page.getUrlAndTitle().catch(() => ({ url: targetUrl, title: '' }))
+        return textResult(`Opened and attached tab [${tab.tabId}]: ${meta.url}${meta.title ? ` ("${meta.title}")` : ''}`, {
+          tabId: tab.tabId,
+          ...meta,
+        })
       }
 
       case 'browser_close_tab': {
@@ -834,8 +852,9 @@ export async function executeTool(
 
       case 'browser_navigate': {
         const tab = await resolveTab()
+        const targetUrl = normalizeNavigationUrl(String(args.url))
         const { result, feedback } = await tab.runWithFeedback(() =>
-          tab.page.navigate(String(args.url), {
+          tab.page.navigate(targetUrl, {
             waitUntil: (args.waitUntil as 'none' | 'domcontentloaded' | 'load' | 'networkidle') ?? 'domcontentloaded',
             timeoutMs: args.timeoutMs as number | undefined,
           }),

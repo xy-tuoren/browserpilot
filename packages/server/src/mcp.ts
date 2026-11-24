@@ -15,7 +15,7 @@ export interface StartMcpOptions {
 
 /**
  * Starts the BrowserPilot Model Context Protocol (MCP) server on stdio.
- * Exposes all 39 pure-CDP browser automation & DevTools debugging tools to
+ * Exposes all 43 pure-CDP browser automation & DevTools debugging tools to
  * Claude Code, Cursor, Codex, Antigravity, or any MCP-compatible agent.
  */
 export async function startMcpServer(options: StartMcpOptions = {}): Promise<void> {
@@ -61,14 +61,28 @@ export async function startMcpServer(options: StartMcpOptions = {}): Promise<voi
       }
       result = await executeTool(ctx, name, args)
     } else {
-      if (!daemonClient) {
-        daemonClient = await DaemonClient.connectOrStart({
-          host: options.daemonHost,
-          port: options.daemonPort,
-          token: options.daemonToken,
-        })
+      const ensureDaemon = async () => {
+        if (!daemonClient) {
+          daemonClient = await DaemonClient.connectOrStart({
+            host: options.daemonHost,
+            port: options.daemonPort,
+            token: options.daemonToken,
+          })
+        }
+        return daemonClient
       }
-      result = await daemonClient.callTool(name, args)
+      try {
+        result = await (await ensureDaemon()).callTool(name, args)
+      } catch (err) {
+        // Auto-recover if the local daemon restarted or exited while MCP remained open
+        const msg = err instanceof Error ? err.message : String(err)
+        if (/fetch failed|ECONNREFUSED|ECONNRESET|socket|Unauthorized/i.test(msg)) {
+          daemonClient = null
+          result = await (await ensureDaemon()).callTool(name, args)
+        } else {
+          throw err
+        }
+      }
     }
 
     return {

@@ -4,8 +4,10 @@ import {
   encodeNativeMessage,
   NativeMessageDecoder,
   type BridgeMessage,
+  type ExtensionHelloMessage,
 } from '@browserpilot/protocol'
 import { DaemonClient } from './client.js'
+import { readDaemonConfig } from './config.js'
 
 /**
  * Chrome Native Messaging Host binary (`com.browserpilot.bridge`).
@@ -15,10 +17,10 @@ import { DaemonClient } from './client.js'
  */
 async function main(): Promise<void> {
   const daemonClient = await DaemonClient.connectOrStart()
-  const { host, port, token } = daemonClient.config
-  const wsUrl = `ws://${host}:${port}/extension?transport=native&token=${encodeURIComponent(token)}`
+  let currentCfg = daemonClient.config
 
   let ws: WebSocket | null = null
+  let lastHello: ExtensionHelloMessage | null = null
   const pendingOutbound: BridgeMessage[] = []
   let closing = false
 
@@ -30,14 +32,35 @@ async function main(): Promise<void> {
     }
   }
 
-  function connectDaemon(): void {
+  async function connectDaemon(isReconnect = false): Promise<void> {
     if (closing) return
+    if (isReconnect) {
+      const fresh = await readDaemonConfig().catch(() => null)
+      if (fresh) currentCfg = fresh
+    }
+
+    const { host, port, token } = currentCfg
+    const wsUrl = `ws://${host}:${port}/extension?transport=native&token=${encodeURIComponent(token)}`
     const socket = new WebSocket(wsUrl)
     ws = socket
 
     socket.on('open', () => {
+      // Replay cached hello on reconnect so a restarted daemon registers this browser immediately
+      if (lastHello && !pendingOutbound.some((m) => m.type === 'hello')) {
+        socket.send(
+          JSON.stringify({
+            ...lastHello,
+            token: currentCfg.token,
+            transport: 'native',
+          }),
+        )
+      }
       while (pendingOutbound.length > 0 && socket.readyState === WebSocket.OPEN) {
         const msg = pendingOutbound.shift()!
+        if (msg.type === 'hello') {
+          msg.token = currentCfg.token
+          msg.transport = 'native'
+        }
         socket.send(JSON.stringify(msg))
       }
     })
@@ -53,7 +76,7 @@ async function main(): Promise<void> {
 
     socket.on('close', () => {
       if (ws === socket) ws = null
-      if (!closing) setTimeout(connectDaemon, 1000)
+      if (!closing) setTimeout(() => void connectDaemon(true), 1500)
     })
 
     socket.on('error', () => {
@@ -61,7 +84,7 @@ async function main(): Promise<void> {
     })
   }
 
-  connectDaemon()
+  void connectDaemon(false)
 
   const decoder = new NativeMessageDecoder()
   process.stdin.on('data', (chunk: Buffer) => {
@@ -70,8 +93,9 @@ async function main(): Promise<void> {
       for (const msg of messages) {
         // Inject real daemon token automatically for native-authenticated extension
         if (msg.type === 'hello') {
-          msg.token = token
+          msg.token = currentCfg.token
           msg.transport = 'native'
+          lastHello = { ...msg }
         }
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify(msg))

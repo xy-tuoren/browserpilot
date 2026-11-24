@@ -9,9 +9,15 @@ import { DaemonClient } from './client.js'
 import { isDaemonReachable, loadOrCreateDaemonConfig, readDaemonConfig } from './config.js'
 import { BrowserPilotDaemon } from './daemon.js'
 import { startMcpServer } from './mcp.js'
-import { installNativeHost, getNativeMessagingHostDirs } from './native-install.js'
+import {
+  computeChromeExtensionId,
+  discoverInstalledExtensionIds,
+  getStableExtensionDir,
+  installNativeHost,
+  readInstalledNativeHosts,
+  syncExtensionToHome,
+} from './native-install.js'
 import { BROWSERPILOT_SKILL_DOC } from './skill-doc.js'
-import { NATIVE_HOST_NAME } from '@browserpilot/protocol'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -72,35 +78,71 @@ async function getExtensionDistPath(): Promise<string> {
   }
 }
 
+async function findDynamicCachedChrome(): Promise<string[]> {
+  const found: string[] = []
+  const home = os.homedir()
+  const searchRoots = [
+    path.join(home, '.cache', 'browserpilot-chrome', 'chrome'),
+    path.join(home, 'Library', 'Caches', 'ms-playwright'),
+    path.join(home, '.cache', 'ms-playwright'),
+  ]
+  for (const root of searchRoots) {
+    let entries: string[]
+    try {
+      entries = (await fs.readdir(root)).sort().reverse()
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (!entry.startsWith('chromium-') && !entry.startsWith('mac') && !entry.startsWith('linux')) continue
+      const candidates = [
+        path.join(root, entry, 'chrome-mac-arm64', 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing'),
+        path.join(root, entry, 'chrome-mac-x64', 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing'),
+        path.join(root, entry, 'chrome-linux64', 'chrome'),
+        path.join(root, entry, 'chrome-linux', 'chrome'),
+      ]
+      for (const c of candidates) {
+        try {
+          await fs.access(c)
+          found.push(c)
+        } catch {}
+      }
+    }
+  }
+  return found
+}
+
 async function findChromeBinary(): Promise<string | null> {
-  const candidates = [
+  const staticCandidates = [
     process.env.BROWSERPILOT_CHROME_BIN,
-    path.join(
-      os.homedir(),
-      'Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-    ),
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
     '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
     '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
     '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
   ].filter(Boolean) as string[]
 
-  for (const bin of candidates) {
+  for (const bin of staticCandidates) {
     try {
       await fs.access(bin)
       return bin
     } catch {}
   }
-  return null
+
+  const cached = await findDynamicCachedChrome()
+  return cached[0] ?? null
 }
 
 function printHelp(): void {
   console.log(`BrowserPilot v${BROWSERPILOT_VERSION} — Zero-Click Pure-CDP Browser Control & DevTools CLI
 
 Usage:
-  browserpilot setup [--extension-id <id>] [--dry-run]   Install Native Messaging host & print MCP setup
-  browserpilot doctor                                    Diagnose extension, Native Messaging, Chrome, ffmpeg & daemon
-  browserpilot daemon start | stop | status | run        Manage local authenticated bridge daemon
+  browserpilot setup [--extension-id <id>] [--dry-run]   Sync extension, auto-install Native Messaging & print MCP config
+  browserpilot doctor [--json]                           Diagnose extension, Native Messaging, Chrome, ffmpeg & daemon
+  browserpilot daemon start | stop | restart | status | run  Manage local authenticated bridge daemon
   browserpilot mcp [--cdp <url>]                         Start MCP stdio server (for Claude/Cursor/Codex/Antigravity)
   browserpilot connect-cdp <url>                         Attach daemon directly to a --remote-debugging-port Chrome
   browserpilot browser start [--headless] [--cdp-port N] Launch Chrome/Chrome for Testing with BrowserPilot ready
@@ -111,9 +153,11 @@ Stateful Sessions (Playwriter replacement):
   browserpilot exec -s <id> -e '<js>' | -f <script.js> [--timeout <ms>]
 
 Direct Quick Commands:
+  browserpilot status
   browserpilot tabs
   browserpilot open <url> [--tab-group <name>]
   browserpilot close <tabId>
+  browserpilot navigate <url> [--tab <id>]
   browserpilot snapshot [--tab <id>] [--search <regex>] [--scope <css>] [--full]
   browserpilot click <ref|selector> [--tab <id>]
   browserpilot fill <ref|selector> <value> [--tab <id>]
@@ -159,6 +203,14 @@ async function main(): Promise<void> {
       extBuilt = true
     } catch {}
 
+    const stableExtDir = getStableExtensionDir()
+    let stableExtVersion: string | null = null
+    try {
+      const m = JSON.parse(await fs.readFile(path.join(stableExtDir, 'manifest.json'), 'utf8')) as { version?: string }
+      stableExtVersion = m.version ?? null
+    } catch {}
+    const expectedStableExtId = computeChromeExtensionId(await fs.realpath(stableExtDir).catch(() => stableExtDir))
+
     const chromeBin = await findChromeBinary()
 
     let hasFfmpeg = false
@@ -171,36 +223,39 @@ async function main(): Promise<void> {
       } catch {}
     }
 
-    const nativeHosts: Array<{ browser: string; installed: boolean; path: string }> = []
-    for (const target of getNativeMessagingHostDirs()) {
-      const mp = path.join(target.dir, `${NATIVE_HOST_NAME}.json`)
-      let installed = false
-      try {
-        await fs.access(mp)
-        installed = true
-      } catch {}
-      nativeHosts.push({ browser: target.name, installed, path: mp })
-    }
+    const nativeHosts = await readInstalledNativeHosts()
+    const discoveredExts = await discoverInstalledExtensionIds()
 
     const cfg = await readDaemonConfig()
     const daemonRunning = cfg ? await isDaemonReachable(cfg) : false
-    let connectedClients = 0
+    let health: Awaited<ReturnType<DaemonClient['health']>> | null = null
     if (daemonRunning && cfg) {
-      const h = await new DaemonClient(cfg).health().catch(() => null)
-      connectedClients = h?.clients.length ?? 0
+      health = await new DaemonClient(cfg).health().catch(() => null)
     }
+    const connectedClients = health?.clients ?? []
+    const versionMismatch = Boolean(health?.version && health.version !== BROWSERPILOT_VERSION)
 
     const report = {
       version: BROWSERPILOT_VERSION,
       node: process.version,
       extensionBuilt: extBuilt,
       extensionDistPath: extDist,
+      stableExtensionDir: stableExtDir,
+      stableExtensionVersion: stableExtVersion,
+      expectedExtensionId: expectedStableExtId,
+      discoveredChromeExtensions: discoveredExts,
       chromeBinary: chromeBin,
       ffmpegAvailable: hasFfmpeg,
       daemonConfigPresent: Boolean(cfg),
       daemonRunning,
-      connectedBrowsers: connectedClients,
+      daemonVersion: health?.version ?? null,
+      daemonPid: health?.pid ?? cfg?.pid ?? null,
+      daemonAddress: cfg ? `${cfg.host}:${cfg.port}` : null,
+      daemonVersionMismatch: versionMismatch,
+      connectedBrowsers: connectedClients.length,
+      clients: connectedClients,
       nativeMessagingInstalled: nativeHosts.filter((n) => n.installed).map((n) => n.browser),
+      nativeMessagingHosts: nativeHosts.filter((n) => n.installed),
     }
 
     if (flags.json) {
@@ -209,17 +264,47 @@ async function main(): Promise<void> {
     }
 
     console.log(`BrowserPilot Doctor (v${BROWSERPILOT_VERSION})`)
-    console.log(`──────────────────────────────────────────`)
+    console.log(`──────────────────────────────────────────────────`)
     console.log(`Node.js          : ${report.node}`)
     console.log(`Extension dist/  : ${extBuilt ? 'OK' : 'MISSING (run pnpm build)'} (${extDist})`)
+    console.log(
+      `Stable ext copy  : ${
+        stableExtVersion
+          ? `v${stableExtVersion} (${stableExtDir}, id: ${expectedStableExtId})`
+          : `Not synced yet (run: browserpilot setup)`
+      }`,
+    )
+    console.log(
+      `Chrome loaded    : ${
+        discoveredExts.length
+          ? discoveredExts.map((e) => `${e.browser}/${e.profile} (${e.extensionId})`).join(', ')
+          : 'Not detected yet (load ~/.browserpilot/extension in chrome://extensions)'
+      }`,
+    )
     console.log(`Chrome binary    : ${chromeBin ?? 'Not found (set BROWSERPILOT_CHROME_BIN)'}`)
     console.log(`ffmpeg           : ${hasFfmpeg ? 'OK (video recording ready)' : 'Not found (optional for recording)'}`)
-    console.log(`Daemon status    : ${daemonRunning ? `RUNNING (browsers: ${connectedClients})` : 'STOPPED'}`)
+    console.log(
+      `Daemon status    : ${
+        daemonRunning
+          ? `RUNNING v${health?.version ?? '?'} @ ${cfg?.host}:${cfg?.port} (pid: ${health?.pid ?? cfg?.pid ?? '?'}, browsers: ${connectedClients.length})`
+          : 'STOPPED'
+      }`,
+    )
+    if (versionMismatch) {
+      console.log(
+        `  ⚠ Version mismatch: CLI is v${BROWSERPILOT_VERSION}, running daemon is v${health?.version}. Run: browserpilot daemon restart`,
+      )
+    }
+    for (const c of connectedClients) {
+      console.log(
+        `  • ${c.browser} [${c.transport}]${c.extensionVersion ? ` ext v${c.extensionVersion}` : ''}${c.extensionId ? ` (${c.extensionId})` : ''} — attached tabs: ${c.attachedTabCount}`,
+      )
+    }
     console.log(
       `Native Messaging : ${
         report.nativeMessagingInstalled.length
           ? `Installed (${report.nativeMessagingInstalled.join(', ')})`
-          : 'Not installed (run: browserpilot setup --extension-id <id>)'
+          : 'Not installed (run: browserpilot setup)'
       }`,
     )
     return
@@ -238,28 +323,52 @@ async function main(): Promise<void> {
   if (cmd === 'setup') {
     const cfg = await loadOrCreateDaemonConfig()
     const extDist = await getExtensionDistPath()
-    const extId = typeof flags['extension-id'] === 'string' ? flags['extension-id'] : ''
+    const explicitExtId = typeof flags['extension-id'] === 'string' ? flags['extension-id'] : ''
     const dryRun = Boolean(flags['dry-run'])
+    const skipNative = Boolean(flags['no-native-host'])
+
+    const synced = await syncExtensionToHome(extDist, { dryRun })
+    const discovered = await discoverInstalledExtensionIds()
+    const bundledReal = await fs.realpath(extDist).catch(() => path.resolve(extDist))
+    const bundledExtId = computeChromeExtensionId(bundledReal)
+
+    const allExtIds = Array.from(
+      new Set(
+        [
+          synced.extensionId,
+          bundledExtId,
+          ...discovered.map((d) => d.extensionId),
+          ...explicitExtId.split(',').map((s) => s.trim()),
+        ].filter(Boolean),
+      ),
+    )
 
     console.log(`\nBrowserPilot Setup (v${BROWSERPILOT_VERSION})`)
     console.log(`────────────────────────────────────────────────────`)
-    console.log(`1. Unpacked Extension Path:\n   ${extDist}`)
-    console.log(`   -> Open chrome://extensions -> Enable "Developer mode" -> "Load unpacked" -> select the path above.`)
+    console.log(`1. Stable Unpacked Extension Path (upgrade-safe):`)
+    console.log(`   ${synced.extensionDir}`)
+    console.log(`   Expected Chrome Extension ID : ${synced.extensionId}`)
+    if (discovered.length > 0) {
+      console.log(
+        `   Already detected in Chrome   : ${discovered.map((d) => `${d.browser}/${d.profile} (${d.extensionId})`).join(', ')}`,
+      )
+    } else {
+      console.log(`   -> Open chrome://extensions -> Enable "Developer mode" -> "Load unpacked" -> select the path above.`)
+    }
+
     console.log(`\n2. Local Daemon Config (~/.browserpilot/daemon.json):`)
     console.log(`   WebSocket URL : ws://${cfg.host}:${cfg.port}/extension`)
     console.log(`   Auth Token    : ${cfg.token}`)
 
-    if (extId) {
-      const res = await installNativeHost({ extensionIds: [extId], dryRun })
-      console.log(`\n3. Chrome Native Messaging Host (${dryRun ? 'dry-run' : 'installed'}):`)
-      console.log(`   Wrapper: ${res.wrapperPath}`)
+    if (!skipNative) {
+      const res = await installNativeHost({ extensionIds: allExtIds, dryRun })
+      console.log(`\n3. Chrome Native Messaging Host (${dryRun ? 'dry-run' : 'installed automatically'}):`)
+      console.log(`   Wrapper : ${res.wrapperPath}`)
+      console.log(`   Allowed : ${allExtIds.join(', ')}`)
       for (const m of res.installedManifests) {
         console.log(`   - ${m.browser}: ${m.manifestPath}`)
       }
-    } else {
-      console.log(`\n3. Optional (Recommended) Native Messaging Auto-Auth:`)
-      console.log(`   After loading the unpacked extension, copy its Extension ID from chrome://extensions and run:`)
-      console.log(`   browserpilot setup --extension-id <YOUR_EXTENSION_ID>`)
+      console.log(`   -> Zero manual token entry or --extension-id needed! Extension connects automatically once loaded.`)
     }
 
     const cliBin = path.resolve(__dirname, 'cli.js')
@@ -301,7 +410,7 @@ async function main(): Promise<void> {
     if (sub === 'start') {
       const client = await DaemonClient.connectOrStart()
       const h = await client.health()
-      console.log(`BrowserPilot daemon running on http://${client.config.host}:${client.config.port} (clients: ${h.clients.length})`)
+      console.log(`BrowserPilot daemon v${h.version} running on http://${client.config.host}:${client.config.port} (clients: ${h.clients.length})`)
       return
     }
     if (sub === 'stop') {
@@ -312,6 +421,20 @@ async function main(): Promise<void> {
       }
       await new DaemonClient(cfg).shutdown()
       console.log('BrowserPilot daemon stopped.')
+      return
+    }
+    if (sub === 'restart') {
+      const cfg = await readDaemonConfig()
+      if (cfg && (await isDaemonReachable(cfg))) {
+        await new DaemonClient(cfg).shutdown()
+        for (let i = 0; i < 20; i++) {
+          await new Promise((r) => setTimeout(r, 100))
+          if (!(await isDaemonReachable(cfg))) break
+        }
+      }
+      const client = await DaemonClient.connectOrStart()
+      const h = await client.health()
+      console.log(`BrowserPilot daemon restarted (v${h.version}) on http://${client.config.host}:${client.config.port} (clients: ${h.clients.length})`)
       return
     }
     if (sub === 'status') {
@@ -433,6 +556,9 @@ async function main(): Promise<void> {
 
   // Direct subcommand shortcuts mapped cleanly to unified tools
   switch (cmd) {
+    case 'status':
+      printToolOutput(await client.callTool('browser_status'))
+      return
     case 'tabs':
       printToolOutput(await client.callTool('browser_tabs'))
       return

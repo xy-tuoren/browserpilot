@@ -10,7 +10,14 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { encodeNativeMessage, NativeMessageDecoder } from '@browserpilot/protocol'
-import { DaemonClient, BrowserPilotDaemon, installNativeHost, TOOL_DEFINITIONS } from '../src/index.js'
+import {
+  DaemonClient,
+  BrowserPilotDaemon,
+  computeChromeExtensionId,
+  installNativeHost,
+  normalizeNavigationUrl,
+  TOOL_DEFINITIONS,
+} from '../src/index.js'
 
 const CHROME_FOR_TESTING =
   process.env.BROWSERPILOT_CHROME_BIN ||
@@ -140,6 +147,90 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
       await fs.rm(d, { recursive: true, force: true }).catch(() => {})
     }
   })
+
+  it('computes deterministic Chrome unpacked extension IDs and normalizes bare navigation URLs', () => {
+    const extId = computeChromeExtensionId('/Users/xy/code/GeoPerch/extensions/session-export')
+    expect(extId).toBe('ijmnhnbofbelbelnekloahnfjdecbpcm')
+    expect(extId).toMatch(/^[a-p]{32}$/)
+
+    expect(normalizeNavigationUrl('example.com')).toBe('https://example.com')
+    expect(normalizeNavigationUrl('localhost:3000/app')).toBe('http://localhost:3000/app')
+    expect(normalizeNavigationUrl('127.0.0.1:8080')).toBe('http://127.0.0.1:8080')
+    expect(normalizeNavigationUrl('https://github.com')).toBe('https://github.com')
+    expect(normalizeNavigationUrl('')).toBe('about:blank')
+  })
+
+  it('replays cached hello metadata when native-host reconnects after a daemon restart', async () => {
+    const restartPort = await getFreePort()
+    const restartToken = 'restart-secret-token'
+    const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), 'browserpilot-restart-'))
+    tmpDirs.push(fakeHome)
+    await fs.writeFile(
+      path.join(fakeHome, 'daemon.json'),
+      JSON.stringify({ host: '127.0.0.1', port: restartPort, token: restartToken }),
+    )
+
+    let d1: BrowserPilotDaemon | null = new BrowserPilotDaemon()
+    let d2: BrowserPilotDaemon | null = null
+    let proc: ChildProcess | null = null
+
+    try {
+      await d1.start({ host: '127.0.0.1', port: restartPort, token: restartToken, persistRuntime: false })
+      const nativeHostBin = path.resolve(import.meta.dirname, '..', 'dist', 'native-host.js')
+      proc = spawn(process.execPath, [nativeHostBin], {
+        env: { ...process.env, BROWSERPILOT_HOME: fakeHome },
+        stdio: ['pipe', 'pipe', 'ignore'],
+      })
+
+      proc.stdin!.write(
+        encodeNativeMessage({
+          type: 'hello',
+          token: '',
+          extensionId: 'reconnect-test-ext-id',
+          extensionVersion: '1.2.1',
+          browser: 'Chrome',
+          transport: 'native',
+        }),
+      )
+
+      // Wait for registration on d1
+      const c1 = new DaemonClient({ host: '127.0.0.1', port: restartPort, token: restartToken })
+      let reg1 = false
+      for (let i = 0; i < 30; i++) {
+        const h = await c1.health()
+        if (h.clients.some((c) => c.extensionId === 'reconnect-test-ext-id')) {
+          reg1 = true
+          break
+        }
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      expect(reg1).toBe(true)
+
+      // Restart daemon on the same port — native-host must auto-reconnect & replay cached hello!
+      await d1.stop()
+      d1 = null
+      d2 = new BrowserPilotDaemon()
+      await d2.start({ host: '127.0.0.1', port: restartPort, token: restartToken, persistRuntime: false })
+
+      let reg2 = false
+      for (let i = 0; i < 40; i++) {
+        const h = await c1.health()
+        if (h.clients.some((c) => c.extensionId === 'reconnect-test-ext-id' && c.transport === 'extension-native')) {
+          reg2 = true
+          break
+        }
+        await new Promise((r) => setTimeout(r, 150))
+      }
+      expect(reg2).toBe(true)
+    } finally {
+      if (proc) {
+        proc.stdin?.end()
+        proc.kill('SIGTERM')
+      }
+      await d1?.stop()
+      await d2?.stop()
+    }
+  }, 20_000)
 
   it('enforces Bearer token authentication on Daemon HTTP endpoints', async () => {
     if (!chromeOk) return
@@ -389,8 +480,9 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
     expect(doctor.daemonRunning).toBe(true)
     expect(doctor.connectedBrowsers).toBeGreaterThanOrEqual(1)
 
-    const setupOut = await runCli('setup', '--extension-id', 'abcdefghijklmnopabcdefghijklmnop', '--dry-run')
+    const setupOut = await runCli('setup', '--dry-run')
     expect(setupOut).toContain('com.browserpilot.bridge')
+    expect(setupOut).toContain('Expected Chrome Extension ID')
     expect(setupOut).toContain('mcpServers')
   }, 35_000)
 })

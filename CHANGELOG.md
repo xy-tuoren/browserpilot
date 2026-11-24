@@ -2,6 +2,24 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
+## [1.2.1] - 2026-11-24
+
+### Added
+- **Zero-Flag Auto-Magic `browserpilot setup`**:
+  - Automatically syncs the bundled Chrome MV3 extension into an upgrade-proof stable directory (`~/.browserpilot/extension`) so Node.js / npm upgrades never break Chrome's unpacked extension path or change its ID.
+  - Pre-computes Chromium's exact deterministic 32-char unpacked Extension ID (`computeChromeExtensionId`) AND scans local Chromium profiles (`Preferences` / `Secure Preferences`) for existing BrowserPilot extensions (`discoverInstalledExtensionIds`), registering Chrome Native Messaging Host (`com.browserpilot.bridge`) automatically with zero manual `--extension-id` copy-pasting.
+- **`browserpilot daemon restart` & `browserpilot status`** CLI subcommands.
+- **Upgraded `browserpilot doctor`**: displays stable extension sync status, expected Chrome Extension ID, auto-discovered loaded Chrome extensions, daemon PID/version/address, CLI-vs-daemon version mismatch warnings, and detailed per-browser connection info (`transport`, `extensionVersion`, `attachedTabCount`).
+
+### Fixed
+- **Native Messaging Daemon Restart Reconnection (`native-host.ts` + `daemon.ts`)**: cached the extension's `hello` handshake and re-read `~/.browserpilot/daemon.json` on WebSocket reconnect so restarting or upgrading the local daemon re-registers the Chrome extension immediately with full metadata; daemon now sends an immediate `bridge.ready` event upon registration.
+- **MCP Self-Healing on Daemon Restart (`mcp.ts`)**: long-running MCP stdio servers now automatically reconnect/respawn the local daemon and retry once if the daemon restarts mid-session.
+- **Debugger Conflict Detection (`background.ts`)**: distinguished `"Another debugger is already attached"` (e.g., Chrome DevTools or Playwriter) from same-extension re-attach, returning a clear actionable error instead of silently continuing.
+- **Duplicate Tab Group Prevention (`background.ts`)**: queries existing `chrome.tabGroups` by window & title before creating a new group so MV3 Service Worker restarts reuse the existing tab group.
+- **Restricted Tab Filtering (`SessionManager.resolveActiveTab`)**: now uses `isRestrictedUrl()` to skip `chrome-extension://`, `devtools://`, and Chrome Web Store tabs when auto-selecting an active tab.
+- **Smart Chrome Binary Discovery (`cli.ts`)**: prefers installed system Google Chrome / Canary / Chromium / Brave over Playwright caches and dynamically discovers cached Chrome for Testing installs instead of hardcoding a single revision.
+- **URL Ergonomics (`tools.ts`)**: bare domains like `example.com` or `localhost:3000` are automatically normalized with `https://` / `http://`, and `browser_open_tab` waits briefly for initial `domcontentloaded` so immediate snapshots see page content.
+
 ## [1.2.0] - 2026-11-24
 
 ### Added
