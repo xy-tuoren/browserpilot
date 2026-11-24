@@ -3,7 +3,12 @@
 > **Zero-click, pure-CDP Chrome Extension, MCP Server & CLI for AI Agents.**  
 > Control, inspect, and debug your real logged-in Chrome browser — no Playwright/Puppeteer runtime bloat, no per-tab icon clicking, and no repetitive Chrome `--autoConnect` "Allow" confirmation popups.
 
+[![npm version](https://img.shields.io/npm/v/browserpilot-cdp?color=0ea5e9)](https://www.npmjs.com/package/browserpilot-cdp)
+[![CI](https://github.com/xy-tuoren/browserpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/xy-tuoren/browserpilot/actions/workflows/ci.yml)
+[![Node.js >= 22](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+
+**English** | [简体中文](./README.zh-CN.md)
 
 ---
 

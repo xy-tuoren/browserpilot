@@ -4,6 +4,10 @@ All notable changes to **BrowserPilot** (formerly DevPilot) are documented in th
 
 ## [Unreleased]
 
+### Added
+- **Simplified Chinese Documentation (`README.zh-CN.md`)**: added full Chinese README with top-level `English | 简体中文` switcher, plus npm version, GitHub Actions CI, and Node.js badges in `README.md`.
+- **GitHub Repository Metadata**: configured repository homepage (`https://www.npmjs.com/package/browserpilot-cdp`) and discovery topics (`chrome-extension`, `cdp`, `mcp`, `ai-agent`, `browser-automation`, `devtools`, etc.).
+
 ### Changed
 - **Clear Non-Invasive Onboarding Docs (`README.md` & `browserpilot setup`)**: documented the 3-step new-user setup flow explicitly separating **Option A (opt-in Agent Skill + CLI via `npx skills add xy-tuoren/browserpilot`)** and **Option B (MCP Server)**, and clarifying that `browserpilot setup` never modifies any agent config or skill directory.
 
