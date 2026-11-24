@@ -206,6 +206,17 @@ export class ExtensionBridgeTransport implements CDPTransport {
     await this.rpc('extension.ghostCursor', { tabId, x, y, clicking }).catch(() => {})
   }
 
+  async setOverlayVisible(tabId: number, visible: boolean): Promise<void> {
+    await this.rpc('extension.setOverlayVisible', { tabId, visible }).catch(() => {})
+  }
+
+  async setControlBanner(
+    tabId: number,
+    banner: { active: boolean; status?: string; paused?: boolean; mode?: 'working' | 'handoff' },
+  ): Promise<void> {
+    await this.rpc('extension.setControlBanner', { tabId, ...banner }).catch(() => {})
+  }
+
   async getPinnedElement(tabId: number): Promise<{ globalVar?: string; url?: string } | null> {
     return await this.rpc<{ globalVar?: string; url?: string } | null>('extension.getPinnedElement', { tabId })
   }

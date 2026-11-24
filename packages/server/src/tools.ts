@@ -170,7 +170,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'browser_screenshot',
-    description: 'Capture a CSS-scaled screenshot (viewport, fullPage, or clip region) returned directly as an image.',
+    description:
+      'Capture a clean CSS-scaled screenshot (viewport, fullPage, clip, or 2x zoomed region) with optional coordinate grid overlay for Canvas/Figma/PDF targeting.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -181,9 +182,23 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         quality: { type: 'number' },
         maxDimension: { type: 'number', description: 'Downscale longest edge to save vision tokens (default 1440)' },
         path: { type: 'string', description: 'Optional local file path to save the screenshot' },
+        grid: { type: 'boolean', description: 'Overlay a translucent pixel coordinate grid with axis labels (useful for Canvas/PDF)' },
+        gridStep: { type: 'number', description: 'Grid spacing in CSS pixels (default 200, or 50 when zoomed)' },
         clip: {
           type: 'object',
           properties: { x: { type: 'number' }, y: { type: 'number' }, width: { type: 'number' }, height: { type: 'number' } },
+        },
+        zoom: {
+          type: 'object',
+          description: 'Crop & upscale a viewport region (e.g. 2x zoom into tiny icons/charts)',
+          properties: {
+            x: { type: 'number' },
+            y: { type: 'number' },
+            width: { type: 'number' },
+            height: { type: 'number' },
+            scale: { type: 'number' },
+          },
+          required: ['x', 'y', 'width', 'height'],
         },
       },
     },
@@ -248,16 +263,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'browser_click',
     description:
-      'Perform a browser-trusted CDP mouse click on a snapshot ref, CSS selector, text=..., or (x,y) coordinates.',
+      'Perform a browser-trusted CDP mouse click on a snapshot ref, CSS selector, rich locator, or (x,y) coordinates. Checks pre-click stability & occlusion automatically unless force=true.',
     inputSchema: {
       type: 'object',
       properties: {
-        target: { type: 'string', description: 'Ref (e5), CSS selector, or text=...' },
+        target: { type: 'string', description: 'Ref (e5), CSS selector, role=..., label=..., or text=...' },
         x: { type: 'number' },
         y: { type: 'number' },
         button: { type: 'string', enum: ['left', 'right', 'middle'] },
         clickCount: { type: 'number' },
         modifiers: { type: 'array', items: { type: 'string', enum: ['Alt', 'Control', 'Meta', 'Shift'] } },
+        force: { type: 'boolean', description: 'Bypass pre-click occlusion & stability checks' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
@@ -775,6 +791,46 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       },
     },
   },
+  {
+    name: 'browser_fill_form',
+    description:
+      'Fill multiple form fields (text inputs, textareas, selects, checkboxes, radios) in a single round-trip with automatic field-type detection.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fields: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              target: { type: 'string', description: 'Ref (e4), CSS selector, label=..., or placeholder=...' },
+              value: { description: 'Text value, select option, or boolean for checkboxes' },
+              type: { type: 'string', enum: ['auto', 'text', 'select', 'checkbox', 'radio'] },
+            },
+            required: ['target', 'value'],
+          },
+        },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+      required: ['fields'],
+    },
+  },
+  {
+    name: 'browser_handoff',
+    description:
+      'Display an interactive in-page Human Handoff card ("BrowserPilot · Your Turn") asking the user to perform a manual step (login, 2FA, CAPTCHA, review) and wait until they click "Done, Continue AI" or "Cancel".',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: 'Clear instruction shown to the user inside Chrome' },
+        timeoutMs: { type: 'number', description: 'Max wait time in ms (default 300000 = 5 min)' },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+      required: ['message'],
+    },
+  },
 ]
 
 export async function executeTool(
@@ -894,14 +950,23 @@ export async function executeTool(
           quality: args.quality as number | undefined,
           maxDimension: (args.maxDimension as number | undefined) ?? 1440,
           path: args.path as string | undefined,
+          grid: args.grid as boolean | undefined,
+          gridStep: args.gridStep as number | undefined,
           clip: args.clip as { x: number; y: number; width: number; height: number } | undefined,
+          zoom: args.zoom as { x: number; y: number; width: number; height: number; scale?: number } | undefined,
         })
+        const regionNote = shot.region
+          ? ` [region: x=${shot.region.x}, y=${shot.region.y}, ${shot.region.width}x${shot.region.height}, scale=${shot.region.scale}x]`
+          : ''
         return {
           content: [
-            { type: 'text', text: shot.path ? `Screenshot saved to ${shot.path}` : `Captured screenshot of tab [${tab.tabId}]` },
+            {
+              type: 'text',
+              text: `${shot.path ? `Screenshot saved to ${shot.path}` : `Captured screenshot of tab [${tab.tabId}]`}${regionNote}`,
+            },
             { type: 'image', data: shot.base64, mimeType: shot.mimeType },
           ],
-          meta: { path: shot.path, tabId: tab.tabId },
+          meta: { path: shot.path, tabId: tab.tabId, region: shot.region },
         }
       }
 
@@ -966,6 +1031,7 @@ export async function executeTool(
             button: args.button as MouseButton | undefined,
             clickCount: args.clickCount as number | undefined,
             modifiers: args.modifiers as KeyModifier[] | undefined,
+            force: Boolean(args.force),
           }),
         )
         return textResult(`Clicked ${typeof target === 'string' ? target : `(${target.x}, ${target.y})`}\n${formatFeedbackSuffix(feedback)}`)
@@ -1010,14 +1076,17 @@ export async function executeTool(
 
       case 'browser_scroll': {
         const tab = await resolveTab()
-        await tab.page.scroll({
+        const res = await tab.page.scroll({
           target: args.target as string | undefined,
           direction: args.direction as 'up' | 'down' | 'left' | 'right' | undefined,
           amount: args.amount as number | undefined,
           deltaX: args.deltaX as number | undefined,
           deltaY: args.deltaY as number | undefined,
         })
-        return textResult('Scrolled successfully')
+        return textResult(
+          `Scrolled ${res.container} (moved=${res.scrolled}): scrollY=${res.scrollY}/${res.maxScrollY}px (${res.percentY}%)${res.atTop ? ' [at top]' : ''}${res.atBottom ? ' [at bottom]' : ''}`,
+          { ...res },
+        )
       }
 
       case 'browser_drag': {
@@ -1550,6 +1619,30 @@ export async function executeTool(
           ]
             .filter(Boolean)
             .join('\n'),
+        )
+      }
+
+      case 'browser_fill_form': {
+        const tab = await resolveTab()
+        const fields = (args.fields as Array<{ target: string; value: string | boolean; type?: 'auto' | 'text' | 'select' | 'checkbox' | 'radio' }>) ?? []
+        if (!fields.length) throw new Error('Provide non-empty fields array')
+        const { result, feedback } = await tab.runWithFeedback(() => tab.page.fillForm(fields))
+        const summary = result.filled.map((f, i) => `${i + 1}. [${f.type}] ${f.target} = ${JSON.stringify(f.value)}`).join('\n')
+        return textResult(`Filled ${result.filled.length} form field(s):\n${summary}\n${formatFeedbackSuffix(feedback)}`, {
+          filled: result.filled,
+        })
+      }
+
+      case 'browser_handoff': {
+        const tab = await resolveTab()
+        const msg = String(args.message ?? 'Please complete the manual step in Chrome, then click "Done, Continue AI".')
+        const res = await tab.page.requestHumanHandoff(msg, {
+          timeoutMs: typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
+        })
+        const status = res.resumed ? 'Resumed by user' : res.cancelled ? 'Cancelled by user' : 'Timed out'
+        return textResult(
+          `${status} after ${Math.round(res.elapsedMs / 1000)}s — URL: ${res.url}${res.title ? ` ("${res.title}")` : ''}`,
+          { ...res },
         )
       }
 

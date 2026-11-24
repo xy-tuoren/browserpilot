@@ -63,6 +63,11 @@ export interface CDPTransport {
   showSomLabels?(tabId: number, labels: SomLabelItem[]): Promise<void>
   hideSomLabels?(tabId: number): Promise<void>
   moveGhostCursor?(tabId: number, x: number, y: number, clicking?: boolean): Promise<void>
+  setOverlayVisible?(tabId: number, visible: boolean): Promise<void>
+  setControlBanner?(
+    tabId: number,
+    banner: { active: boolean; status?: string; paused?: boolean; mode?: 'working' | 'handoff' },
+  ): Promise<void>
   getPinnedElement?(tabId: number): Promise<{ globalVar?: string; url?: string } | null>
   close(): Promise<void>
 }

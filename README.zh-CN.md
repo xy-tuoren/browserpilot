@@ -21,7 +21,7 @@
 | 零 Playwright / Puppeteer 运行时依赖 | 否 | 否（Puppeteer） | 是 | **是（100% 纯 CDP）** |
 | Chrome Native Messaging 自动鉴权 + 本地守护进程 | 否 | 否 | 是 | **是（双传输通道）** |
 | 有状态 JS 多步沙盒（`session new` / `exec -s 1 -e`） | 是 | 否 | 否 | **是** |
-| 原生 MCP Server（43 个工具 + 多模态截图直出） | 部分（单工具执行） | 是 | 是 | **是** |
+| 原生 MCP Server（45 个工具 + 多模态截图直出） | 部分（单工具执行） | 是 | 是 | **是** |
 | 侧边栏诊断面板 + 操作高亮 + 幽灵光标 | 部分 | 否 | 是 | **是** |
 | 全套 DevTools（Console / Network / Fetch Mock / CSS / 断点调试 / 热改代码 / React Fiber / Web Vitals / Tracing / 录屏 / 下载 / 动作录制） | 大部分 | 大部分 | 部分 | **全部内置** |
 | Direct CDP 直连模式（`--remote-debugging-port`，适合 CI/无头） | 是 | 是 | 否 | **是** |
@@ -168,13 +168,13 @@ browserpilot skill                                   # 打印完整 Agent Skill 
 
 ---
 
-## 完整 MCP 工具矩阵（共 43 个工具）
+## 完整 MCP 工具矩阵（共 45 个工具）
 
 | 分类 | 工具列表 |
 | :--- | :--- |
 | **浏览器与标签页** | `browser_status`, `browser_tabs`, `browser_open_tab`, `browser_close_tab`, `browser_select_tab` |
-| **导航与页面感知** | `browser_navigate`, `browser_history`, `browser_snapshot`, `browser_screenshot`, `browser_labeled_screenshot`, `browser_clean_html`, `browser_markdown`, `browser_inspect_element`, `browser_pinned` |
-| **可信交互操作** | `browser_click`, `browser_fill`, `browser_type`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_drag`, `browser_select_option`, `browser_upload_file`, `browser_handle_dialog`, `browser_wait`, `browser_batch` |
+| **导航与页面感知** | `browser_navigate`, `browser_history`, `browser_snapshot`, `browser_screenshot`（支持 `grid` 坐标网格与 `zoom` 局部放大）, `browser_labeled_screenshot`, `browser_clean_html`, `browser_markdown`, `browser_inspect_element`, `browser_pinned` |
+| **可信交互操作** | `browser_click`（含遮挡/稳定性自检）, `browser_fill`, `browser_fill_form`, `browser_type`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_drag`, `browser_select_option`, `browser_upload_file`, `browser_handle_dialog`, `browser_wait`, `browser_batch`, `browser_handoff`（页内人工接管卡片） |
 | **DevTools 深度调试** | `browser_evaluate`, `browser_console`, `browser_network`, `browser_network_intercept`, `browser_styles`, `browser_react_info`, `browser_debugger`, `browser_live_edit`, `browser_performance`, `browser_emulate`, `browser_cookies`, `browser_storage`, `browser_cdp` |
 | **下载、录屏与沙盒** | `browser_downloads`, `browser_action_recorder`, `browser_record`, `browser_exec` |
 

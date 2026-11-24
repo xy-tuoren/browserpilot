@@ -15,7 +15,7 @@ export interface StartMcpOptions {
 
 /**
  * Starts the BrowserPilot Model Context Protocol (MCP) server on stdio.
- * Exposes all 43 pure-CDP browser automation & DevTools debugging tools to
+ * Exposes all 45 pure-CDP browser automation & DevTools debugging tools to
  * Claude Code, Cursor, Codex, Antigravity, or any MCP-compatible agent.
  */
 export async function startMcpServer(options: StartMcpOptions = {}): Promise<void> {

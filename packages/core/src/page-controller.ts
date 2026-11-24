@@ -13,6 +13,38 @@ export interface ClickOptions {
   clickCount?: number
   modifiers?: KeyModifier[]
   timeoutMs?: number
+  /** Skip pre-click occlusion & stability checks and click directly */
+  force?: boolean
+}
+
+export interface ScrollResult {
+  scrolled: boolean
+  scrollX: number
+  scrollY: number
+  maxScrollY: number
+  percentY: number
+  atTop: boolean
+  atBottom: boolean
+  container: string
+}
+
+export interface FormFieldInput {
+  target: string
+  value: string | boolean
+  type?: 'auto' | 'text' | 'select' | 'checkbox' | 'radio'
+}
+
+export interface FormFillResult {
+  filled: Array<{ target: string; type: string; value: string | boolean }>
+}
+
+export interface HumanHandoffResult {
+  resumed: boolean
+  cancelled: boolean
+  timedOut: boolean
+  elapsedMs: number
+  url: string
+  title: string
 }
 
 export interface ScreenshotOptions {
@@ -21,6 +53,12 @@ export interface ScreenshotOptions {
   format?: 'png' | 'jpeg' | 'webp'
   quality?: number
   clip?: BoundingBox
+  /** Crop & upscale a viewport region (e.g. for Canvas, Figma, or tiny icons) */
+  zoom?: { x: number; y: number; width: number; height: number; scale?: number }
+  /** Overlay a translucent pixel coordinate grid for visual/Canvas coordinate clicking */
+  grid?: boolean
+  /** Grid spacing in CSS pixels (default 200 for full viewport, 50 for zoomed regions) */
+  gridStep?: number
   maxDimension?: number
 }
 
@@ -90,6 +128,26 @@ function buttonBitmask(button: MouseButton): number {
   return 1
 }
 
+function resolveEditingCommands(key: string, mods: KeyModifier[]): string[] {
+  const hasAccel = mods.includes('Meta') || mods.includes('Control')
+  const hasShift = mods.includes('Shift')
+  const lower = key.toLowerCase()
+  if (hasAccel && !mods.includes('Alt')) {
+    if (lower === 'a' && !hasShift) return ['selectAll']
+    if (lower === 'c' && !hasShift) return ['copy']
+    if (lower === 'x' && !hasShift) return ['cut']
+    if (lower === 'v' && !hasShift) return ['paste']
+    if (lower === 'v' && hasShift) return ['pasteAndMatchStyle']
+    if (lower === 'z' && !hasShift) return ['undo']
+    if ((lower === 'z' && hasShift) || (lower === 'y' && !hasShift)) return ['redo']
+  }
+  if (!hasAccel && !mods.includes('Alt')) {
+    if (key === 'Backspace') return ['deleteBackward']
+    if (key === 'Delete') return ['deleteForward']
+  }
+  return []
+}
+
 function resolveKeyDef(keyName: string): KeyDef {
   if (SPECIAL_KEYS[keyName]) return SPECIAL_KEYS[keyName]
   if (keyName.length === 1) {
@@ -109,6 +167,7 @@ export interface ResolvedElement {
   objectId: string
   backendNodeId?: number
   sessionId?: string
+  frameOffset?: { x: number; y: number }
   box: BoundingBox
   center: { x: number; y: number }
 }
@@ -298,8 +357,9 @@ export class PageController {
         if (!box || (box.width === 0 && box.height === 0)) return null
 
         // If element is inside a child OOPIF session, add iframe viewport offset in top frame
+        let frameOffset: { x: number; y: number } | undefined
         if (sessionId) {
-          const frameOffset = await this.getIframeOffset(refTarget?.frameId, sessionId)
+          frameOffset = await this.getIframeOffset(refTarget?.frameId, sessionId)
           box = {
             x: box.x + frameOffset.x,
             y: box.y + frameOffset.y,
@@ -312,6 +372,7 @@ export class PageController {
           objectId,
           backendNodeId,
           sessionId,
+          frameOffset,
           box,
           center: {
             x: Math.round(box.x + box.width / 2),
@@ -519,6 +580,177 @@ export class PageController {
     return res.result?.objectId
   }
 
+  /**
+   * Verifies pre-click actionability (position stability, enabled state, and non-occlusion).
+   * If a fixed/sticky header occludes the target, automatically re-centers it in viewport.
+   */
+  private async ensureClickActionable(
+    el: ResolvedElement,
+    targetLabel: string,
+  ): Promise<{ el: ResolvedElement; underOwnPill: boolean }> {
+    let current = el
+    let underOwnPill = false
+    // 1. Wait briefly for CSS animations/transitions to settle (max ~320ms)
+    for (let attempt = 0; attempt < 6; attempt++) {
+      await sleep(35)
+      const nextBox = await this.readElementViewportBox(current)
+      if (!nextBox) break
+      const moved =
+        Math.abs(nextBox.x - current.box.x) > 2 ||
+        Math.abs(nextBox.y - current.box.y) > 2
+      current = {
+        ...current,
+        box: nextBox,
+        center: { x: nextBox.x + nextBox.width / 2, y: nextBox.y + nextBox.height / 2 },
+      }
+      if (!moved) break
+    }
+
+    // 2. Check disabled state and hit-test occlusion (only in main frame where elementFromPoint matches viewport coords)
+    if (current.sessionId) return { el: current, underOwnPill: false }
+    for (let retry = 0; retry < 2; retry++) {
+      const check = await this.session
+        .send<{
+          result?: {
+            value?: {
+              ok: boolean
+              reason?: string
+              occluder?: string
+              isFixedOrSticky?: boolean
+              underOwnPill?: boolean
+            }
+          }
+        }>('Runtime.callFunctionOn', {
+          objectId: current.objectId,
+          arguments: [{ value: current.center.x }, { value: current.center.y }],
+          functionDeclaration: `function(cx, cy) {
+            if (this.disabled === true || this.getAttribute?.('aria-disabled') === 'true') {
+              return { ok: false, reason: 'disabled' };
+            }
+            const style = getComputedStyle(this);
+            if (style.pointerEvents === 'none') {
+              return { ok: false, reason: 'pointer-events-none' };
+            }
+            function deepHit(root, x, y) {
+              let hit = root.elementFromPoint(x, y);
+              while (hit && hit.shadowRoot) {
+                const inner = hit.shadowRoot.elementFromPoint(x, y);
+                if (!inner || inner === hit) break;
+                hit = inner;
+              }
+              return hit;
+            }
+            let hit = deepHit(document, cx, cy);
+            let hitOwnPill = false;
+            if (hit && hit.id === '__browserpilot_ui_host') {
+              hitOwnPill = true;
+              const prevDisplay = hit.style.display;
+              hit.style.display = 'none';
+              hit = deepHit(document, cx, cy);
+              const uiHost = document.getElementById('__browserpilot_ui_host');
+              if (uiHost) uiHost.style.display = prevDisplay;
+            }
+            if (!hit) return { ok: true, underOwnPill: hitOwnPill };
+            if (hit === this || this.contains(hit) || hit.contains(this)) return { ok: true, underOwnPill: hitOwnPill };
+            // Allow clicking associated <label> for form controls
+            if (this.id && hit.closest && hit.closest('label[for="' + CSS.escape(this.id) + '"]')) return { ok: true, underOwnPill: hitOwnPill };
+            // Walk up occluder to detect fixed/sticky header vs modal overlay
+            let cur = hit;
+            let isFixedOrSticky = false;
+            while (cur && cur !== document.body && cur !== document.documentElement) {
+              const pos = getComputedStyle(cur).position;
+              if (pos === 'fixed' || pos === 'sticky') {
+                isFixedOrSticky = true;
+                break;
+              }
+              cur = cur.parentElement;
+            }
+            const tag = hit.tagName?.toLowerCase() || 'element';
+            const cls = typeof hit.className === 'string' && hit.className.trim()
+              ? '.' + hit.className.trim().split(/\\s+/).slice(0, 2).join('.')
+              : '';
+            const id = hit.id ? '#' + hit.id : '';
+            const txt = (hit.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 40);
+            return {
+              ok: false,
+              reason: 'occluded',
+              occluder: '<' + tag + id + cls + '>' + (txt ? ' ("' + txt + '")' : ''),
+              isFixedOrSticky,
+              underOwnPill: hitOwnPill,
+            };
+          }`,
+          returnByValue: true,
+        })
+        .catch(() => null)
+
+      const val = check?.result?.value
+      if (val?.underOwnPill) underOwnPill = true
+      if (!val || val.ok) return { el: current, underOwnPill }
+
+      if (val.reason === 'disabled') {
+        throw new Error(`Element "${targetLabel}" is disabled and cannot be clicked.`)
+      }
+      if (val.reason === 'pointer-events-none') {
+        throw new Error(`Element "${targetLabel}" has pointer-events: none (pass force: true to override).`)
+      }
+      if (val.reason === 'occluded' && val.isFixedOrSticky && retry === 0) {
+        // Re-center in viewport to clear sticky header/footer and re-measure
+        await this.session
+          .send('Runtime.callFunctionOn', {
+            objectId: current.objectId,
+            functionDeclaration: `function() { this.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); }`,
+          })
+          .catch(() => {})
+        await sleep(60)
+        const recentered = await this.readElementViewportBox(current)
+        if (recentered) {
+          current = {
+            ...current,
+            box: recentered,
+            center: { x: recentered.x + recentered.width / 2, y: recentered.y + recentered.height / 2 },
+          }
+          continue
+        }
+      }
+      if (val.reason === 'occluded') {
+        throw new Error(
+          `Element "${targetLabel}" is occluded at (${Math.round(current.center.x)}, ${Math.round(current.center.y)}) by ${val.occluder ?? 'another element'}. Dismiss the overlay/banner first or pass force: true.`,
+        )
+      }
+    }
+    return { el: current, underOwnPill }
+  }
+
+  private async readElementViewportBox(el: ResolvedElement): Promise<BoundingBox | null> {
+    try {
+      const res = await this.session.send<{ result?: { value?: BoundingBox } }>(
+        'Runtime.callFunctionOn',
+        {
+          objectId: el.objectId,
+          functionDeclaration: `function() {
+            const r = this.getBoundingClientRect();
+            return { x: r.left, y: r.top, width: r.width, height: r.height };
+          }`,
+          returnByValue: true,
+        },
+        { sessionId: el.sessionId },
+      )
+      const b = res.result?.value
+      if (!b || b.width <= 0 || b.height <= 0) return null
+      if (el.frameOffset) {
+        return {
+          x: b.x + el.frameOffset.x,
+          y: b.y + el.frameOffset.y,
+          width: b.width,
+          height: b.height,
+        }
+      }
+      return b
+    } catch {
+      return null
+    }
+  }
+
   async click(targetOrCoords: string | { x: number; y: number }, options: ClickOptions = {}): Promise<void> {
     const button = options.button ?? 'left'
     const clickCount = options.clickCount ?? 1
@@ -526,17 +758,38 @@ export class PageController {
 
     let x: number
     let y: number
+    let underOwnPill = false
     if (typeof targetOrCoords === 'string') {
-      const el = await this.resolveElement(targetOrCoords, options.timeoutMs)
+      let el = await this.resolveElement(targetOrCoords, options.timeoutMs)
+      if (!options.force) {
+        const checked = await this.ensureClickActionable(el, targetOrCoords)
+        el = checked.el
+        underOwnPill = checked.underOwnPill
+      }
       x = el.center.x
       y = el.center.y
+      await this.session.transport
+        .setControlBanner?.(this.tabId, { active: true, status: `Clicking ${targetOrCoords}`, mode: 'working' })
+        .catch(() => {})
       await this.session.transport.highlightElement?.(this.tabId, el.box, `click ${targetOrCoords}`).catch(() => {})
     } else {
       x = targetOrCoords.x
       y = targetOrCoords.y
+      await this.session.transport
+        .setControlBanner?.(this.tabId, { active: true, status: `Clicking (${Math.round(x)}, ${Math.round(y)})`, mode: 'working' })
+        .catch(() => {})
     }
 
-    await this.mouseClick(x, y, { button, clickCount, modifiers })
+    if (underOwnPill) {
+      await this.evaluate(`(() => { const h = document.getElementById('__browserpilot_ui_host'); if (h) h.style.display = 'none'; })()`).catch(() => {})
+    }
+    try {
+      await this.mouseClick(x, y, { button, clickCount, modifiers })
+    } finally {
+      if (underOwnPill) {
+        await this.evaluate(`(() => { const h = document.getElementById('__browserpilot_ui_host'); if (h) h.style.display = ''; })()`).catch(() => {})
+      }
+    }
   }
 
   async dblclick(targetOrCoords: string | { x: number; y: number }): Promise<void> {
@@ -567,17 +820,25 @@ export class PageController {
     const startX = this.lastMousePos.x
     const startY = this.lastMousePos.y
     for (let i = 1; i <= steps; i++) {
-      const cx = startX + ((x - startX) * i) / steps
-      const cy = startY + ((y - startY) * i) / steps
+      const t = i / steps
+      // Ease-out cubic glide for natural pointer feel
+      const eased = steps > 1 ? 1 - Math.pow(1 - t, 2) : 1
+      const cx = startX + (x - startX) * eased
+      const cy = startY + (y - startY) * eased
       await this.session.send('Input.dispatchMouseEvent', {
         type: 'mouseMoved',
         x: cx,
         y: cy,
       })
-      if (steps > 1) await sleep(12)
+      if (steps > 1) {
+        await this.session.transport.moveGhostCursor?.(this.tabId, cx, cy, false).catch(() => {})
+        await sleep(8)
+      }
     }
     this.lastMousePos = { x, y }
-    await this.session.transport.moveGhostCursor?.(this.tabId, x, y, false).catch(() => {})
+    if (steps === 1) {
+      await this.session.transport.moveGhostCursor?.(this.tabId, x, y, false).catch(() => {})
+    }
   }
 
   async mouseDown(x: number, y: number, opts: { button?: MouseButton; clickCount?: number; modifiers?: number } = {}): Promise<void> {
@@ -617,7 +878,8 @@ export class PageController {
   ): Promise<void> {
     const button = opts.button ?? 'left'
     const clicks = opts.clickCount ?? 1
-    await this.mouseMove(x, y)
+    const dist = Math.hypot(x - this.lastMousePos.x, y - this.lastMousePos.y)
+    await this.mouseMove(x, y, { steps: dist > 40 ? 4 : 1 })
     for (let c = 1; c <= clicks; c++) {
       await this.mouseDown(x, y, { button, clickCount: c, modifiers: opts.modifiers })
       await this.mouseUp(x, y, { button, clickCount: c, modifiers: opts.modifiers })
@@ -655,7 +917,7 @@ export class PageController {
     deltaY?: number
     direction?: 'up' | 'down' | 'left' | 'right'
     amount?: number
-  }): Promise<void> {
+  }): Promise<ScrollResult> {
     const amount = options.amount ?? 500
     let dx = options.deltaX ?? 0
     let dy = options.deltaY ?? 0
@@ -664,12 +926,98 @@ export class PageController {
     else if (options.direction === 'right') dx = amount
     else if (options.direction === 'left') dx = -amount
 
+    await this.session.transport
+      .setControlBanner?.(this.tabId, {
+        active: true,
+        status: `Scrolling ${options.direction ?? (dy >= 0 ? 'down' : 'up')}`,
+        mode: 'working',
+      })
+      .catch(() => {})
+
+    const probeMainScrollContainer = async () => {
+      return await this.evaluate<{
+        x: number
+        y: number
+        scrollX: number
+        scrollY: number
+        maxScrollY: number
+        container: string
+      }>(`(() => {
+        const vw = window.innerWidth || 1280;
+        const vh = window.innerHeight || 720;
+        const docEl = document.scrollingElement || document.documentElement;
+        const docMaxY = Math.max(0, (docEl?.scrollHeight || 0) - vh);
+        if (docMaxY > 24) {
+          return {
+            x: Math.round(vw / 2),
+            y: Math.round(vh / 2),
+            scrollX: Math.round(window.scrollX || docEl.scrollLeft || 0),
+            scrollY: Math.round(window.scrollY || docEl.scrollTop || 0),
+            maxScrollY: Math.round(docMaxY),
+            container: 'window',
+          };
+        }
+        // SPA layout where an inner container (main/section/div) owns scroll
+        let best = null;
+        let bestArea = 0;
+        for (const el of document.querySelectorAll('main, [role="main"], section, article, div')) {
+          const st = getComputedStyle(el);
+          if (!/(auto|scroll|overlay)/.test(st.overflowY)) continue;
+          const maxY = el.scrollHeight - el.clientHeight;
+          if (maxY <= 24) continue;
+          const r = el.getBoundingClientRect();
+          if (r.width < 160 || r.height < 160) continue;
+          const visW = Math.max(0, Math.min(r.right, vw) - Math.max(r.left, 0));
+          const visH = Math.max(0, Math.min(r.bottom, vh) - Math.max(r.top, 0));
+          const area = visW * visH;
+          if (area > bestArea) {
+            bestArea = area;
+            const id = el.id ? '#' + el.id : '';
+            best = {
+              x: Math.round(Math.max(r.left, 0) + visW / 2),
+              y: Math.round(Math.max(r.top, 0) + visH / 2),
+              scrollX: Math.round(el.scrollLeft),
+              scrollY: Math.round(el.scrollTop),
+              maxScrollY: Math.round(maxY),
+              container: el.tagName.toLowerCase() + id,
+            };
+          }
+        }
+        return best || {
+          x: Math.round(vw / 2),
+          y: Math.round(vh / 2),
+          scrollX: Math.round(window.scrollX || 0),
+          scrollY: Math.round(window.scrollY || 0),
+          maxScrollY: Math.round(docMaxY),
+          container: 'window',
+        };
+      })()`)
+    }
+
+    const before = await probeMainScrollContainer()
+
     if (options.target) {
       const el = await this.resolveElement(options.target)
-      if (dx === 0 && dy === 0) return // already scrolled into view
-      await this.wheel(dx, dy, el.center)
+      if (dx !== 0 || dy !== 0) {
+        await this.wheel(dx, dy, el.center)
+        await sleep(120)
+      }
     } else {
-      await this.wheel(dx, dy, { x: 400, y: 300 })
+      await this.wheel(dx, dy, { x: before.x, y: before.y })
+      await sleep(120)
+    }
+
+    const after = await probeMainScrollContainer()
+    const percentY = after.maxScrollY > 0 ? Math.min(100, Math.round((after.scrollY / after.maxScrollY) * 100)) : 100
+    return {
+      scrolled: after.scrollY !== before.scrollY || after.scrollX !== before.scrollX,
+      scrollX: after.scrollX,
+      scrollY: after.scrollY,
+      maxScrollY: after.maxScrollY,
+      percentY,
+      atTop: after.scrollY <= 1,
+      atBottom: after.maxScrollY <= 1 || after.scrollY >= after.maxScrollY - 2,
+      container: after.container,
     }
   }
 
@@ -679,6 +1027,9 @@ export class PageController {
    */
   async fill(target: string, value: string, options: { clear?: boolean; timeoutMs?: number } = {}): Promise<void> {
     const el = await this.resolveElement(target, options.timeoutMs)
+    await this.session.transport
+      .setControlBanner?.(this.tabId, { active: true, status: `Filling ${target}`, mode: 'working' })
+      .catch(() => {})
     await this.session.transport.highlightElement?.(this.tabId, el.box, `fill ${target}`).catch(() => {})
 
     // Click to focus natively
@@ -768,17 +1119,24 @@ export class PageController {
 
     const mask = modifierBitmask(mods)
     const def = resolveKeyDef(keyPart)
+    const commands = resolveEditingCommands(def.key, mods)
+    const hasAccel = mods.includes('Meta') || mods.includes('Control')
 
-    for (const m of mods) await this.keyDown(m)
+    const activeMods: KeyModifier[] = []
+    for (const m of mods) {
+      activeMods.push(m)
+      await this.keyDown(m, modifierBitmask(activeMods))
+    }
     await this.session.send('Input.dispatchKeyEvent', {
-      type: def.text ? 'keyDown' : 'rawKeyDown',
+      type: def.text && !hasAccel ? 'keyDown' : 'rawKeyDown',
       key: def.key,
       code: def.code,
       windowsVirtualKeyCode: def.keyCode,
       nativeVirtualKeyCode: def.keyCode,
-      text: def.text,
+      text: hasAccel ? undefined : def.text,
       unmodifiedText: def.text,
       modifiers: mask,
+      ...(commands.length ? { commands } : {}),
     })
     await this.session.send('Input.dispatchKeyEvent', {
       type: 'keyUp',
@@ -788,10 +1146,211 @@ export class PageController {
       nativeVirtualKeyCode: def.keyCode,
       modifiers: mask,
     })
-    for (const m of [...mods].reverse()) await this.keyUp(m)
+    for (let i = mods.length - 1; i >= 0; i--) {
+      activeMods.pop()
+      await this.keyUp(mods[i], modifierBitmask(activeMods))
+    }
   }
 
-  async keyDown(keyName: string): Promise<void> {
+  /**
+   * Fills multiple form fields (text, select, checkbox, radio) in a single structured call.
+   */
+  async fillForm(fields: FormFieldInput[]): Promise<FormFillResult> {
+    const filled: FormFillResult['filled'] = []
+    for (const field of fields) {
+      const kind = field.type ?? 'auto'
+      let detectedType = kind
+      if (kind === 'auto') {
+        const el = await this.resolveElement(field.target)
+        const meta = await this.session
+          .send<{ result?: { value?: { tag: string; inputType: string } } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId: el.objectId,
+              functionDeclaration: `function() { return { tag: (this.tagName || '').toLowerCase(), inputType: (this.type || '').toLowerCase() }; }`,
+              returnByValue: true,
+            },
+            { sessionId: el.sessionId },
+          )
+          .catch(() => null)
+        const tag = meta?.result?.value?.tag ?? ''
+        const inputType = meta?.result?.value?.inputType ?? ''
+        if (tag === 'select') detectedType = 'select'
+        else if (inputType === 'checkbox') detectedType = 'checkbox'
+        else if (inputType === 'radio') detectedType = 'radio'
+        else detectedType = 'text'
+      }
+
+      if (detectedType === 'select') {
+        const selected = await this.selectOption(field.target, String(field.value))
+        filled.push({ target: field.target, type: 'select', value: selected })
+      } else if (detectedType === 'checkbox') {
+        const desired = field.value === true || String(field.value).toLowerCase() === 'true'
+        const el = await this.resolveElement(field.target)
+        const current = await this.session
+          .send<{ result?: { value?: boolean } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId: el.objectId,
+              functionDeclaration: `function() { return Boolean(this.checked || this.getAttribute?.('aria-checked') === 'true'); }`,
+              returnByValue: true,
+            },
+            { sessionId: el.sessionId },
+          )
+          .catch(() => null)
+        if (Boolean(current?.result?.value) !== desired) {
+          await this.click(field.target)
+        }
+        filled.push({ target: field.target, type: 'checkbox', value: desired })
+      } else if (detectedType === 'radio') {
+        await this.click(field.target)
+        filled.push({ target: field.target, type: 'radio', value: field.value })
+      } else {
+        await this.fill(field.target, String(field.value))
+        filled.push({ target: field.target, type: 'text', value: String(field.value) })
+      }
+    }
+    return { filled }
+  }
+
+  /**
+   * Displays an interactive in-page Human Handoff card ("Your Turn") and pauses until
+   * the user clicks "Done, Continue AI" or "Cancel" inside the browser tab.
+   * Works identically in both Chrome Extension mode and Direct CDP mode.
+   */
+  async requestHumanHandoff(
+    message: string,
+    options: { timeoutMs?: number } = {},
+  ): Promise<HumanHandoffResult> {
+    const timeoutMs = options.timeoutMs ?? 300_000
+    const start = Date.now()
+    const bindingName = '__browserpilotHandoffDone'
+
+    await this.session.ensureBaseDomains()
+    await this.session.send('Runtime.addBinding', { name: bindingName }).catch(() => {})
+    await this.session.transport
+      .setControlBanner?.(this.tabId, { active: true, status: 'Waiting for you...', mode: 'handoff' })
+      .catch(() => {})
+
+    let resolveAction!: (action: 'resume' | 'cancel') => void
+    const decisionPromise = new Promise<'resume' | 'cancel'>((resolve) => {
+      resolveAction = resolve
+    })
+
+    const offBinding = this.session.on('Runtime.bindingCalled', (params) => {
+      if (params.name !== bindingName) return
+      const payload = String(params.payload ?? '')
+      resolveAction(payload === 'cancel' ? 'cancel' : 'resume')
+    })
+
+    const injectCard = async () => {
+      await this.evaluate(`(() => {
+        const old = document.getElementById('__browserpilot_handoff_host');
+        if (old) old.remove();
+        const host = document.createElement('div');
+        host.id = '__browserpilot_handoff_host';
+        host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;';
+        const shadow = host.attachShadow({ mode: 'closed' });
+        const style = document.createElement('style');
+        style.textContent = \`
+          .bp-edge {
+            position: fixed; inset: 0; pointer-events: none;
+            box-shadow: inset 0 0 0 3px rgba(245, 158, 11, 0.72), inset 0 0 26px rgba(245, 158, 11, 0.22);
+          }
+          .bp-card {
+            position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+            pointer-events: auto;
+            display: flex; align-items: center; gap: 14px; max-width: 560px;
+            background: rgba(15, 23, 42, 0.94); color: #f8fafc;
+            border: 1px solid rgba(251, 191, 36, 0.55);
+            backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+            border-radius: 14px; padding: 12px 16px;
+            box-shadow: 0 14px 36px rgba(2, 6, 23, 0.45);
+            font: 500 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          }
+          .bp-dot {
+            width: 10px; height: 10px; border-radius: 999px; flex: none;
+            background: #fbbf24; box-shadow: 0 0 10px #f59e0b;
+          }
+          .bp-msg { flex: 1; color: #f1f5f9; }
+          .bp-title { font-weight: 700; font-size: 12px; color: #fcd34d; margin-bottom: 2px; }
+          .bp-actions { display: flex; gap: 8px; flex: none; }
+          button {
+            cursor: pointer; border-radius: 8px; border: 1px solid transparent;
+            padding: 7px 12px; font: 600 12px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+          }
+          .bp-resume { background: linear-gradient(135deg, #2dd4bf, #06b6d4); color: #042f2e; }
+          .bp-resume:hover { filter: brightness(1.06); }
+          .bp-cancel { background: rgba(148, 163, 184, 0.16); color: #cbd5e1; border-color: rgba(148, 163, 184, 0.3); }
+          .bp-cancel:hover { background: rgba(148, 163, 184, 0.28); }
+        \`;
+        shadow.appendChild(style);
+        const edge = document.createElement('div');
+        edge.className = 'bp-edge';
+        const card = document.createElement('div');
+        card.className = 'bp-card';
+        const dot = document.createElement('div');
+        dot.className = 'bp-dot';
+        const msgWrap = document.createElement('div');
+        msgWrap.className = 'bp-msg';
+        const title = document.createElement('div');
+        title.className = 'bp-title';
+        title.textContent = 'BrowserPilot · Your Turn';
+        const body = document.createElement('div');
+        body.textContent = ${JSON.stringify(message)};
+        msgWrap.append(title, body);
+        const actions = document.createElement('div');
+        actions.className = 'bp-actions';
+        const btnResume = document.createElement('button');
+        btnResume.className = 'bp-resume';
+        btnResume.textContent = 'Done, Continue AI';
+        btnResume.onclick = () => { globalThis.${bindingName}?.('resume'); host.remove(); };
+        const btnCancel = document.createElement('button');
+        btnCancel.className = 'bp-cancel';
+        btnCancel.textContent = 'Cancel';
+        btnCancel.onclick = () => { globalThis.${bindingName}?.('cancel'); host.remove(); };
+        actions.append(btnResume, btnCancel);
+        card.append(dot, msgWrap, actions);
+        shadow.append(edge, card);
+        (document.documentElement || document.body).appendChild(host);
+      })()`).catch(() => {})
+    }
+
+    await injectCard()
+    // Re-inject card automatically if the user navigates to another page during manual handoff
+    const offLoad = this.session.on('Page.loadEventFired', () => {
+      void injectCard()
+    })
+
+    let timer: ReturnType<typeof setTimeout> | null = null
+    try {
+      const outcome = await Promise.race([
+        decisionPromise,
+        new Promise<'timeout'>((resolve) => {
+          timer = setTimeout(() => resolve('timeout'), timeoutMs)
+        }),
+      ])
+      const meta = await this.getUrlAndTitle().catch(() => ({ url: '', title: '' }))
+      return {
+        resumed: outcome === 'resume',
+        cancelled: outcome === 'cancel',
+        timedOut: outcome === 'timeout',
+        elapsedMs: Date.now() - start,
+        url: meta.url,
+        title: meta.title,
+      }
+    } finally {
+      if (timer) clearTimeout(timer)
+      offBinding()
+      offLoad()
+      await this.evaluate(`document.getElementById('__browserpilot_handoff_host')?.remove()`).catch(() => {})
+      await this.session.transport
+        .setControlBanner?.(this.tabId, { active: true, status: 'Active', mode: 'working' })
+        .catch(() => {})
+    }
+  }
+
+  async keyDown(keyName: string, modifiers = 0): Promise<void> {
     const def = resolveKeyDef(keyName)
     await this.session.send('Input.dispatchKeyEvent', {
       type: def.text ? 'keyDown' : 'rawKeyDown',
@@ -800,10 +1359,11 @@ export class PageController {
       windowsVirtualKeyCode: def.keyCode,
       nativeVirtualKeyCode: def.keyCode,
       text: def.text,
+      modifiers,
     })
   }
 
-  async keyUp(keyName: string): Promise<void> {
+  async keyUp(keyName: string, modifiers = 0): Promise<void> {
     const def = resolveKeyDef(keyName)
     await this.session.send('Input.dispatchKeyEvent', {
       type: 'keyUp',
@@ -811,6 +1371,7 @@ export class PageController {
       code: def.code,
       windowsVirtualKeyCode: def.keyCode,
       nativeVirtualKeyCode: def.keyCode,
+      modifiers,
     })
   }
 
@@ -871,63 +1432,143 @@ export class PageController {
     return res.result?.value as T
   }
 
-  async screenshot(options: ScreenshotOptions = {}): Promise<{ base64: string; mimeType: string; path?: string }> {
+  async screenshot(
+    options: ScreenshotOptions = {},
+  ): Promise<{
+    base64: string
+    mimeType: string
+    path?: string
+    region?: { x: number; y: number; width: number; height: number; scale: number }
+  }> {
     const format = options.format ?? 'png'
     const params: Record<string, unknown> = { format }
     if (format !== 'png' && options.quality !== undefined) {
       params.quality = options.quality
     }
 
-    if (options.clip) {
-      params.clip = { ...options.clip, scale: 1 }
-    } else if (options.fullPage) {
+    let region: { x: number; y: number; width: number; height: number; scale: number } | undefined
+
+    // Hide BrowserPilot's own UI overlays (glow border, floating pill, highlight, ghost cursor) so screenshots stay clean
+    await this.session.transport.setOverlayVisible?.(this.tabId, false).catch(() => {})
+    await this.evaluate(`(() => {
+      const el = document.getElementById('__browserpilot_ui_host');
+      if (el) el.style.visibility = 'hidden';
+    })()`).catch(() => {})
+
+    try {
       const metrics = await this.session.send<{
+        cssVisualViewport?: { pageX: number; pageY: number; clientWidth: number; clientHeight: number }
         cssContentSize?: { width: number; height: number }
         contentSize?: { width: number; height: number }
       }>('Page.getLayoutMetrics')
-      const size = metrics.cssContentSize ?? metrics.contentSize ?? { width: 1280, height: 720 }
-      params.clip = {
-        x: 0,
-        y: 0,
-        width: size.width,
-        height: Math.min(size.height, 16_384),
-        scale: 1,
+      const vp = metrics.cssVisualViewport ?? { pageX: 0, pageY: 0, clientWidth: 1280, clientHeight: 720 }
+
+      if (options.grid) {
+        const step = options.gridStep ?? (options.zoom ? 50 : 200)
+        const originX = options.zoom ? options.zoom.x : 0
+        const originY = options.zoom ? options.zoom.y : 0
+        const spanW = options.zoom ? options.zoom.width : vp.clientWidth
+        const spanH = options.zoom ? options.zoom.height : vp.clientHeight
+        await this.evaluate(`(() => {
+          document.getElementById('__browserpilot_grid_overlay')?.remove();
+          const host = document.createElement('div');
+          host.id = '__browserpilot_grid_overlay';
+          host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483646;';
+          const shadow = host.attachShadow({ mode: 'closed' });
+          const step = ${step};
+          const startX = Math.floor(${originX} / step) * step;
+          const endX = ${originX + spanW};
+          const startY = Math.floor(${originY} / step) * step;
+          const endY = ${originY + spanH};
+          for (let x = startX; x <= endX; x += step) {
+            const line = document.createElement('div');
+            line.style.cssText = 'position:fixed;top:0;bottom:0;left:' + x + 'px;width:1px;background:rgba(6,182,212,0.38);';
+            shadow.appendChild(line);
+            const lbl = document.createElement('div');
+            lbl.textContent = String(x);
+            lbl.style.cssText = 'position:fixed;top:' + (${originY} + 2) + 'px;left:' + (x + 3) + 'px;background:rgba(15,23,42,0.82);color:#67e8f9;font:700 10px/1 ui-monospace,monospace;padding:1px 3px;border-radius:3px;';
+            shadow.appendChild(lbl);
+          }
+          for (let y = startY; y <= endY; y += step) {
+            const line = document.createElement('div');
+            line.style.cssText = 'position:fixed;left:0;right:0;top:' + y + 'px;height:1px;background:rgba(6,182,212,0.38);';
+            shadow.appendChild(line);
+            const lbl = document.createElement('div');
+            lbl.textContent = String(y);
+            lbl.style.cssText = 'position:fixed;left:' + (${originX} + 2) + 'px;top:' + (y + 3) + 'px;background:rgba(15,23,42,0.82);color:#67e8f9;font:700 10px/1 ui-monospace,monospace;padding:1px 3px;border-radius:3px;';
+            shadow.appendChild(lbl);
+          }
+          (document.documentElement || document.body).appendChild(host);
+        })()`).catch(() => {})
       }
-      params.captureBeyondViewport = true
-    } else {
-      // Capture at CSS scale (1x) to avoid huge Retina 2x/3x images
-      const metrics = await this.session.send<{
-        cssVisualViewport?: { pageX: number; pageY: number; clientWidth: number; clientHeight: number }
-      }>('Page.getLayoutMetrics')
-      if (metrics.cssVisualViewport) {
+
+      if (options.zoom) {
+        const scale = Math.max(1, Math.min(4, options.zoom.scale ?? 2))
         params.clip = {
-          x: metrics.cssVisualViewport.pageX,
-          y: metrics.cssVisualViewport.pageY,
-          width: metrics.cssVisualViewport.clientWidth,
-          height: metrics.cssVisualViewport.clientHeight,
+          x: vp.pageX + options.zoom.x,
+          y: vp.pageY + options.zoom.y,
+          width: options.zoom.width,
+          height: options.zoom.height,
+          scale,
+        }
+        region = {
+          x: options.zoom.x,
+          y: options.zoom.y,
+          width: options.zoom.width,
+          height: options.zoom.height,
+          scale,
+        }
+      } else if (options.clip) {
+        params.clip = { ...options.clip, scale: 1 }
+        region = { ...options.clip, scale: 1 }
+      } else if (options.fullPage) {
+        const size = metrics.cssContentSize ?? metrics.contentSize ?? { width: 1280, height: 720 }
+        params.clip = {
+          x: 0,
+          y: 0,
+          width: size.width,
+          height: Math.min(size.height, 16_384),
+          scale: 1,
+        }
+        params.captureBeyondViewport = true
+      } else if (metrics.cssVisualViewport) {
+        params.clip = {
+          x: vp.pageX,
+          y: vp.pageY,
+          width: vp.clientWidth,
+          height: vp.clientHeight,
           scale: 1,
         }
       }
+
+      const res = await this.session.send<{ data: string }>('Page.captureScreenshot', params)
+      let base64 = res.data
+      const mimeType = format === 'jpeg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : 'image/png'
+
+      // Pure-browser canvas resize if maxDimension requested (zero native sharp dependency!)
+      if (options.maxDimension && options.maxDimension > 0) {
+        const resized = await this.resizeBase64InPage(base64, mimeType, options.maxDimension, options.quality)
+        if (resized) base64 = resized
+      }
+
+      if (options.path) {
+        const absPath = path.resolve(options.path)
+        await fs.mkdir(path.dirname(absPath), { recursive: true })
+        await fs.writeFile(absPath, Buffer.from(base64, 'base64'))
+        return { base64, mimeType, path: absPath, ...(region ? { region } : {}) }
+      }
+
+      return { base64, mimeType, ...(region ? { region } : {}) }
+    } finally {
+      if (options.grid) {
+        await this.evaluate(`document.getElementById('__browserpilot_grid_overlay')?.remove()`).catch(() => {})
+      }
+      await this.evaluate(`(() => {
+        const el = document.getElementById('__browserpilot_ui_host');
+        if (el) el.style.visibility = '';
+      })()`).catch(() => {})
+      await this.session.transport.setOverlayVisible?.(this.tabId, true).catch(() => {})
     }
-
-    const res = await this.session.send<{ data: string }>('Page.captureScreenshot', params)
-    let base64 = res.data
-    const mimeType = format === 'jpeg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : 'image/png'
-
-    // Pure-browser canvas resize if maxDimension requested (zero native sharp dependency!)
-    if (options.maxDimension && options.maxDimension > 0) {
-      const resized = await this.resizeBase64InPage(base64, mimeType, options.maxDimension, options.quality)
-      if (resized) base64 = resized
-    }
-
-    if (options.path) {
-      const absPath = path.resolve(options.path)
-      await fs.mkdir(path.dirname(absPath), { recursive: true })
-      await fs.writeFile(absPath, Buffer.from(base64, 'base64'))
-      return { base64, mimeType, path: absPath }
-    }
-
-    return { base64, mimeType }
   }
 
   private async resizeBase64InPage(

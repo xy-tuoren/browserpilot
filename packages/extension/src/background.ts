@@ -162,6 +162,29 @@ async function loadConfig(): Promise<void> {
   }
 }
 
+function pushControlBanner(
+  tabId: number,
+  opts: { active: boolean; status?: string; mode?: 'working' | 'handoff' },
+): void {
+  const show = opts.active && config.showHighlights
+  void chrome.tabs
+    .sendMessage(tabId, {
+      type: 'browserpilot:control-banner',
+      active: show,
+      status: opts.status,
+      paused: config.paused,
+      theme: config.theme,
+      mode: opts.mode ?? 'working',
+    })
+    .catch(() => {})
+}
+
+function broadcastBannerToAttachedTabs(): void {
+  for (const tabId of attachedTabs.keys()) {
+    pushControlBanner(tabId, { active: true })
+  }
+}
+
 async function saveConfig(patch: Partial<ExtensionConfig>): Promise<ExtensionConfig> {
   const prevUrl = config.daemonUrl
   const prevToken = config.authToken
@@ -178,6 +201,7 @@ async function saveConfig(patch: Partial<ExtensionConfig>): Promise<ExtensionCon
   await chrome.storage.local.set({ [STORAGE_CONFIG_KEY]: config })
   updateBadge()
   broadcastUiUpdate()
+  broadcastBannerToAttachedTabs()
 
   if (config.daemonUrl !== prevUrl || config.authToken !== prevToken) {
     disconnectTransport()
@@ -610,6 +634,7 @@ async function ensureAttached(
 
     updateBadge()
     broadcastUiUpdate()
+    pushControlBanner(tabId, { active: true, status: 'Active' })
     sendEvent('tab.attached', { tabId, url, title: tab.title || '' })
     logActivity('tab.attach', 'ok', `${tab.title || url || `Tab #${tabId}`}`, tabId)
     return rec
@@ -627,6 +652,7 @@ async function detachTab(tabId: number): Promise<void> {
   const rec = attachedTabs.get(tabId)
   if (!rec) return
   attachedTabs.delete(tabId)
+  pushControlBanner(tabId, { active: false })
   await ungroupTabIfManaged(tabId, rec)
   await chrome.debugger.detach({ tabId }).catch(() => {})
   updateBadge()
@@ -814,6 +840,25 @@ async function executeBridgeMethod(method: string, params: Record<string, unknow
       return { ok: true }
     }
 
+    case 'extension.setOverlayVisible': {
+      const tabId = Number(params.tabId)
+      await chrome.tabs.sendMessage(tabId, {
+        type: 'browserpilot:set-overlay-visible',
+        visible: Boolean(params.visible),
+      }).catch(() => {})
+      return { ok: true }
+    }
+
+    case 'extension.setControlBanner': {
+      const tabId = Number(params.tabId)
+      pushControlBanner(tabId, {
+        active: Boolean(params.active),
+        status: typeof params.status === 'string' ? params.status : undefined,
+        mode: params.mode === 'handoff' ? 'handoff' : 'working',
+      })
+      return { ok: true }
+    }
+
     case 'extension.getPinnedElement': {
       const tabId = Number(params.tabId)
       const rec = attachedTabs.get(tabId)
@@ -927,6 +972,7 @@ chrome.debugger.onDetach.addListener((source, reason) => {
   const rec = attachedTabs.get(tabId)
   attachedTabs.delete(tabId)
   if (reason !== 'target_closed') {
+    pushControlBanner(tabId, { active: false })
     void ungroupTabIfManaged(tabId, rec)
   }
   updateBadge()
@@ -1027,6 +1073,30 @@ if (chrome.downloads?.onCreated) {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || typeof msg !== 'object') return false
 
+  if (msg.type === 'browserpilot:get-tab-banner') {
+    const tid = _sender.tab?.id
+    const active = Boolean(tid !== undefined && attachedTabs.has(tid) && config.showHighlights)
+    sendResponse({
+      active,
+      paused: config.paused,
+      theme: config.theme,
+      status: 'Active',
+    })
+    return false
+  }
+  if (msg.type === 'browserpilot:toggle-pause') {
+    void saveConfig({ paused: !config.paused }).then((cfg) => sendResponse({ ok: true, config: cfg }))
+    return true
+  }
+  if (msg.type === 'browserpilot:stop-this-tab') {
+    const tid = _sender.tab?.id
+    if (tid !== undefined) {
+      void detachTab(tid).then(() => sendResponse({ ok: true }))
+      return true
+    }
+    sendResponse({ ok: false })
+    return false
+  }
   if (msg.type === 'browserpilot:get-state') {
     void getExtensionState().then(sendResponse)
     return true

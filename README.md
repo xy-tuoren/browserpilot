@@ -21,7 +21,7 @@
 | Zero Playwright / Puppeteer runtime dependency | No | No (Puppeteer) | Yes | **Yes (100% Pure CDP)** |
 | Chrome Native Messaging + Auth Token Daemon | No | No | Yes | **Yes (Dual Transport)** |
 | Stateful JS Sandbox (`session new` / `exec -s 1 -e`) | Yes | No | No | **Yes** |
-| First-class MCP Server (43 tools + image blocks) | Partial (1-tool execute) | Yes | Yes | **Yes** |
+| First-class MCP Server (45 tools + image blocks) | Partial (1-tool execute) | Yes | Yes | **Yes** |
 | Companion Side Panel + Action Highlights + Ghost Cursor | Partial | No | Yes | **Yes** |
 | Deep DevTools (Console, Network, Fetch Mock, CSS Rules, Debugger, Live Edit, React Fiber, Web Vitals, Tracing, Video Recording) | Yes (most) | Yes (most) | Partial | **Yes (All Built-in)** |
 | Direct CDP Mode (`--remote-debugging-port` for CI/Headless) | Yes | Yes | No | **Yes** |
@@ -162,13 +162,13 @@ browserpilot skill                                   # Print full Agent Skill in
 
 ---
 
-## Complete MCP Tool Matrix (43 Tools)
+## Complete MCP Tool Matrix (45 Tools)
 
 | Category | Tools |
 | :--- | :--- |
 | **Browser & Tabs** | `browser_status`, `browser_tabs`, `browser_open_tab`, `browser_close_tab`, `browser_select_tab` |
-| **Navigation & Perception** | `browser_navigate`, `browser_history`, `browser_snapshot`, `browser_screenshot`, `browser_labeled_screenshot`, `browser_clean_html`, `browser_markdown`, `browser_inspect_element`, `browser_pinned` |
-| **Trusted Interaction** | `browser_click`, `browser_fill`, `browser_type`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_drag`, `browser_select_option`, `browser_upload_file`, `browser_handle_dialog`, `browser_wait`, `browser_batch` |
+| **Navigation & Perception** | `browser_navigate`, `browser_history`, `browser_snapshot`, `browser_screenshot` (`grid` & `zoom`), `browser_labeled_screenshot`, `browser_clean_html`, `browser_markdown`, `browser_inspect_element`, `browser_pinned` |
+| **Trusted Interaction** | `browser_click`, `browser_fill`, `browser_fill_form`, `browser_type`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_drag`, `browser_select_option`, `browser_upload_file`, `browser_handle_dialog`, `browser_wait`, `browser_batch`, `browser_handoff` |
 | **DevTools Debugging** | `browser_evaluate`, `browser_console`, `browser_network`, `browser_network_intercept`, `browser_styles`, `browser_react_info`, `browser_debugger`, `browser_live_edit`, `browser_performance`, `browser_emulate`, `browser_cookies`, `browser_storage`, `browser_cdp` |
 | **Downloads, Media & Recording** | `browser_downloads`, `browser_action_recorder`, `browser_record`, `browser_exec` |
 

@@ -1,12 +1,12 @@
 # BrowserPilot Complete Reference
 
-## 1. All 43 MCP Tools (`browserpilot mcp`)
+## 1. All 45 MCP Tools (`browserpilot mcp`)
 
 | Category | Tools | Key Notes |
 | :--- | :--- | :--- |
 | **Browser & Tabs** | `browser_status`, `browser_tabs`, `browser_open_tab`, `browser_close_tab`, `browser_select_tab` | `browser_open_tab` normalizes bare domains (`example.com`, `localhost:3000`) and waits for initial load. |
-| **Navigation & Perception** | `browser_navigate`, `browser_history`, `browser_snapshot`, `browser_screenshot`, `browser_labeled_screenshot`, `browser_clean_html`, `browser_markdown`, `browser_inspect_element`, `browser_pinned` | `search` accepts case-insensitive regex (falls back to literal on invalid regex). `browser_pinned` inspects the element right-clicked with "Pin Element for BrowserPilot". |
-| **Trusted Interaction** | `browser_click`, `browser_fill`, `browser_type`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_drag`, `browser_select_option`, `browser_upload_file`, `browser_handle_dialog`, `browser_wait`, `browser_batch` | All mouse/keyboard events dispatch real CDP `isTrusted=true` events and report newly thrown console errors + failed requests. `browser_batch` runs multiple steps in one round-trip. |
+| **Navigation & Perception** | `browser_navigate`, `browser_history`, `browser_snapshot`, `browser_screenshot`, `browser_labeled_screenshot`, `browser_clean_html`, `browser_markdown`, `browser_inspect_element`, `browser_pinned` | `browser_screenshot` hides overlays cleanly and supports `grid: true` (pixel coordinate grid) and `zoom: { x, y, width, height, scale }` (2x Canvas/tiny-icon zoom). |
+| **Trusted Interaction** | `browser_click`, `browser_fill`, `browser_fill_form`, `browser_type`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_drag`, `browser_select_option`, `browser_upload_file`, `browser_handle_dialog`, `browser_wait`, `browser_batch`, `browser_handoff` | `browser_click` checks stability & occlusion automatically (pass `force: true` to bypass). `browser_press_key` sends native macOS/Chrome `commands` (`selectAll`, `copy`, `paste`, `undo`). `browser_scroll` finds inner SPA scroll containers & returns position telemetry. `browser_handoff` displays an in-page "Your Turn" card until user clicks Continue. |
 | **DevTools Debugging** | `browser_evaluate`, `browser_console`, `browser_network`, `browser_network_intercept`, `browser_styles`, `browser_react_info`, `browser_debugger`, `browser_live_edit`, `browser_performance`, `browser_emulate`, `browser_cookies`, `browser_storage`, `browser_cdp` | `browser_network` with `requestId` returns full headers, timing, JS initiator stack, and response body. `browser_styles` returns clean author-written rules with `file:line` and supports `forcePseudoStates`. |
 | **Downloads, Media & Sandbox** | `browser_downloads`, `browser_action_recorder`, `browser_record`, `browser_exec` | `browser_action_recorder` exports `batch` JSON, replayable `exec` JS, and Agent Skill Markdown (auto-masking passwords). `browser_record` creates MP4/WebM videos (optional `audio: true`) and smart idle-sped-up demos. |
 
@@ -48,17 +48,19 @@ browserpilot close <tabId>
 browserpilot snapshot [--tab <id>] [--search "<regex>"] [--scope "<css|ref>"] [--full]
 browserpilot markdown [--search "<regex>"] [--full] [--tab <id>]
 browserpilot html [--selector "<css>"] [--search "<regex>"] [--full] [--tab <id>]
-browserpilot screenshot [outputPath] [--full-page] [--tab <id>]
+browserpilot screenshot [outputPath] [--full-page] [--grid] [--zoom x,y,w,h] [--clip x,y,w,h] [--tab <id>]
 browserpilot labeled-screenshot [outputPath] [--tab <id>]
 
 # Actions
-browserpilot click <ref|locator> [--tab <id>]
+browserpilot click <ref|locator> [--force] [--tab <id>]
 browserpilot fill <ref|locator> <value> [--tab <id>]
+browserpilot fill-form '<json-fields>' [--tab <id>]
 browserpilot type [target] <text> [--tab <id>]
 browserpilot hover <ref|locator> [--tab <id>]
 browserpilot scroll [down|up|left|right] [--amount <px>] [--target <ref|sel>] [--tab <id>]
 browserpilot wait [--selector "<css>"] [--text "<str>"] [--ms <N>] [--timeout <ms>] [--tab <id>]
-browserpilot key <Enter|Escape|Tab|...> [--tab <id>]
+browserpilot handoff "<message>" [--timeout <ms>] [--tab <id>]
+browserpilot key <Enter|Escape|Cmd+a|Ctrl+v|...> [--tab <id>]
 
 # DevTools & profiling
 browserpilot console [--level error|warn|log] [--search <str>] [--since-last] [--tab <id>]

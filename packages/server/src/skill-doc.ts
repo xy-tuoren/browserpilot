@@ -14,7 +14,7 @@ BrowserPilot controls the user's running Chrome browser (existing logins, cookie
    - First call returns full AXTree with \`e1\`, \`e2\`... refs + viewport/scroll info; subsequent calls return diffs (pass \`--full\` / \`showDiffSinceLastCall: false\` for full output).
    - Use \`browser_labeled_screenshot\` / \`browserpilot labeled-screenshot <path>\` when spatial layout or icon-only buttons matter.
 3. **Act (trusted CDP input)**:
-   - \`click\`, \`fill\`, \`type\`, \`press_key\`, \`hover\`, \`scroll\`, \`drag\`, \`select_option\`, \`upload_file\`, \`batch\`.
+   - \`click\` (checks occlusion & stability; pass \`force: true\` to override), \`fill\`, \`fill_form\`, \`type\`, \`press_key\` (supports macOS/Chrome \`Cmd+a/c/v/z\` editing commands), \`hover\`, \`scroll\` (smart inner SPA container detection + position telemetry), \`drag\`, \`select_option\`, \`upload_file\`, \`batch\`, \`handoff\` (in-page "Your Turn" card until user clicks Continue).
    - Targets accept refs (\`e5\`), CSS selectors (\`#submit\`), \`role=button[name="Save"]\`, \`label=...\`, \`placeholder=...\`, \`text=...\`, \`>> nth=N\`, or \`pinned\`.
 4. **DevTools Debugging**:
    - \`browser_console\` / \`browserpilot console --level error --since-last\`

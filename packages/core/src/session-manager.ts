@@ -302,9 +302,28 @@ export class SessionManager {
         const t = await getTab(opts?.tab)
         return (await t.snapshots.capture(t.session, opts)).text
       },
-      screenshot: async (opts?: { tab?: BrowserPilotTab; path?: string; fullPage?: boolean; maxDimension?: number }) => {
+      screenshot: async (opts?: {
+        tab?: BrowserPilotTab
+        path?: string
+        fullPage?: boolean
+        maxDimension?: number
+        grid?: boolean
+        gridStep?: number
+        zoom?: { x: number; y: number; width: number; height: number; scale?: number }
+      }) => {
         const t = await getTab(opts?.tab)
         return await t.page.screenshot(opts)
+      },
+      handoff: async (message: string, opts?: { tab?: BrowserPilotTab; timeoutMs?: number }) => {
+        const t = await getTab(opts?.tab)
+        return await t.page.requestHumanHandoff(message, { timeoutMs: opts?.timeoutMs })
+      },
+      fillForm: async (
+        fields: Array<{ target: string; value: string | boolean; type?: 'auto' | 'text' | 'select' | 'checkbox' | 'radio' }>,
+        opts?: { tab?: BrowserPilotTab },
+      ) => {
+        const t = await getTab(opts?.tab)
+        return await t.page.fillForm(fields)
       },
       screenshotWithLabels: async (opts?: { tab?: BrowserPilotTab; path?: string; maxLabels?: number }) => {
         const t = await getTab(opts?.tab)

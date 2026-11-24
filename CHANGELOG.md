@@ -2,6 +2,23 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
+## [1.3.0] - 2026-11-24
+
+### Added
+- **In-Page Breathing Glow Border & Floating Control Capsule (`content-script.ts` + `background.ts`)**: controlled Chrome tabs now display a subtle fresh cyan-mint breathing viewport border and a sleek bottom-center pill showing live AI action status (`Clicking...`, `Scrolling...`) with one-click **Pause / Resume** and **Take Over** buttons (auto-synced across page navigations and Dark/Light themes).
+- **Smooth SVG Pointer Ghost Cursor, Click Ripple & Clean Screenshots**: upgraded the ghost cursor to an eased multi-step animated SVG arrow with expanding click ripple rings, and automatically hides all BrowserPilot overlays during `screenshot()` so UI elements never appear in captured images.
+- **Interactive Human Handoff (`browser_handoff`, `browserpilot handoff`, sandbox `handoff()`)**: injects an in-page amber "BrowserPilot · Your Turn" card with **Done, Continue AI** and **Cancel** buttons (working in both Chrome Extension and Direct CDP modes, auto-re-injecting across navigations) for seamless human-in-the-loop logins, 2FA, CAPTCHAs, and approvals.
+- **Pre-Click Actionability & Occlusion Detection (`PageController.click`)**: verifies element stability across animation frames, detects `disabled` / `pointer-events: none`, runs Shadow-DOM-aware `elementFromPoint` hit-testing, automatically re-centers elements hidden behind sticky/fixed headers, and reports exact occluding overlays (with `force: true` override).
+- **Native macOS / Cross-Platform Editor Shortcut `commands` (`PageController.pressKey`)**: populates Chromium CDP `commands` (`selectAll`, `copy`, `cut`, `paste`, `undo`, `redo`, `deleteBackward`, `deleteForward`) so shortcuts work reliably inside Notion, Feishu/Lark, Google Docs, and Monaco/CodeMirror editors.
+- **Smart Main-Container Scrolling & Scroll Telemetry (`PageController.scroll`)**: automatically detects inner SPA scroll containers (`main`, `div` with `overflow-y: auto|scroll`) instead of scrolling a hardcoded coordinate, returning `{ scrolled, scrollX, scrollY, maxScrollY, percentY, atTop, atBottom, container }`.
+- **Visual Zoom-In Crop & Coordinate Grid Screenshots (`browser_screenshot` / `browserpilot screenshot`)**: added `zoom` (2x upscaled region crop for Canvas/Figma/tiny icons) and `grid` / `gridStep` (translucent pixel coordinate ruler overlay, auto-cleaned after capture) plus `--clip`, `--zoom`, `--grid` CLI flags.
+- **Batch Form Filler (`browser_fill_form`, `browserpilot fill-form`, sandbox `fillForm()`)** and multi-browser `--client <id>` CLI targeting (45 MCP tools total).
+- Added real-Chromium E2E verification suite `packages/core/test/v13-ux.test.ts` covering occlusion detection, native editor commands, smart inner-container scroll, zoom+grid screenshots, batch form filling, and interactive human handoff.
+
+### Fixed
+- **macOS Chromium `Meta`/`Control` Key Combo Stability (`PageController.pressKey`)**: tracked active modifier bitmasks across `keyDown`/`keyUp` modifier transitions to prevent Chromium macOS input-dispatcher stalls after `Cmd+A` / `Cmd+C` / `Cmd+V` shortcuts.
+- **OOPIF Cross-Origin Frame Stability Check & Self-Overlay Click Guard (`PageController.ensureClickActionable`)**: preserved iframe viewport offsets during pre-click stability checks and ignored/cleared BrowserPilot's own floating control capsule if an interactive target sits behind it.
+
 ## [1.2.6] - 2026-11-24
 
 ### Fixed

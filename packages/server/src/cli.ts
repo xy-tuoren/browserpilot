@@ -162,12 +162,14 @@ Direct Quick Commands:
   browserpilot snapshot [--tab <id>] [--search <regex>] [--scope <css>] [--full]
   browserpilot markdown [--search <regex>] [--full] [--tab <id>]
   browserpilot html [--selector <css>] [--search <regex>] [--full] [--tab <id>]
-  browserpilot click <ref|selector> [--tab <id>]
+  browserpilot click <ref|selector> [--force] [--tab <id>]
   browserpilot fill <ref|selector> <value> [--tab <id>]
+  browserpilot fill-form '<json-fields>' [--tab <id>]
   browserpilot hover <ref|selector> [--tab <id>]
   browserpilot scroll [down|up|left|right] [--amount <px>] [--target <ref|sel>] [--tab <id>]
   browserpilot wait [--selector <css>] [--text <str>] [--ms <N>] [--timeout <ms>] [--tab <id>]
-  browserpilot screenshot [outputPath] [--full-page] [--tab <id>]
+  browserpilot handoff "<message>" [--timeout <ms>] [--tab <id>]
+  browserpilot screenshot [outputPath] [--full-page] [--grid] [--zoom x,y,w,h] [--clip x,y,w,h] [--tab <id>]
   browserpilot labeled-screenshot [outputPath] [--tab <id>]
   browserpilot console [--level error] [--search <str>] [--since-last] [--tab <id>]
   browserpilot network [--failed] [--search <str>] [--request-id <id>] [--tab <id>]
@@ -503,8 +505,18 @@ async function main(): Promise<void> {
   }
 
   const client = await DaemonClient.connectOrStart()
+  const clientId = typeof flags.client === 'string' ? flags.client : undefined
   const tabId = typeof flags.tab === 'string' ? Number(flags.tab) : undefined
   const sessionId = typeof flags.s === 'string' ? flags.s : typeof flags.session === 'string' ? flags.session : undefined
+
+  const parseRect = (raw: unknown): { x: number; y: number; width: number; height: number } | undefined => {
+    if (typeof raw !== 'string') return undefined
+    const nums = raw.split(',').map((s) => Number(s.trim()))
+    if (nums.length !== 4 || nums.some((n) => !Number.isFinite(n))) {
+      throw new Error(`Expected x,y,width,height numeric tuple, got "${raw}"`)
+    }
+    return { x: nums[0], y: nums[1], width: nums[2], height: nums[3] }
+  }
 
   if (cmd === 'connect-cdp') {
     const endpoint = positional[1] || 'http://127.0.0.1:9222'
@@ -571,7 +583,7 @@ async function main(): Promise<void> {
       printToolOutput(await client.callTool('browser_status'))
       return
     case 'tabs':
-      printToolOutput(await client.callTool('browser_tabs'))
+      printToolOutput(await client.callTool('browser_tabs', { clientId }))
       return
     case 'open':
       printToolOutput(
@@ -579,6 +591,7 @@ async function main(): Promise<void> {
           url: positional[1] || 'about:blank',
           tabGroup: typeof flags['tab-group'] === 'string' ? flags['tab-group'] : undefined,
           sessionId,
+          clientId,
         }),
       )
       return
@@ -639,7 +652,33 @@ async function main(): Promise<void> {
       )
       return
     case 'click':
-      printToolOutput(await client.callTool('browser_click', { target: positional[1], tabId, sessionId }))
+      printToolOutput(
+        await client.callTool('browser_click', {
+          target: positional[1],
+          force: Boolean(flags.force),
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
+      return
+    case 'fill-form': {
+      const rawFields = positional[1]
+      if (!rawFields) throw new Error('Provide JSON array of fields: browserpilot fill-form \'[{"target":"#name","value":"Alice"}]\'')
+      const fields = JSON.parse(rawFields) as unknown[]
+      printToolOutput(await client.callTool('browser_fill_form', { fields, tabId, sessionId, clientId }))
+      return
+    }
+    case 'handoff':
+      printToolOutput(
+        await client.callTool('browser_handoff', {
+          message: positional[1] || 'Please complete this step in Chrome, then click "Done, Continue AI".',
+          timeoutMs: typeof flags.timeout === 'string' ? Number(flags.timeout) : undefined,
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
       return
     case 'hover':
       printToolOutput(await client.callTool('browser_hover', { target: positional[1], tabId, sessionId }))
@@ -680,16 +719,26 @@ async function main(): Promise<void> {
     case 'key':
       printToolOutput(await client.callTool('browser_press_key', { key: positional[1], tabId, sessionId }))
       return
-    case 'screenshot':
+    case 'screenshot': {
+      const zoomRect = parseRect(flags.zoom)
+      const clipRect = parseRect(flags.clip)
       printToolOutput(
         await client.callTool('browser_screenshot', {
           path: positional[1] || `browserpilot-shot-${Date.now()}.png`,
           fullPage: Boolean(flags['full-page']),
+          grid: Boolean(flags.grid),
+          gridStep: typeof flags['grid-step'] === 'string' ? Number(flags['grid-step']) : undefined,
+          clip: clipRect,
+          zoom: zoomRect
+            ? { ...zoomRect, scale: typeof flags.scale === 'string' ? Number(flags.scale) : 2 }
+            : undefined,
           tabId,
           sessionId,
+          clientId,
         }),
       )
       return
+    }
     case 'labeled-screenshot':
       printToolOutput(
         await client.callTool('browser_labeled_screenshot', {

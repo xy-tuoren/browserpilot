@@ -64,12 +64,12 @@ browserpilot exec -s "$SID" -e '
 '
 ```
 
-Available sandbox globals: `state`, `tabs` (`list`, `open`, `use`, `current`, `close`), `snapshot`, `screenshot`, `screenshotWithLabels`, `cleanHTML`, `markdown`, `inspect`, `getLatestLogs`, `getNetwork`, `getStyles`, `getReactInfo`, `waitForPageLoad`, `waitForSelector`, `waitForText`, `downloads`, `actionRecorder`, `cdp`, `sleep`, `createDemoVideo`.
+Available sandbox globals: `state`, `tabs` (`list`, `open`, `use`, `current`, `close`), `snapshot`, `screenshot` (supports `grid`, `zoom`), `screenshotWithLabels`, `cleanHTML`, `markdown`, `inspect`, `fillForm`, `handoff`, `getLatestLogs`, `getNetwork`, `getStyles`, `getReactInfo`, `waitForPageLoad`, `waitForSelector`, `waitForText`, `downloads`, `actionRecorder`, `cdp`, `sleep`, `createDemoVideo`.
 
 ## 4. Safety & Pitfalls
 
 - **Confirm before irreversible actions**: ask the user before submitting payments, deletions, account/security modifications, or publishing public posts.
-- **Never bypass CAPTCHAs or 2FA**: if a page shows Cloudflare Turnstile, reCAPTCHA, passkey, or OTP prompts, stop and let the user complete it directly in Chrome.
+- **Human Handoff for CAPTCHAs / 2FA / Manual steps**: never bypass Cloudflare Turnstile, reCAPTCHA, passkeys, or OTP prompts — use `browser_handoff` / `browserpilot handoff "<instruction>"` so an in-page "Your Turn" card appears in Chrome and resumes automatically when the user clicks "Done, Continue AI".
 - **Debugger conflict**: if Chrome reports `Another debugger is already attached`, Chrome DevTools or another extension (e.g. Playwriter) holds that tab — ask the user to close DevTools on that tab or open a fresh tab with `browserpilot open`.
 - **Restricted URLs**: Chrome forbids attaching to `chrome://`, `chrome-extension://`, `devtools://`, and Chrome Web Store pages.
 - **Profile safety**: never attempt profile-wide cookie/cache wipes (blocked by BrowserPilot); use page-scoped `browser_cookies` instead.
