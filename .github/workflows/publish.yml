@@ -4,9 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   publish:
@@ -18,9 +20,12 @@ jobs:
           version: 12
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-          registry-url: 'https://registry.npmjs.org'
+          node-version: 24
           cache: pnpm
+      - name: Ensure npm >= 11.5.1 for OIDC Trusted Publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
       - name: Install ffmpeg & Chrome for Testing
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
@@ -34,23 +39,21 @@ jobs:
           pnpm build
           pnpm typecheck
           pnpm -r --workspace-concurrency=1 test
-      - name: Publish browserpilot to npm
-        if: env.NPM_TOKEN != ''
+      - name: Publish browserpilot-cdp to npm (OIDC Trusted Publishing)
         working-directory: packages/server
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Package Extension ZIP
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          (cd packages/extension/dist && zip -rq "$GITHUB_WORKSPACE/browserpilot-extension-${TAG}.zip" .)
-      - name: Create or Update GitHub Release
+        run: npm publish --provenance --access public
+      - name: Package Extension ZIP & Update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          PKG_VER=$(node -p "require('./packages/server/package.json').version")
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="v${PKG_VER}"
+          fi
           ZIP="browserpilot-extension-${TAG}.zip"
+          (cd packages/extension/dist && zip -rq "$GITHUB_WORKSPACE/$ZIP" .)
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$ZIP" --clobber
           else

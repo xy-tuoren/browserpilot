@@ -5,6 +5,7 @@ All notable changes to **BrowserPilot** (formerly DevPilot) are documented in th
 ## [1.2.0] - 2026-11-24
 
 ### Added
+- **npm OIDC Trusted Publishing (`.github/workflows/publish.yml`)**: upgraded release workflow to `id-token: write`, `--provenance`, Node 24 / `npm@latest`, and `workflow_dispatch` so releases publish automatically to npm without static `NPM_TOKEN` secrets or manual 2FA prompts.
 - **Download Tracking & Wait API (`DownloadManager`, `browser_downloads`, `browserpilot downloads`)**: tracks file downloads across both Direct CDP (`Browser.setDownloadBehavior` with `allowAndName` + automatic rename to clean `suggestedFilename`) and Chrome Extension mode (`chrome.downloads` permission + live event bridge), exposing `configure`, `list`, `wait`, and `clear`.
 - **Live User Action Recorder & Skill Generator (`ActionRecorder`, `browser_action_recorder`, `browserpilot record-actions`)**: captures real user clicks, debounced inputs (with automatic password masking), `<select>` changes, key presses, scrolls, and cross-page navigations via CDP `Runtime.addBinding`, generating compressed `RecordedStep[]`, `browser_batch` JSON, replayable `browserpilot exec` JS scripts, and ready-to-save Agent Skill Markdown.
 - **Enhanced Video Recording (`ScreenRecorder` + Smart Idle-Only `createDemoVideo`)**:
