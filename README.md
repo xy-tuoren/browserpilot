@@ -53,7 +53,7 @@ AI Coding Agents (Claude Code / Cursor / Codex / Antigravity / Custom SDK)
 ### Option 1: Install from npm (Recommended)
 
 ```bash
-npm install -g browserpilot
+npm install -g browserpilot-cdp
 browserpilot setup
 ```
 
@@ -68,7 +68,7 @@ browserpilot setup
      "mcpServers": {
        "browserpilot": {
          "command": "npx",
-         "args": ["-y", "browserpilot@latest", "mcp"]
+         "args": ["-y", "browserpilot-cdp@latest", "mcp"]
        }
      }
    }
@@ -91,7 +91,7 @@ Or connect directly to a `--remote-debugging-port` Chrome without an extension:
   "mcpServers": {
     "browserpilot": {
       "command": "npx",
-      "args": ["-y", "browserpilot@latest", "mcp", "--cdp", "http://127.0.0.1:9222"]
+      "args": ["-y", "browserpilot-cdp@latest", "mcp", "--cdp", "http://127.0.0.1:9222"]
     }
   }
 }

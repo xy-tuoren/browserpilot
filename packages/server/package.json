@@ -1,5 +1,5 @@
 {
-  "name": "browserpilot",
+  "name": "browserpilot-cdp",
   "version": "1.1.0",
   "description": "Zero-click, pure-CDP Chrome Extension, MCP Server & CLI for AI Agents to control, inspect, and debug real browsers.",
   "license": "MIT",

@@ -10,7 +10,7 @@
     "build": "pnpm -r --workspace-concurrency=1 build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "test:e2e": "pnpm --filter browserpilot test:e2e",
+    "test:e2e": "pnpm --filter browserpilot-cdp test:e2e",
     "pack:npm": "pnpm build && cd packages/server && npm pack",
     "clean": "pnpm -r clean"
   },
