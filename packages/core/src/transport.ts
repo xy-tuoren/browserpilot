@@ -4,6 +4,7 @@ import {
   DEFAULT_CDP_TIMEOUT_MS,
   isBlockedProfileWideCommand,
   type BoundingBox,
+  type DownloadEntry,
   type SomLabelItem,
   type TabGroupColor,
   type TabInfo,
@@ -50,6 +51,8 @@ export interface CDPTransport {
   onEvent(listener: (event: CDPEventPacket) => void): () => void
   onTabDetached?(listener: (tabId: number, reason: string) => void): () => void
   onPopupOpened?(listener: (info: { openerTabId: number; tabId: number; url: string }) => void): () => void
+  onDownloadEvent?(listener: (entry: DownloadEntry) => void): () => void
+  listDownloads?(): Promise<DownloadEntry[]>
   listTabs(): Promise<TabInfo[]>
   createTab(options?: CreateTabOptions): Promise<TabInfo>
   closeTab(tabId: number): Promise<void>

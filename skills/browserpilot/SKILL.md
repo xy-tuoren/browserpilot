@@ -15,7 +15,7 @@ Use the `browser_*` tools directly:
 - **Perceive**: `browser_snapshot` (AXTree + short `e1`/`e2` refs + automatic diffing), `browser_labeled_screenshot` (Set-of-Mark), `browser_screenshot`, `browser_clean_html`, `browser_markdown`, `browser_inspect_element`
 - **Act**: `browser_click`, `browser_fill`, `browser_type`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_drag`, `browser_select_option`, `browser_upload_file`, `browser_handle_dialog`, `browser_wait`
 - **Debug**: `browser_console`, `browser_network`, `browser_network_intercept`, `browser_styles`, `browser_react_info`, `browser_debugger`, `browser_live_edit`, `browser_performance`, `browser_emulate`, `browser_cookies`, `browser_storage`, `browser_evaluate`, `browser_cdp`
-- **Record & Sandbox**: `browser_record`, `browser_exec`
+- **Record & Sandbox**: `browser_downloads`, `browser_action_recorder`, `browser_record`, `browser_exec`
 
 ### Via CLI (`browserpilot`)
 ```bash

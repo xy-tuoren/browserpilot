@@ -682,6 +682,23 @@ async function executeBridgeMethod(method: string, params: Record<string, unknow
       return rec?.lastPinnedVar ? { globalVar: rec.lastPinnedVar, url: tab?.url } : null
     }
 
+    case 'downloads.list': {
+      if (!chrome.downloads?.search) return { downloads: [] }
+      const items = await chrome.downloads.search({ limit: 50, orderBy: ['-startTime'] })
+      const downloads = items.map((d) => ({
+        id: String(d.id),
+        url: d.finalUrl || d.url || '',
+        suggestedFilename: d.filename ? d.filename.split(/[\\/]/).pop() || d.filename : 'download.bin',
+        filePath: d.filename || undefined,
+        state: d.state === 'complete' ? 'completed' : d.state === 'interrupted' ? 'canceled' : 'in_progress',
+        receivedBytes: d.bytesReceived ?? 0,
+        totalBytes: d.totalBytes && d.totalBytes > 0 ? d.totalBytes : undefined,
+        startedAt: d.startTime ? Date.parse(d.startTime) : Date.now(),
+        completedAt: d.endTime ? Date.parse(d.endTime) : undefined,
+      }))
+      return { downloads }
+    }
+
     default:
       throw new Error(`Unknown extension RPC method: ${method}`)
   }
@@ -829,6 +846,39 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     }
   })()
 })
+
+// Track browser downloads via chrome.downloads API and forward updates over the bridge
+if (chrome.downloads?.onCreated) {
+  const toDownloadEntry = (d: chrome.downloads.DownloadItem) => ({
+    id: String(d.id),
+    url: d.finalUrl || d.url || '',
+    suggestedFilename: d.filename ? d.filename.split(/[\\/]/).pop() || d.filename : 'download.bin',
+    filePath: d.filename || undefined,
+    state: d.state === 'complete' ? 'completed' : d.state === 'interrupted' ? 'canceled' : 'in_progress',
+    receivedBytes: d.bytesReceived ?? 0,
+    totalBytes: d.totalBytes && d.totalBytes > 0 ? d.totalBytes : undefined,
+    startedAt: d.startTime ? Date.parse(d.startTime) : Date.now(),
+    completedAt: d.endTime ? Date.parse(d.endTime) : undefined,
+  })
+
+  chrome.downloads.onCreated.addListener((item) => {
+    sendEvent('download.updated', { download: toDownloadEntry(item) })
+  })
+
+  chrome.downloads.onChanged.addListener((delta) => {
+    void chrome.downloads
+      .search({ id: delta.id })
+      .then(([item]) => {
+        if (item) {
+          sendEvent('download.updated', { download: toDownloadEntry(item) })
+          if (item.state === 'complete') {
+            logActivity('download.complete', 'ok', item.filename || item.url)
+          }
+        }
+      })
+      .catch(() => {})
+  })
+}
 
 // Popup & Side Panel IPC
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

@@ -7,6 +7,7 @@ import {
   type BridgeMessage,
   type BridgeRequest,
   type BridgeResponse,
+  type DownloadEntry,
   type TabInfo,
 } from '@browserpilot/protocol'
 import type { AttachTabOptions, CDPEventPacket, CDPSendOptions, CDPTransport, CreateTabOptions } from './transport.js'
@@ -86,6 +87,8 @@ export class ExtensionBridgeTransport implements CDPTransport {
           tabId: Number(params.tabId),
           url: String(params.url ?? ''),
         })
+      } else if (ev.event === 'download.updated' && params.download) {
+        this.events.emit('download-event', params.download as DownloadEntry)
       }
       this.events.emit('extension-event', ev)
     }
@@ -153,6 +156,16 @@ export class ExtensionBridgeTransport implements CDPTransport {
   onPopupOpened(listener: (info: { openerTabId: number; tabId: number; url: string }) => void): () => void {
     this.events.on('popup-opened', listener)
     return () => this.events.off('popup-opened', listener)
+  }
+
+  onDownloadEvent(listener: (entry: DownloadEntry) => void): () => void {
+    this.events.on('download-event', listener)
+    return () => this.events.off('download-event', listener)
+  }
+
+  async listDownloads(): Promise<DownloadEntry[]> {
+    const res = await this.rpc<{ downloads: DownloadEntry[] }>('downloads.list')
+    return res.downloads ?? []
   }
 
   onClose(listener: () => void): () => void {

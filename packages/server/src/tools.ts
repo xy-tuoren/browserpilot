@@ -648,7 +648,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'browser_record',
-    description: 'Record the active tab as an MP4/WebM video via CDP screencast + ffmpeg, or speed up a recording into a demo video.',
+    description:
+      'Record the active tab as an MP4/WebM video via CDP screencast + ffmpeg (optional page audio capture), or create a smart idle-sped-up demo video.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -656,7 +657,44 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         outputPath: { type: 'string' },
         recordingPath: { type: 'string' },
         frameRate: { type: 'number' },
-        speed: { type: 'number' },
+        audio: { type: 'boolean', description: 'Tap page <audio>/<video>/AudioContext into the recording (default false)' },
+        speed: { type: 'number', description: 'Speed multiplier for idle gaps (default 6 when actionTimestamps given, else 2)' },
+        durationMs: { type: 'number' },
+        actionTimestamps: { type: 'array', items: { type: 'number' }, description: 'Timestamps from stop() so only idle gaps are sped up while interactions stay 1x' },
+        paddingMs: { type: 'number' },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'browser_downloads',
+    description: 'Configure download directory, list downloads, or wait for a file download to finish and return its local file path.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['configure', 'list', 'wait', 'clear'] },
+        downloadDir: { type: 'string', description: 'Target folder for Direct CDP downloads' },
+        filenamePattern: { type: 'string', description: 'Optional substring/regex to match downloaded filename' },
+        timeoutMs: { type: 'number' },
+        sinceTimestamp: { type: 'number' },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'browser_action_recorder',
+    description:
+      'Record live user interactions (clicks, fills, selects, keys, scrolls, navigations) across page loads and generate reusable browser_batch steps, exec JS script, and Agent Skill Markdown.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['start', 'stop', 'status'] },
+        maskPasswords: { type: 'boolean', description: 'Mask password inputs as <REDACTED_PASSWORD> (default true)' },
+        format: { type: 'string', enum: ['all', 'batch', 'script', 'skill'] },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
@@ -1302,8 +1340,9 @@ export async function executeTool(
           const out = await tab.recorder.start({
             outputPath: String(args.outputPath ?? `./browserpilot-recording-${Date.now()}.mp4`),
             frameRate: args.frameRate as number | undefined,
+            audio: args.audio as boolean | undefined,
           })
-          return textResult(`Recording started -> ${out.outputPath}`)
+          return textResult(`Recording started -> ${out.outputPath}${out.audio ? ' (audio tap enabled)' : ''}`)
         }
         if (action === 'stop') {
           const res = await tab.recorder.stop()
@@ -1318,10 +1357,71 @@ export async function executeTool(
             recordingPath: String(args.recordingPath),
             outputPath: args.outputPath as string | undefined,
             speed: args.speed as number | undefined,
+            durationMs: args.durationMs as number | undefined,
+            actionTimestamps: args.actionTimestamps as number[] | undefined,
+            paddingMs: args.paddingMs as number | undefined,
           })
           return textResult(`Created demo video -> ${out}`)
         }
         throw new Error(`Unknown record action: ${action}`)
+      }
+
+      case 'browser_downloads': {
+        const tab = await resolveTab()
+        const action = String(args.action)
+        if (action === 'configure') {
+          const res = await tab.downloads.configure(args.downloadDir as string | undefined)
+          return textResult(JSON.stringify(res, null, 2))
+        }
+        if (action === 'list') {
+          const list = await tab.downloads.list()
+          return textResult(JSON.stringify(list, null, 2))
+        }
+        if (action === 'wait') {
+          const entry = await tab.downloads.waitForDownload({
+            timeoutMs: args.timeoutMs as number | undefined,
+            filenamePattern: args.filenamePattern as string | undefined,
+            sinceTimestamp: args.sinceTimestamp as number | undefined,
+          })
+          return textResult(JSON.stringify(entry, null, 2))
+        }
+        if (action === 'clear') {
+          tab.downloads.clear()
+          return textResult('Cleared tracked downloads')
+        }
+        throw new Error(`Unknown downloads action: ${action}`)
+      }
+
+      case 'browser_action_recorder': {
+        const tab = await resolveTab()
+        const action = String(args.action)
+        if (action === 'start') {
+          const res = await tab.actionRecorder.start({
+            maskPasswords: args.maskPasswords as boolean | undefined,
+          })
+          return textResult(`Action recording started on ${res.url || `tab [${tab.tabId}]`}`)
+        }
+        if (action === 'status') {
+          return textResult(
+            JSON.stringify(
+              {
+                recording: tab.actionRecorder.isRecording(),
+                recordedSteps: tab.actionRecorder.getSteps().length,
+              },
+              null,
+              2,
+            ),
+          )
+        }
+        if (action === 'stop') {
+          const res = await tab.actionRecorder.stop()
+          const fmt = String(args.format ?? 'all')
+          if (fmt === 'skill') return textResult(res.skillMarkdown)
+          if (fmt === 'script') return textResult(res.execScript)
+          if (fmt === 'batch') return textResult(JSON.stringify(res.batchSteps, null, 2))
+          return textResult(JSON.stringify(res, null, 2))
+        }
+        throw new Error(`Unknown action_recorder action: ${action}`)
       }
 
       case 'browser_exec': {

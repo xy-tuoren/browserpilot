@@ -2,6 +2,17 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
+## [1.2.0] - 2026-11-24
+
+### Added
+- **Download Tracking & Wait API (`DownloadManager`, `browser_downloads`, `browserpilot downloads`)**: tracks file downloads across both Direct CDP (`Browser.setDownloadBehavior` with `allowAndName` + automatic rename to clean `suggestedFilename`) and Chrome Extension mode (`chrome.downloads` permission + live event bridge), exposing `configure`, `list`, `wait`, and `clear`.
+- **Live User Action Recorder & Skill Generator (`ActionRecorder`, `browser_action_recorder`, `browserpilot record-actions`)**: captures real user clicks, debounced inputs (with automatic password masking), `<select>` changes, key presses, scrolls, and cross-page navigations via CDP `Runtime.addBinding`, generating compressed `RecordedStep[]`, `browser_batch` JSON, replayable `browserpilot exec` JS scripts, and ready-to-save Agent Skill Markdown.
+- **Enhanced Video Recording (`ScreenRecorder` + Smart Idle-Only `createDemoVideo`)**:
+  - Added optional `audio: true` Web Audio / `<audio>` / `<video>` MediaRecorder tapping muxed cleanly via `ffmpeg` (with graceful video-only fallback on silent pages).
+  - Upgraded `createDemoVideo` with `computeDemoSegments` and multi-segment `ffmpeg` `filter_complex` so interaction moments stay at **1x real speed** while idle waiting periods fast-forward at `idleSpeed`x (default 6x).
+- Expanded MCP Server to **43 tools** and exposed `downloads` & `actionRecorder` directly in the stateful JS sandbox.
+- Added unit tests and full real-Chromium E2E verification (`packages/core/test/parity-v12.test.ts`).
+
 ## [1.1.0] - 2026-11-23
 
 ### Changed

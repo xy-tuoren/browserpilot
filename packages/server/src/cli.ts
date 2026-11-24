@@ -125,6 +125,8 @@ Direct Quick Commands:
   browserpilot react <ref|selector> [--tab <id>]
   browserpilot eval '<js>' [--tab <id>]
   browserpilot perf [metrics|heap|trace_start|trace_stop|cpu_start|cpu_stop] [--tab <id>]
+  browserpilot downloads [list|wait|clear] [--dir <path>] [--tab <id>]
+  browserpilot record-actions [start|stop|status] [--format all|skill|script|batch] [--tab <id>]
   browserpilot skill                                     Output complete AI agent skill documentation
 `)
 }
@@ -526,6 +528,28 @@ async function main(): Promise<void> {
       return
     case 'perf':
       printToolOutput(await client.callTool('browser_performance', { action: positional[1] || 'metrics', tabId, sessionId }))
+      return
+    case 'downloads':
+      printToolOutput(
+        await client.callTool('browser_downloads', {
+          action: positional[1] || 'list',
+          downloadDir: typeof flags.dir === 'string' ? flags.dir : undefined,
+          filenamePattern: typeof flags.pattern === 'string' ? flags.pattern : undefined,
+          timeoutMs: typeof flags.timeout === 'string' ? Number(flags.timeout) : undefined,
+          tabId,
+          sessionId,
+        }),
+      )
+      return
+    case 'record-actions':
+      printToolOutput(
+        await client.callTool('browser_action_recorder', {
+          action: positional[1] || 'status',
+          format: typeof flags.format === 'string' ? flags.format : undefined,
+          tabId,
+          sessionId,
+        }),
+      )
       return
     default:
       throw new Error(`Unknown command "${cmd}". Run "browserpilot --help" for usage.`)

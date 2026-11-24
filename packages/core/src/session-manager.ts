@@ -345,6 +345,18 @@ export class SessionManager {
         const t = await getTab(tab)
         return await t.session.send(method, params)
       },
+      downloads: {
+        configure: async (downloadDir?: string, tab?: BrowserPilotTab) => (await getTab(tab)).downloads.configure(downloadDir),
+        list: async (tab?: BrowserPilotTab) => (await getTab(tab)).downloads.list(),
+        waitFor: async (opts?: { timeoutMs?: number; filenamePattern?: string | RegExp; tab?: BrowserPilotTab }) =>
+          (await getTab(opts?.tab)).downloads.waitForDownload(opts),
+      },
+      actionRecorder: {
+        start: async (opts?: { maskPasswords?: boolean; tab?: BrowserPilotTab }) =>
+          (await getTab(opts?.tab)).actionRecorder.start(opts),
+        stop: async (tab?: BrowserPilotTab) => (await getTab(tab)).actionRecorder.stop(),
+        steps: async (tab?: BrowserPilotTab) => (await getTab(tab)).actionRecorder.getSteps(),
+      },
       createDemoVideo,
     }
 

@@ -383,6 +383,8 @@ export interface RecordingOptions {
   quality?: number
   maxDurationMs?: number
   showGhostCursor?: boolean
+  /** Tap page <audio>/<video>/AudioContext into the recorded video (default false) */
+  audio?: boolean
 }
 
 export interface RecordingResult {
@@ -391,4 +393,36 @@ export interface RecordingResult {
   frameCount: number
   sizeBytes: number
   actionTimestamps: number[]
+  hasAudio?: boolean
+}
+
+export interface DownloadEntry {
+  id: string
+  url: string
+  suggestedFilename: string
+  filePath?: string
+  state: 'in_progress' | 'completed' | 'canceled'
+  receivedBytes: number
+  totalBytes?: number
+  startedAt: number
+  completedAt?: number
+}
+
+export interface RecordedStep {
+  timestamp: number
+  action: 'navigate' | 'click' | 'fill' | 'select_option' | 'press_key' | 'scroll'
+  url: string
+  target?: string
+  value?: string
+  key?: string
+  text?: string
+  coordinates?: { x: number; y: number }
+}
+
+export interface ActionRecordingResult {
+  durationMs: number
+  steps: RecordedStep[]
+  batchSteps: Array<Record<string, unknown>>
+  execScript: string
+  skillMarkdown: string
 }

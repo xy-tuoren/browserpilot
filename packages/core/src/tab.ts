@@ -1,7 +1,9 @@
 import type { ActionFeedback } from '@browserpilot/protocol'
+import { ActionRecorder } from './action-recorder.js'
 import { TabCDPSession } from './cdp-client.js'
 import { ConsoleCollector } from './console-collector.js'
 import { DOMExtractor } from './dom-extract.js'
+import { DownloadManager } from './downloads.js'
 import { JSDebugger, LiveEditor } from './js-debugger.js'
 import { NetworkInspector } from './network-inspector.js'
 import { PageController } from './page-controller.js'
@@ -30,6 +32,8 @@ export class BrowserPilotTab {
   readonly editor: LiveEditor
   readonly performance: PerformanceProfiler
   readonly recorder: ScreenRecorder
+  readonly downloads: DownloadManager
+  readonly actionRecorder: ActionRecorder
   private initialized = false
 
   constructor(transport: CDPTransport, tabId: number) {
@@ -45,6 +49,8 @@ export class BrowserPilotTab {
     this.editor = new LiveEditor(this.session, this.debugger)
     this.performance = new PerformanceProfiler(this.session)
     this.recorder = new ScreenRecorder(this.session)
+    this.downloads = new DownloadManager(this.session)
+    this.actionRecorder = new ActionRecorder(this.session)
   }
 
   async ensureInitialized(): Promise<void> {
@@ -92,6 +98,8 @@ export class BrowserPilotTab {
 
   dispose(): void {
     void this.recorder.cancel().catch(() => {})
+    this.downloads.dispose()
+    this.actionRecorder.dispose()
     this.console.dispose()
     this.network.dispose()
     this.styles.dispose()
