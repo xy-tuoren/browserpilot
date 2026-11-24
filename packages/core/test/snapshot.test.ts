@@ -42,6 +42,14 @@ describe('Snapshot & Wait helpers', () => {
     expect(filtered).toContain('URL: https://example.com')
     expect(filtered).toContain('[e2] button "Checkout"')
     expect(filtered).not.toContain('heading "Title"')
+
+    // String regex alternation and invalid-regex literal fallback
+    const altFiltered = filterSnapshotLines(text, 'Home|Checkout')
+    expect(altFiltered).toContain('[e1] link "Home"')
+    expect(altFiltered).toContain('[e2] button "Checkout"')
+
+    const literalFallback = filterSnapshotLines(text, '[e2')
+    expect(literalFallback).toContain('[e2] button "Checkout"')
   })
 
   it('returns concise diff or "No changes" when snapshots match', () => {

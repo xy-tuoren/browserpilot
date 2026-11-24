@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import WebSocket from 'ws'
 import {
-  encodeNativeMessage,
+  encodeNativeMessageFrames,
+  NATIVE_INCOMING_MAX_BYTES,
   NativeMessageDecoder,
   type BridgeMessage,
   type ExtensionHelloMessage,
@@ -26,7 +27,9 @@ async function main(): Promise<void> {
 
   function writeNative(msg: BridgeMessage): void {
     try {
-      process.stdout.write(encodeNativeMessage(msg))
+      for (const frame of encodeNativeMessageFrames(msg)) {
+        process.stdout.write(frame)
+      }
     } catch {
       process.exit(0)
     }
@@ -86,7 +89,8 @@ async function main(): Promise<void> {
 
   void connectDaemon(false)
 
-  const decoder = new NativeMessageDecoder()
+  // Chrome allows up to 64MB for extension -> native host stdin messages (e.g., AXTree, CSS, Retina PNG)
+  const decoder = new NativeMessageDecoder(NATIVE_INCOMING_MAX_BYTES)
   process.stdin.on('data', (chunk: Buffer) => {
     try {
       const messages = decoder.push(chunk) as BridgeMessage[]
@@ -104,7 +108,7 @@ async function main(): Promise<void> {
         }
       }
     } catch {
-      process.exit(1)
+      decoder.reset()
     }
   })
 

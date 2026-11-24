@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
+  BridgeChunkReassembler,
   encodeNativeMessage,
+  encodeNativeMessageFrames,
+  NATIVE_INCOMING_MAX_BYTES,
   NativeMessageDecoder,
   isBlockedProfileWideCommand,
   isRestrictedUrl,
   isUrlAllowedByDomainRules,
   matchesDomainPattern,
+  type BridgeChunkMessage,
 } from '../src/index.js'
 
 describe('@browserpilot/protocol', () => {
@@ -38,6 +42,32 @@ describe('@browserpilot/protocol', () => {
       const badHeader = Buffer.alloc(8)
       badHeader.writeUInt32LE(128, 0)
       expect(() => decoder.push(badHeader)).toThrow(/exceeds limit/)
+    })
+
+    it('supports >1MB incoming extension->host messages (up to 64MB) and chunks large outgoing frames', () => {
+      // Simulate a 1.5MB CDP response (e.g. GitHub CSS/AXTree/Retina screenshot) from Chrome -> Native Host
+      const bigIncoming = { type: 'response', id: 'big1', ok: true, result: { blob: 'A'.repeat(1_500_000) } }
+      const rawJson = Buffer.from(JSON.stringify(bigIncoming), 'utf8')
+      const header = Buffer.alloc(4)
+      header.writeUInt32LE(rawJson.length, 0)
+      const decoder = new NativeMessageDecoder(NATIVE_INCOMING_MAX_BYTES)
+      const decoded = decoder.push(Buffer.concat([header, rawJson]))
+      expect(decoded).toEqual([bigIncoming])
+
+      // Outgoing host -> extension chunking under Chrome's 1MB cap
+      const bigOutgoing = { type: 'request', id: 'req-big', method: 'cdp.send', params: { code: 'B'.repeat(1_200_000) } }
+      const frames = encodeNativeMessageFrames(bigOutgoing)
+      expect(frames.length).toBeGreaterThan(1)
+      const frameDecoder = new NativeMessageDecoder()
+      const reassembler = new BridgeChunkReassembler()
+      let assembled: unknown = null
+      for (const f of frames) {
+        for (const msg of frameDecoder.push(f) as BridgeChunkMessage[]) {
+          expect(msg.type).toBe('chunk')
+          assembled = reassembler.push(msg)
+        }
+      }
+      expect(assembled).toEqual(bigOutgoing)
     })
   })
 

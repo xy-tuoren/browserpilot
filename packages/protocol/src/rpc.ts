@@ -1,4 +1,4 @@
-import { NATIVE_MESSAGE_MAX_BYTES } from './constants.js'
+import { NATIVE_CHUNK_MAX_CHARS, NATIVE_MESSAGE_MAX_BYTES } from './constants.js'
 
 /**
  * Bidirectional JSON-RPC message schema between Chrome Extension and Local Daemon / Native Host.
@@ -48,6 +48,14 @@ export interface BridgePong {
   ts: number
 }
 
+export interface BridgeChunkMessage {
+  type: 'chunk'
+  chunkId: string
+  index: number
+  total: number
+  data: string
+}
+
 export type BridgeMessage =
   | ExtensionHelloMessage
   | BridgeRequest
@@ -55,6 +63,7 @@ export type BridgeMessage =
   | BridgeEvent
   | BridgePing
   | BridgePong
+  | BridgeChunkMessage
 
 /**
  * Encode a JSON-serializable object into Chrome Native Messaging binary framing:
@@ -72,6 +81,69 @@ export function encodeNativeMessage(message: unknown): Buffer {
   frame.writeUInt32LE(payload.length, 0)
   payload.copy(frame, 4)
   return frame
+}
+
+let chunkSeq = 1
+
+/**
+ * Encodes a message into one or more Chrome Native Messaging frames, automatically
+ * splitting payloads that exceed Chrome's 1MB host->extension cap into `chunk` frames.
+ */
+export function encodeNativeMessageFrames(
+  message: unknown,
+  maxCharsPerChunk: number = NATIVE_CHUNK_MAX_CHARS,
+): Buffer[] {
+  const json = JSON.stringify(message)
+  const payload = Buffer.from(json, 'utf8')
+  if (payload.length <= NATIVE_MESSAGE_MAX_BYTES - 1024) {
+    const frame = Buffer.allocUnsafe(4 + payload.length)
+    frame.writeUInt32LE(payload.length, 0)
+    payload.copy(frame, 4)
+    return [frame]
+  }
+
+  const chunkId = `chk_${Date.now().toString(36)}_${chunkSeq++}`
+  const parts: string[] = []
+  for (let i = 0; i < json.length; i += maxCharsPerChunk) {
+    parts.push(json.slice(i, i + maxCharsPerChunk))
+  }
+  return parts.map((data, index) =>
+    encodeNativeMessage({
+      type: 'chunk',
+      chunkId,
+      index,
+      total: parts.length,
+      data,
+    } satisfies BridgeChunkMessage),
+  )
+}
+
+/**
+ * Reassembles chunked BridgeChunkMessage packets back into the original BridgeMessage.
+ */
+export class BridgeChunkReassembler {
+  private pending = new Map<string, { total: number; parts: Array<string | undefined>; received: number; createdAt: number }>()
+
+  push(chunk: BridgeChunkMessage): BridgeMessage | null {
+    const now = Date.now()
+    for (const [id, entry] of this.pending) {
+      if (now - entry.createdAt > 60_000) this.pending.delete(id)
+    }
+
+    let entry = this.pending.get(chunk.chunkId)
+    if (!entry) {
+      entry = { total: chunk.total, parts: new Array(chunk.total), received: 0, createdAt: now }
+      this.pending.set(chunk.chunkId, entry)
+    }
+    if (entry.parts[chunk.index] === undefined) {
+      entry.parts[chunk.index] = chunk.data
+      entry.received++
+    }
+    if (entry.received < entry.total) return null
+
+    this.pending.delete(chunk.chunkId)
+    return JSON.parse(entry.parts.join('')) as BridgeMessage
+  }
 }
 
 /**

@@ -2,6 +2,15 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
+## [1.2.3] - 2026-11-24
+
+### Fixed
+- **Large Payloads Over Chrome Native Messaging (64 MB Incoming + Automatic Outgoing Chunking)**:
+  - Raised `native-host.ts`'s incoming `NativeMessageDecoder` limit from 1 MB to Chrome's actual 64 MB extension-to-host limit (`NATIVE_INCOMING_MAX_BYTES`), preventing bridge disconnects on large real-world sites (e.g., GitHub `CSS.getMatchedStylesForNode`, large `Accessibility.getFullAXTree` snapshots, or full Retina PNG screenshots).
+  - Added automatic `encodeNativeMessageFrames` + `BridgeChunkReassembler` (`type: 'chunk'`) so host-to-extension payloads larger than Chrome's 1 MB stdout cap are chunked and reassembled transparently.
+- **Instant Native Messaging Auto-Reconnect (`background.ts`)**: once Native Messaging has connected at least once (`nativeEverConnected`), transient native-host restarts reconnect within 1 second instead of triggering a 30-second cooldown.
+- **Regex Search Support in `snapshot` / `cleanHTML` / `markdown` (`filterSnapshotLines`)**: string `--search` patterns (e.g. `"BrowserPilot|CHANGELOG|packages"`) now compile as case-insensitive regular expressions, with automatic literal-substring fallback if the pattern contains invalid regex syntax.
+
 ## [1.2.2] - 2026-11-24
 
 ### Fixed

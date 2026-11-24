@@ -252,7 +252,16 @@ export function filterSnapshotLines(fullText: string, search: string | RegExp, m
   const allLines = fullText.split('\n')
   const header = allLines[0]?.startsWith('URL:') ? allLines[0] : ''
   const body = header ? allLines.slice(1) : allLines
-  const regex = search instanceof RegExp ? search : new RegExp(escapeRegex(search), 'i')
+  let regex: RegExp
+  if (search instanceof RegExp) {
+    regex = search
+  } else {
+    try {
+      regex = new RegExp(search, 'i')
+    } catch {
+      regex = new RegExp(escapeRegex(search), 'i')
+    }
+  }
 
   const matchedIndices = new Set<number>()
   let count = 0

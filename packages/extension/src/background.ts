@@ -1,4 +1,5 @@
 import {
+  BridgeChunkReassembler,
   CDP_PROTOCOL_VERSION,
   DEFAULT_DAEMON_HOST,
   DEFAULT_DAEMON_PORT,
@@ -62,6 +63,8 @@ let transportMode: 'native' | 'websocket' | 'disconnected' = 'disconnected'
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 let nativeRetryAfter = 0
+let nativeEverConnected = false
+const chunkReassembler = new BridgeChunkReassembler()
 
 const attachedTabs = new Map<number, AttachedTabRecord>()
 const inFlightAttaches = new Map<number, Promise<AttachedTabRecord>>()
@@ -256,8 +259,8 @@ function disconnectTransport(): void {
 function handleTransportDisconnected(source: 'native' | 'websocket'): void {
   if (source === 'native') {
     nativePort = null
-    // Avoid hammering native messaging if host isn't installed yet; fall back to WebSocket
-    nativeRetryAfter = Date.now() + 30_000
+    // If Native Messaging has worked before, reconnect quickly (1s) instead of waiting 30s
+    nativeRetryAfter = nativeEverConnected ? 0 : Date.now() + 30_000
   } else {
     ws = null
   }
@@ -270,7 +273,7 @@ function handleTransportDisconnected(source: 'native' | 'websocket'): void {
     updateBadge()
     broadcastUiUpdate()
   }
-  scheduleConnect(source === 'native' ? 150 : 2_000)
+  scheduleConnect(source === 'native' ? (nativeEverConnected ? 1_000 : 150) : 2_000)
 }
 
 function scheduleConnect(delayMs: number): void {
@@ -294,6 +297,7 @@ async function connectBridge(): Promise<void> {
       let receivedValidTraffic = false
       port.onMessage.addListener((msg: unknown) => {
         receivedValidTraffic = true
+        nativeEverConnected = true
         void handleBridgeMessage(msg as BridgeMessage)
       })
       port.onDisconnect.addListener(() => {
@@ -547,6 +551,14 @@ async function detachTab(tabId: number): Promise<void> {
 
 async function handleBridgeMessage(msg: BridgeMessage): Promise<void> {
   if (!msg || typeof msg !== 'object') return
+
+  if (msg.type === 'chunk') {
+    const assembled = chunkReassembler.push(msg)
+    if (assembled) {
+      await handleBridgeMessage(assembled)
+    }
+    return
+  }
 
   if (msg.type === 'ping') {
     sendToBridge({ type: 'pong', ts: msg.ts })

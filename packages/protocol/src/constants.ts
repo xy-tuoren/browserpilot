@@ -1,11 +1,13 @@
-export const BROWSERPILOT_VERSION = '1.2.2'
+export const BROWSERPILOT_VERSION = '1.2.3'
 export const CDP_PROTOCOL_VERSION = '1.3'
 
 export const DEFAULT_DAEMON_HOST = '127.0.0.1'
 export const DEFAULT_DAEMON_PORT = 19888
 
 export const NATIVE_HOST_NAME = 'com.browserpilot.bridge'
-export const NATIVE_MESSAGE_MAX_BYTES = 1024 * 1024 // Chrome Native Messaging 1MB per-message cap
+export const NATIVE_MESSAGE_MAX_BYTES = 1024 * 1024 // Chrome Native Messaging 1MB host->extension cap
+export const NATIVE_INCOMING_MAX_BYTES = 64 * 1024 * 1024 // Chrome Native Messaging 64MB extension->host cap
+export const NATIVE_CHUNK_MAX_CHARS = 220_000 // <= ~660KB UTF-8 even for 3-byte CJK, safely under 1MB cap
 
 export const EXTENSION_KEEPALIVE_INTERVAL_MS = 20_000
 export const DEFAULT_CDP_TIMEOUT_MS = 15_000
