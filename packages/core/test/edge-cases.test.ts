@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { DirectCDPTransport, SessionManager } from '../src/index.js'
 
 const CHROME_CANDIDATES = [
-  process.env.DEVPILOT_CHROME_BIN,
+  process.env.BROWSERPILOT_CHROME_BIN,
   path.join(
     os.homedir(),
     'Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
@@ -41,7 +41,7 @@ async function getFreePort(): Promise<number> {
   })
 }
 
-describe('@devpilot/core edge cases: Cross-Origin OOPIF Iframe, Rich Locators & Scroll Telemetry', () => {
+describe('@browserpilot/core edge cases: Cross-Origin OOPIF Iframe, Rich Locators & Scroll Telemetry', () => {
   let hostServer: http.Server
   let frameServer: http.Server
   let hostUrl = ''
@@ -91,7 +91,7 @@ describe('@devpilot/core edge cases: Cross-Origin OOPIF Iframe, Rich Locators & 
     hostUrl = `http://127.0.0.1:${hostPort}`
 
     const debugPort = await getFreePort()
-    userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'devpilot-edge-e2e-'))
+    userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'browserpilot-edge-e2e-'))
     chromeProc = spawn(
       bin,
       [
@@ -144,18 +144,18 @@ describe('@devpilot/core edge cases: Cross-Origin OOPIF Iframe, Rich Locators & 
     expect(snap.text).toContain('Cross-Origin Action')
 
     // 2. Rich locators: label=, placeholder=, >> nth=1, role=button[name="..."]
-    await tab.page.fill('label=Work Email', 'eng@devpilot.dev')
+    await tab.page.fill('label=Work Email', 'eng@browserpilot.dev')
     await tab.page.fill('placeholder=Enter invite code', 'DP-2026')
     await tab.page.click('.dup-btn >> nth=1')
     expect(await tab.page.evaluate<string>('document.getElementById("out").textContent')).toBe('second')
 
     await tab.page.click('role=button[name="Save Settings"]')
     expect(await tab.page.evaluate<string>('document.getElementById("out").textContent')).toBe(
-      'saved:eng@devpilot.dev:DP-2026',
+      'saved:eng@browserpilot.dev:DP-2026',
     )
 
     // 3. Pinned element lookup
-    await tab.page.evaluate('globalThis.__devpilotPinned1 = document.querySelector(".dup-btn")')
+    await tab.page.evaluate('globalThis.__browserpilotPinned1 = document.querySelector(".dup-btn")')
     await tab.page.click('pinned')
     expect(await tab.page.evaluate<string>('document.getElementById("out").textContent')).toBe('first')
 

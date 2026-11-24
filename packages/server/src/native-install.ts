@@ -2,8 +2,8 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { NATIVE_HOST_NAME } from '@devpilot/protocol'
-import { ensureDevPilotHome, getDevPilotHomeDir } from './config.js'
+import { NATIVE_HOST_NAME } from '@browserpilot/protocol'
+import { ensureBrowserPilotHome, getBrowserPilotHomeDir } from './config.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -50,14 +50,14 @@ export interface InstallNativeHostResult {
 }
 
 /**
- * Installs Chrome Native Messaging host wrapper & JSON manifests so the DevPilot
+ * Installs Chrome Native Messaging host wrapper & JSON manifests so the BrowserPilot
  * extension connects automatically via chrome.runtime.connectNative() with zero
  * exposed port and automatic auth token injection.
  */
 export async function installNativeHost(options: InstallNativeHostOptions): Promise<InstallNativeHostResult> {
   const nativeHostJs = path.resolve(__dirname, 'native-host.js')
-  const binDir = path.join(getDevPilotHomeDir(), 'bin')
-  const wrapperPath = path.join(binDir, 'devpilot-native-host')
+  const binDir = path.join(getBrowserPilotHomeDir(), 'bin')
+  const wrapperPath = path.join(binDir, 'browserpilot-native-host')
 
   const allowedOrigins = options.extensionIds
     .map((id) => id.trim())
@@ -66,7 +66,7 @@ export async function installNativeHost(options: InstallNativeHostOptions): Prom
 
   const manifestJson = {
     name: NATIVE_HOST_NAME,
-    description: 'DevPilot Zero-Click Browser Control & DevTools Bridge',
+    description: 'BrowserPilot Zero-Click Browser Control & DevTools Bridge',
     path: wrapperPath,
     type: 'stdio',
     allowed_origins: allowedOrigins,
@@ -78,7 +78,7 @@ export async function installNativeHost(options: InstallNativeHostOptions): Prom
   const installedManifests: Array<{ browser: string; manifestPath: string }> = []
 
   if (!options.dryRun) {
-    await ensureDevPilotHome()
+    await ensureBrowserPilotHome()
     await fs.mkdir(binDir, { recursive: true, mode: 0o700 })
     await fs.writeFile(wrapperPath, wrapperScript, { mode: 0o755 })
 

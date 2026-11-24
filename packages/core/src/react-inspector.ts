@@ -1,4 +1,4 @@
-import type { ReactComponentInfo } from '@devpilot/protocol'
+import type { ReactComponentInfo } from '@browserpilot/protocol'
 import type { TabCDPSession } from './cdp-client.js'
 import type { SnapshotEngine } from './snapshot.js'
 

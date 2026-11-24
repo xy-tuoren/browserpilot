@@ -1,11 +1,11 @@
-export const DEVPILOT_SKILL_DOC = `# DevPilot — Zero-Click Pure-CDP Browser Control & DevTools Guide
+export const BROWSERPILOT_SKILL_DOC = `# BrowserPilot — Zero-Click Pure-CDP Browser Control & DevTools Guide
 
-DevPilot controls your real logged-in Chrome browser (existing cookies, logins, extensions) via pure CDP with **zero manual confirmation clicks**.
+BrowserPilot controls your real logged-in Chrome browser (existing cookies, logins, extensions) via pure CDP with **zero manual confirmation clicks**.
 
 ## Core Workflow (Fast & Token-Efficient)
 
-1. **Discover tabs**: \`browser_tabs\` (or \`devpilot tabs\`) — lists all tabs with \`tabId\`, URL, and title.
-2. **Navigate or pick existing tab**: \`browser_open_tab\` / \`browser_select_tab\` / \`browser_navigate\`. DevPilot auto-attaches \`chrome.debugger\` on demand with zero clicks.
+1. **Discover tabs**: \`browser_tabs\` (or \`browserpilot tabs\`) — lists all tabs with \`tabId\`, URL, and title.
+2. **Navigate or pick existing tab**: \`browser_open_tab\` / \`browser_select_tab\` / \`browser_navigate\`. BrowserPilot auto-attaches \`chrome.debugger\` on demand with zero clicks.
 3. **Perceive the page**:
    - Prefer \`browser_snapshot\` (compact AXTree with \`e1\`, \`e2\`... refs + automatic incremental diffs).
    - Use \`scope\` (CSS selector/ref) or \`search\` on large pages to save tokens.
@@ -25,11 +25,11 @@ DevPilot controls your real logged-in Chrome browser (existing cookies, logins, 
    - \`browser_emulate\` — viewport, mobile, dark mode, CPU throttling, Slow 3G / offline.
    - \`browser_record\` — record MP4/WebM screencast video via \`ffmpeg\`.
 6. **Multi-step Stateful Sandbox (Playwriter replacement)**:
-   - \`devpilot session new --tab-group docs\` -> returns session ID (e.g. \`1\`)
-   - \`devpilot exec -s 1 -e 'const t = await tabs.open("https://example.com"); console.log(await snapshot({ tab: t }))'\`
+   - \`browserpilot session new --tab-group docs\` -> returns session ID (e.g. \`1\`)
+   - \`browserpilot exec -s 1 -e 'const t = await tabs.open("https://example.com"); console.log(await snapshot({ tab: t }))'\`
    - Available sandbox globals: \`state\`, \`tabs\`, \`snapshot\`, \`screenshot\`, \`screenshotWithLabels\`, \`cleanHTML\`, \`markdown\`, \`inspect\`, \`getLatestLogs\`, \`getNetwork\`, \`getStyles\`, \`getReactInfo\`, \`waitForPageLoad\`, \`waitForSelector\`, \`waitForText\`, \`cdp\`, \`createDemoVideo\`.
 
 ## Safety Rules
-- Never wipe profile-wide cookies/cache (DevPilot blocks \`Network.clearBrowserCookies\` / \`Network.clearBrowserCache\` automatically; use page-scoped \`browser_cookies\`).
+- Never wipe profile-wide cookies/cache (BrowserPilot blocks \`Network.clearBrowserCookies\` / \`Network.clearBrowserCache\` automatically; use page-scoped \`browser_cookies\`).
 - Confirm with the user before irreversible actions (payments, deletions, account/security changes, sending public posts).
 `

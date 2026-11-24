@@ -7,7 +7,7 @@ import {
   type SomLabelItem,
   type TabGroupColor,
   type TabInfo,
-} from '@devpilot/protocol'
+} from '@browserpilot/protocol'
 
 export interface CDPEventPacket {
   tabId: number

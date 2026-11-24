@@ -1,4 +1,4 @@
-import type { ElementStylesResult, StyleDeclaration, StyleRuleInfo } from '@devpilot/protocol'
+import type { ElementStylesResult, StyleDeclaration, StyleRuleInfo } from '@browserpilot/protocol'
 import type { TabCDPSession } from './cdp-client.js'
 import type { SnapshotEngine } from './snapshot.js'
 

@@ -1,4 +1,4 @@
-import { MAX_CONSOLE_BUFFER, type ConsoleEntry, type ConsoleLevel } from '@devpilot/protocol'
+import { MAX_CONSOLE_BUFFER, type ConsoleEntry, type ConsoleLevel } from '@browserpilot/protocol'
 import type { TabCDPSession } from './cdp-client.js'
 
 interface RemoteObject {

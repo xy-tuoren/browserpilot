@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "DevPilot",
-  "version": "1.0.0",
+  "name": "BrowserPilot",
+  "version": "1.1.0",
   "description": "Zero-click pure-CDP browser control and DevTools debugging bridge for AI agents.",
   "permissions": [
     "debugger",
@@ -28,7 +28,7 @@
     }
   ],
   "action": {
-    "default_title": "DevPilot — AI Browser Control & DevTools Bridge",
+    "default_title": "BrowserPilot — AI Browser Control & DevTools Bridge",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",

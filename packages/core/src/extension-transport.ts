@@ -8,7 +8,7 @@ import {
   type BridgeRequest,
   type BridgeResponse,
   type TabInfo,
-} from '@devpilot/protocol'
+} from '@browserpilot/protocol'
 import type { AttachTabOptions, CDPEventPacket, CDPSendOptions, CDPTransport, CreateTabOptions } from './transport.js'
 
 export interface ExtensionChannel {
@@ -26,7 +26,7 @@ interface PendingRpc {
 }
 
 /**
- * CDPTransport implementation communicating with the DevPilot Chrome MV3 Extension
+ * CDPTransport implementation communicating with the BrowserPilot Chrome MV3 Extension
  * over either Chrome Native Messaging or Authenticated Local WebSocket.
  */
 export class ExtensionBridgeTransport implements CDPTransport {

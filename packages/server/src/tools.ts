@@ -9,8 +9,8 @@ import {
   type KeyModifier,
   type MouseButton,
   type SessionManager,
-} from '@devpilot/core'
-import type { ActionFeedback, BrowserClientInfo, ConsoleLevel, TabGroupColor } from '@devpilot/protocol'
+} from '@browserpilot/core'
+import type { ActionFeedback, BrowserClientInfo, ConsoleLevel, TabGroupColor } from '@browserpilot/protocol'
 
 export interface ToolDefinition {
   name: string
@@ -717,7 +717,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'browser_pinned',
     description:
-      'Inspect the element last pinned by the user via right-click -> "Pin Element for DevPilot" (returns outerHTML, inspect box/styles, and React Fiber info).',
+      'Inspect the element last pinned by the user via right-click -> "Pin Element for BrowserPilot" (returns outerHTML, inspect box/styles, and React Fiber info).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1300,7 +1300,7 @@ export async function executeTool(
         const action = String(args.action)
         if (action === 'start') {
           const out = await tab.recorder.start({
-            outputPath: String(args.outputPath ?? `./devpilot-recording-${Date.now()}.mp4`),
+            outputPath: String(args.outputPath ?? `./browserpilot-recording-${Date.now()}.mp4`),
             frameRate: args.frameRate as number | undefined,
           })
           return textResult(`Recording started -> ${out.outputPath}`)
@@ -1414,11 +1414,11 @@ export async function executeTool(
         const pinnedMeta = await tab.session.transport.getPinnedElement?.(tab.tabId).catch(() => null)
         const target = pinnedMeta?.globalVar || 'pinned'
         const html = await tab.page.evaluate<string | null>(`(() => {
-          const el = ${target === 'pinned' ? '(() => { const ks = Object.keys(globalThis).filter(k => k.startsWith("__devpilotPinned")); return ks.length ? globalThis[ks[ks.length - 1]] : null; })()' : target};
+          const el = ${target === 'pinned' ? '(() => { const ks = Object.keys(globalThis).filter(k => k.startsWith("__browserpilotPinned")); return ks.length ? globalThis[ks[ks.length - 1]] : null; })()' : target};
           return el ? el.outerHTML.slice(0, 2000) : null;
         })()`)
         if (!html) {
-          return textResult('No pinned element found on this tab. Right-click an element and choose "Pin Element for DevPilot".')
+          return textResult('No pinned element found on this tab. Right-click an element and choose "Pin Element for BrowserPilot".')
         }
         const inspected = await tab.extractor.inspectElement(tab.session, tab.snapshots, target).catch(() => null)
         const reactInfo = await tab.getReactInfo(target).catch(() => null)

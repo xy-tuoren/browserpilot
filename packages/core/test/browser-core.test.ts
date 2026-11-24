@@ -15,7 +15,7 @@ import {
 } from '../src/index.js'
 
 const CHROME_CANDIDATES = [
-  process.env.DEVPILOT_CHROME_BIN,
+  process.env.BROWSERPILOT_CHROME_BIN,
   path.join(
     os.homedir(),
     'Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
@@ -58,8 +58,8 @@ const TEST_HTML = `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="description" content="DevPilot E2E verification playground" />
-  <title>DevPilot Playground</title>
+  <meta name="description" content="BrowserPilot E2E verification playground" />
+  <title>BrowserPilot Playground</title>
   <style>
     body { font-family: sans-serif; padding: 24px; margin: 0; }
     .card { border: 1px solid #ccc; padding: 16px; border-radius: 8px; max-width: 600px; }
@@ -70,7 +70,7 @@ const TEST_HTML = `<!doctype html>
 <body>
   <main>
     <article class="card">
-      <h1>DevPilot Core Test Page</h1>
+      <h1>BrowserPilot Core Test Page</h1>
       <p>Pure CDP automation & DevTools debugging verification suite with rich semantic content.</p>
       <form id="demo-form">
         <label for="username">Username</label>
@@ -125,7 +125,7 @@ const TEST_HTML = `<!doctype html>
 
 const FRAME_HTML = `<!doctype html><html><body><button id="frame-btn" onclick="this.textContent='Frame Clicked'">Inside Iframe</button></body></html>`
 
-describe('@devpilot/core real Chromium E2E', () => {
+describe('@browserpilot/core real Chromium E2E', () => {
   let server: http.Server
   let baseUrl: string
   let chromeProc: ChildProcess | null = null
@@ -152,7 +152,7 @@ describe('@devpilot/core real Chromium E2E', () => {
     baseUrl = `http://127.0.0.1:${httpPort}`
 
     const debugPort = await getFreePort()
-    userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'devpilot-core-e2e-'))
+    userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'browserpilot-core-e2e-'))
     chromeProc = spawn(
       chromeBin,
       [
@@ -207,14 +207,14 @@ describe('@devpilot/core real Chromium E2E', () => {
 
     // 1. Navigate + smart wait
     const meta = await page.navigate(baseUrl)
-    expect(meta.title).toBe('DevPilot Playground')
+    expect(meta.title).toBe('BrowserPilot Playground')
     const loadState = await waitForPageLoad(session)
     expect(loadState.success).toBe(true)
 
     // 2. Full Accessibility Snapshot + ref discovery
     const snap1 = await snapshots.capture(session)
     expect(snap1.isDiff).toBe(false)
-    expect(snap1.text).toContain('DevPilot Core Test Page')
+    expect(snap1.text).toContain('BrowserPilot Core Test Page')
     expect(snap1.totalRefs).toBeGreaterThan(3)
 
     const usernameRef = Object.values(snap1.refs).find((r) => r.role === 'textbox' && r.name === 'Username')?.ref
@@ -252,7 +252,7 @@ describe('@devpilot/core real Chromium E2E', () => {
 
     // 6. File upload via DOM.setFileInputFiles
     const tmpFile = path.join(userDataDir, 'sample.txt')
-    await fs.writeFile(tmpFile, 'hello devpilot')
+    await fs.writeFile(tmpFile, 'hello browserpilot')
     await page.uploadFiles('#file-input', [tmpFile])
     expect(await page.evaluate<string>('document.getElementById("file-input").files[0]?.name')).toBe('sample.txt')
 
@@ -275,7 +275,7 @@ describe('@devpilot/core real Chromium E2E', () => {
     expect(cleanHtml).not.toContain('<script')
 
     const md = await extractor.getPageMarkdown(session, { showDiffSinceLastCall: false })
-    expect(md).toContain('# DevPilot Playground')
+    expect(md).toContain('# BrowserPilot Playground')
     expect(md).toContain('Pure CDP automation')
 
     // 9. Normal screenshot + Set-of-Mark labeled screenshot
@@ -285,7 +285,7 @@ describe('@devpilot/core real Chromium E2E', () => {
     expect(som.labelsCount).toBeGreaterThan(2)
     expect(som.base64.length).toBeGreaterThan(500)
     // Overlay must be cleanly removed after capture
-    expect(await page.evaluate<boolean>('!!document.getElementById("__devpilot_som_overlay")')).toBe(false)
+    expect(await page.evaluate<boolean>('!!document.getElementById("__browserpilot_som_overlay")')).toBe(false)
 
     // 10. Page-scoped cookies + safety guard against profile-wide clearBrowserCookies
     await page.setCookie({ name: 'dp_token', value: 'xyz123' })

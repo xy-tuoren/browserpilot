@@ -1,4 +1,4 @@
-import type { ElementInspectResult } from '@devpilot/protocol'
+import type { ElementInspectResult } from '@browserpilot/protocol'
 import type { TabCDPSession } from './cdp-client.js'
 import { computeDiffIfShorter, filterSnapshotLines, type SnapshotEngine } from './snapshot.js'
 

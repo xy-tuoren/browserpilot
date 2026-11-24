@@ -7,12 +7,12 @@ import {
   type SessionInfo,
   type TabGroupColor,
   type TabInfo,
-} from '@devpilot/protocol'
+} from '@browserpilot/protocol'
 import { formatConsoleLogs, type GetConsoleOptions } from './console-collector.js'
 import { formatNetworkEntries, type GetNetworkOptions } from './network-inspector.js'
 import { createDemoVideo } from './recorder.js'
 import { formatStylesAsText } from './styles-inspector.js'
-import { DevPilotTab } from './tab.js'
+import { BrowserPilotTab } from './tab.js'
 import type { CDPTransport } from './transport.js'
 import { sleep, waitForPageLoad, waitForSelector, waitForText } from './wait.js'
 
@@ -49,7 +49,7 @@ interface InternalSession {
  */
 export class SessionManager {
   private readonly transport: CDPTransport
-  private tabs = new Map<number, DevPilotTab>()
+  private tabs = new Map<number, BrowserPilotTab>()
   private sessions = new Map<string, InternalSession>()
   private nextSessionNum = 1
   private unsubDetach?: () => void
@@ -71,11 +71,11 @@ export class SessionManager {
   async getOrAttachTab(
     tabId: number,
     options?: { tabGroup?: string; tabGroupColor?: TabGroupColor },
-  ): Promise<DevPilotTab> {
+  ): Promise<BrowserPilotTab> {
     await this.transport.attachTab(tabId, options)
     let tab = this.tabs.get(tabId)
     if (!tab) {
-      tab = new DevPilotTab(this.transport, tabId)
+      tab = new BrowserPilotTab(this.transport, tabId)
       this.tabs.set(tabId, tab)
     }
     await tab.ensureInitialized()
@@ -91,7 +91,7 @@ export class SessionManager {
     active?: boolean
     tabGroup?: string
     tabGroupColor?: TabGroupColor
-  }): Promise<DevPilotTab> {
+  }): Promise<BrowserPilotTab> {
     const info = await this.transport.createTab(options)
     return await this.getOrAttachTab(info.tabId, {
       tabGroup: options?.tabGroup,
@@ -119,7 +119,7 @@ export class SessionManager {
     tabId?: number
     sessionId?: string
     createIfNone?: boolean
-  }): Promise<DevPilotTab> {
+  }): Promise<BrowserPilotTab> {
     const session = options?.sessionId ? this.sessions.get(options.sessionId) : undefined
     const groupOpts = session
       ? { tabGroup: session.tabGroup, tabGroupColor: session.tabGroupColor }
@@ -236,8 +236,8 @@ export class SessionManager {
       logs.push(args.map((a) => (typeof a === 'string' ? a : util.inspect(a, { depth: 4, maxArrayLength: 50 }))).join(' '))
     }
 
-    const getTab = async (tabOrId?: DevPilotTab | number): Promise<DevPilotTab> => {
-      if (tabOrId instanceof DevPilotTab) return tabOrId
+    const getTab = async (tabOrId?: BrowserPilotTab | number): Promise<BrowserPilotTab> => {
+      if (tabOrId instanceof BrowserPilotTab) return tabOrId
       if (typeof tabOrId === 'number') return await this.resolveActiveTab({ tabId: tabOrId, sessionId })
       return await this.resolveActiveTab({ tabId: options.tabId, sessionId })
     }
@@ -288,60 +288,60 @@ export class SessionManager {
       },
 
       // High-level helpers mirroring & expanding Playwriter's sandbox API
-      snapshot: async (opts?: { tab?: DevPilotTab; search?: string | RegExp; showDiffSinceLastCall?: boolean; scope?: string }) => {
+      snapshot: async (opts?: { tab?: BrowserPilotTab; search?: string | RegExp; showDiffSinceLastCall?: boolean; scope?: string }) => {
         const t = await getTab(opts?.tab)
         return (await t.snapshots.capture(t.session, opts)).text
       },
-      screenshot: async (opts?: { tab?: DevPilotTab; path?: string; fullPage?: boolean; maxDimension?: number }) => {
+      screenshot: async (opts?: { tab?: BrowserPilotTab; path?: string; fullPage?: boolean; maxDimension?: number }) => {
         const t = await getTab(opts?.tab)
         return await t.page.screenshot(opts)
       },
-      screenshotWithLabels: async (opts?: { tab?: DevPilotTab; path?: string; maxLabels?: number }) => {
+      screenshotWithLabels: async (opts?: { tab?: BrowserPilotTab; path?: string; maxLabels?: number }) => {
         const t = await getTab(opts?.tab)
         return await t.captureLabeledScreenshot(opts)
       },
-      cleanHTML: async (opts?: { tab?: DevPilotTab; selector?: string; search?: string | RegExp; showDiffSinceLastCall?: boolean; includeStyles?: boolean }) => {
+      cleanHTML: async (opts?: { tab?: BrowserPilotTab; selector?: string; search?: string | RegExp; showDiffSinceLastCall?: boolean; includeStyles?: boolean }) => {
         const t = await getTab(opts?.tab)
         return await t.extractor.getCleanHTML(t.session, opts)
       },
-      markdown: async (opts?: { tab?: DevPilotTab; search?: string | RegExp; showDiffSinceLastCall?: boolean }) => {
+      markdown: async (opts?: { tab?: BrowserPilotTab; search?: string | RegExp; showDiffSinceLastCall?: boolean }) => {
         const t = await getTab(opts?.tab)
         return await t.extractor.getPageMarkdown(t.session, opts)
       },
-      inspect: async (target: string, opts?: { tab?: DevPilotTab; properties?: string[] }) => {
+      inspect: async (target: string, opts?: { tab?: BrowserPilotTab; properties?: string[] }) => {
         const t = await getTab(opts?.tab)
         return (await t.extractor.inspectElement(t.session, t.snapshots, target, opts?.properties)).formatted
       },
-      getLatestLogs: async (opts?: GetConsoleOptions & { tab?: DevPilotTab }) => {
+      getLatestLogs: async (opts?: GetConsoleOptions & { tab?: BrowserPilotTab }) => {
         const t = await getTab(opts?.tab)
         return formatConsoleLogs(t.console.getLogs(opts))
       },
-      getNetwork: async (opts?: GetNetworkOptions & { tab?: DevPilotTab }) => {
+      getNetwork: async (opts?: GetNetworkOptions & { tab?: BrowserPilotTab }) => {
         const t = await getTab(opts?.tab)
         return formatNetworkEntries(t.network.getRequests(opts))
       },
-      getStyles: async (target: string, opts?: { tab?: DevPilotTab; includeInherited?: boolean; computedProperties?: string[] }) => {
+      getStyles: async (target: string, opts?: { tab?: BrowserPilotTab; includeInherited?: boolean; computedProperties?: string[] }) => {
         const t = await getTab(opts?.tab)
         const styles = await t.styles.getStyles(target, t.snapshots, opts)
         return formatStylesAsText(styles)
       },
-      getReactInfo: async (target: string, opts?: { tab?: DevPilotTab }) => {
+      getReactInfo: async (target: string, opts?: { tab?: BrowserPilotTab }) => {
         const t = await getTab(opts?.tab)
         return await t.getReactInfo(target)
       },
-      waitForPageLoad: async (opts?: { tab?: DevPilotTab; timeoutMs?: number }) => {
+      waitForPageLoad: async (opts?: { tab?: BrowserPilotTab; timeoutMs?: number }) => {
         const t = await getTab(opts?.tab)
         return await waitForPageLoad(t.session, opts)
       },
-      waitForSelector: async (selector: string, opts?: { tab?: DevPilotTab; timeoutMs?: number }) => {
+      waitForSelector: async (selector: string, opts?: { tab?: BrowserPilotTab; timeoutMs?: number }) => {
         const t = await getTab(opts?.tab)
         return await waitForSelector(t.session, selector, opts)
       },
-      waitForText: async (text: string | RegExp, opts?: { tab?: DevPilotTab; timeoutMs?: number }) => {
+      waitForText: async (text: string | RegExp, opts?: { tab?: BrowserPilotTab; timeoutMs?: number }) => {
         const t = await getTab(opts?.tab)
         return await waitForText(t.session, text, opts)
       },
-      cdp: async (method: string, params?: Record<string, unknown>, tab?: DevPilotTab) => {
+      cdp: async (method: string, params?: Record<string, unknown>, tab?: BrowserPilotTab) => {
         const t = await getTab(tab)
         return await t.session.send(method, params)
       },
@@ -352,7 +352,7 @@ export class SessionManager {
     const wrapped = `(async () => {\n${code}\n})()`
 
     try {
-      const script = new vm.Script(wrapped, { filename: `devpilot-session-${sessionId}.js` })
+      const script = new vm.Script(wrapped, { filename: `browserpilot-session-${sessionId}.js` })
       const promise = script.runInContext(context, { timeout: timeoutMs }) as Promise<unknown>
       const returnValue = await Promise.race([
         promise,

@@ -9,11 +9,11 @@ import {
   ExtensionBridgeTransport,
   SessionManager,
   type ExtensionChannel,
-} from '@devpilot/core'
-import type { BridgeMessage } from '@devpilot/protocol'
+} from '@browserpilot/core'
+import type { BridgeMessage } from '@browserpilot/protocol'
 
 const CHROME_FOR_TESTING =
-  process.env.DEVPILOT_CHROME_BIN ||
+  process.env.BROWSERPILOT_CHROME_BIN ||
   path.join(
     os.homedir(),
     'Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
@@ -69,7 +69,7 @@ const EXISTING_PAGE_HTML = `<!doctype html>
 </body>
 </html>`
 
-describe('@devpilot/extension real Chrome MV3 zero-click E2E', () => {
+describe('@browserpilot/extension real Chrome MV3 zero-click E2E', () => {
   let httpServer: http.Server
   let wss: WebSocketServer
   let chromeProc: ChildProcess | null = null
@@ -108,13 +108,13 @@ describe('@devpilot/extension real Chrome MV3 zero-click E2E', () => {
 
     // Build extension directly into isolated temp dir so shared dist/ is never mutated
     const extPkgDir = path.resolve(import.meta.dirname, '..')
-    tempExtDir = await fs.mkdtemp(path.join(os.tmpdir(), 'devpilot-ext-dist-'))
+    tempExtDir = await fs.mkdtemp(path.join(os.tmpdir(), 'browserpilot-ext-dist-'))
     execFileSync(process.execPath, [path.join(extPkgDir, 'build.mjs')], {
       env: {
         ...process.env,
-        DEVPILOT_OUT_DIR: tempExtDir,
-        DEVPILOT_DAEMON_URL: `ws://127.0.0.1:${wsPort}/extension`,
-        DEVPILOT_AUTH_TOKEN: token,
+        BROWSERPILOT_OUT_DIR: tempExtDir,
+        BROWSERPILOT_DAEMON_URL: `ws://127.0.0.1:${wsPort}/extension`,
+        BROWSERPILOT_AUTH_TOKEN: token,
       },
     })
 
@@ -140,7 +140,7 @@ describe('@devpilot/extension real Chrome MV3 zero-click E2E', () => {
     })
 
     // Launch real Google Chrome for Testing with the compiled MV3 extension loaded and an already-open tab!
-    userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'devpilot-ext-profile-'))
+    userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'browserpilot-ext-profile-'))
     chromeProc = spawn(
       CHROME_FOR_TESTING,
       [

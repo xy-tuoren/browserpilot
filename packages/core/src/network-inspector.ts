@@ -4,7 +4,7 @@ import {
   type NetworkInitiator,
   type NetworkInterceptRule,
   type NetworkTiming,
-} from '@devpilot/protocol'
+} from '@browserpilot/protocol'
 import type { TabCDPSession } from './cdp-client.js'
 
 export interface GetNetworkOptions {

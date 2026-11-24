@@ -1,13 +1,13 @@
 {
-  "name": "@devpilot/extension",
-  "version": "1.0.0",
+  "name": "@browserpilot/extension",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "dependencies": {
-    "@devpilot/protocol": "workspace:*"
+    "@browserpilot/protocol": "workspace:*"
   },
   "devDependencies": {
-    "@devpilot/core": "workspace:*",
+    "@browserpilot/core": "workspace:*",
     "@types/chrome": "^0.0.310",
     "@types/ws": "^8.5.14",
     "ws": "^8.18.0"

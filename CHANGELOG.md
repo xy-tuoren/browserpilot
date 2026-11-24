@@ -1,6 +1,15 @@
 # Changelog
 
-All notable changes to **DevPilot** are documented in this file.
+All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
+
+## [1.1.0] - 2026-11-23
+
+### Changed
+- Renamed the entire project, GitHub repository (`xy-tuoren/browserpilot`), Chrome MV3 Extension (`BrowserPilot`), Native Messaging host (`com.browserpilot.bridge`), CLI (`browserpilot`), MCP server (`browserpilot`), home directory (`~/.browserpilot`), and Agent Skill (`skills/browserpilot/SKILL.md`) to **BrowserPilot** so it can publish cleanly as the unscoped npm package **`browserpilot`**.
+
+### Added
+- **Standalone Single-Package npm Build (`packages/server/build.mjs`)**: bundles `@browserpilot/protocol` and `@browserpilot/core` inline via `esbuild`, keeps only published npm runtime dependencies (`@modelcontextprotocol/sdk`, `diff`, `ws`), and embeds the prebuilt Chrome MV3 extension inside `extension/` so `npm i -g browserpilot && browserpilot setup` works out of the box without cloning the repository.
+- **Automated npm + GitHub Release Workflow (`.github/workflows/publish.yml`)**: runs full build, typecheck, and real Chromium/MV3 tests on `v*` tags, publishes `browserpilot` to npm (when `NPM_TOKEN` is configured), and uploads `browserpilot-extension-vX.Y.Z.zip` to GitHub Releases.
 
 ## [1.0.1] - 2026-11-23
 

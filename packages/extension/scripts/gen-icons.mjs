@@ -103,4 +103,4 @@ for (const size of [16, 32, 48, 128]) {
   const png = renderIconPng(size)
   await fs.writeFile(path.join(iconsDir, `icon-${size}.png`), png)
 }
-console.log('Generated DevPilot extension PNG icons in', iconsDir)
+console.log('Generated BrowserPilot extension PNG icons in', iconsDir)

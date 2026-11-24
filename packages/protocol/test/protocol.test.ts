@@ -8,10 +8,10 @@ import {
   matchesDomainPattern,
 } from '../src/index.js'
 
-describe('@devpilot/protocol', () => {
+describe('@browserpilot/protocol', () => {
   describe('Native Messaging framing', () => {
     it('encodes and decodes single and multiple JSON messages including UTF-8 CJK', () => {
-      const msg1 = { type: 'ping', ts: 12345, note: '你好 DevPilot 🚀' }
+      const msg1 = { type: 'ping', ts: 12345, note: '你好 BrowserPilot 🚀' }
       const msg2 = { type: 'request', id: 'req-1', method: 'tabs.list', params: { active: true } }
 
       const frame1 = encodeNativeMessage(msg1)
@@ -53,7 +53,7 @@ describe('@devpilot/protocol', () => {
       expect(isRestrictedUrl('chrome://extensions')).toBe(true)
       expect(isRestrictedUrl('chrome-extension://abcdef/popup.html')).toBe(true)
       expect(isRestrictedUrl('https://chromewebstore.google.com/detail/xyz')).toBe(true)
-      expect(isRestrictedUrl('https://github.com/xy-tuoren/devpilot')).toBe(false)
+      expect(isRestrictedUrl('https://github.com/xy-tuoren/browserpilot')).toBe(false)
       expect(isRestrictedUrl('http://localhost:3000')).toBe(false)
     })
 

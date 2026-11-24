@@ -1,4 +1,4 @@
-import type { ActionFeedback } from '@devpilot/protocol'
+import type { ActionFeedback } from '@browserpilot/protocol'
 import { TabCDPSession } from './cdp-client.js'
 import { ConsoleCollector } from './console-collector.js'
 import { DOMExtractor } from './dom-extract.js'
@@ -17,7 +17,7 @@ import type { CDPTransport } from './transport.js'
  * Unified per-tab controller bundling automation, perception, debugging,
  * performance profiling, recording, and automatic post-action feedback.
  */
-export class DevPilotTab {
+export class BrowserPilotTab {
   readonly tabId: number
   readonly session: TabCDPSession
   readonly snapshots: SnapshotEngine

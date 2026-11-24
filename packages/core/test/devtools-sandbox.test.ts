@@ -11,7 +11,7 @@ import {
 } from '../src/index.js'
 
 const CHROME_CANDIDATES = [
-  process.env.DEVPILOT_CHROME_BIN,
+  process.env.BROWSERPILOT_CHROME_BIN,
   path.join(
     os.homedir(),
     'Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
@@ -98,7 +98,7 @@ const DEVTOOLS_HTML = `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>DevPilot DevTools Lab</title>
+  <title>BrowserPilot DevTools Lab</title>
   <link rel="stylesheet" href="/app.css" />
 </head>
 <body>
@@ -109,7 +109,7 @@ const DEVTOOLS_HTML = `<!doctype html>
 </body>
 </html>`
 
-describe('@devpilot/core full DevTools, Recorder & Sandbox E2E', () => {
+describe('@browserpilot/core full DevTools, Recorder & Sandbox E2E', () => {
   let server: http.Server
   let baseUrl: string
   let chromeProc: ChildProcess | null = null
@@ -147,7 +147,7 @@ describe('@devpilot/core full DevTools, Recorder & Sandbox E2E', () => {
     baseUrl = `http://127.0.0.1:${httpPort}`
 
     const debugPort = await getFreePort()
-    userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'devpilot-devtools-e2e-'))
+    userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'browserpilot-devtools-e2e-'))
     chromeProc = spawn(
       chromeBin,
       [
@@ -211,10 +211,10 @@ describe('@devpilot/core full DevTools, Recorder & Sandbox E2E', () => {
       urlPattern: '*/api/items*',
       action: 'mock',
       status: 200,
-      body: JSON.stringify({ source: 'mocked-by-devpilot', items: [99] }),
+      body: JSON.stringify({ source: 'mocked-by-browserpilot', items: [99] }),
     })
     const mockedApi = await tab.page.evaluate<{ source: string; items: number[] }>('window.triggerApi()')
-    expect(mockedApi).toEqual({ source: 'mocked-by-devpilot', items: [99] })
+    expect(mockedApi).toEqual({ source: 'mocked-by-browserpilot', items: [99] })
     await tab.network.removeInterceptRule(rule.id)
 
     // 4. CSS Styles inspector + forced :hover pseudo state
@@ -313,7 +313,7 @@ describe('@devpilot/core full DevTools, Recorder & Sandbox E2E', () => {
     )
     expect(r1.error).toBeUndefined()
     expect(r1.returnValue).toBe(42)
-    expect(r1.stdout).toContain('title: DevPilot DevTools Lab')
+    expect(r1.stdout).toContain('title: BrowserPilot DevTools Lab')
 
     // State persists in s1, isolated from s2
     const r1b = await manager.exec(s1.id, `return state.counter`)

@@ -1,4 +1,4 @@
-# DevPilot
+# BrowserPilot
 
 > **Zero-click, pure-CDP Chrome Extension, MCP Server & CLI for AI Agents.**  
 > Control, inspect, and debug your real logged-in Chrome browser — no Playwright/Puppeteer runtime bloat, no per-tab icon clicking, and no repetitive Chrome `--autoConnect` "Allow" confirmation popups.
@@ -7,9 +7,9 @@
 
 ---
 
-## Why DevPilot?
+## Why BrowserPilot?
 
-| Capability | Playwriter | Chrome DevTools MCP (`--autoConnect`) | Claude in Chrome | **DevPilot** |
+| Capability | Playwriter | Chrome DevTools MCP (`--autoConnect`) | Claude in Chrome | **BrowserPilot** |
 | :--- | :---: | :---: | :---: | :---: |
 | Uses your real logged-in Chrome (cookies, logins, extensions) | Yes | Yes | Yes | **Yes** |
 | Zero clicks to attach to already-open tabs | No (click icon per tab) | No ("Allow" popup per connection) | Partial | **Yes (Zero-Click)** |
@@ -27,18 +27,18 @@
 
 ```text
 AI Coding Agents (Claude Code / Cursor / Codex / Antigravity / Custom SDK)
-        │   MCP stdio (39 tools + images)   /   CLI (`devpilot`)   /   TypeScript SDK
+        │   MCP stdio (39 tools + images)   /   CLI (`browserpilot`)   /   TypeScript SDK
         ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  @devpilot/server   Authenticated Local Daemon (127.0.0.1 + 256-bit token)   │
-│                     + Chrome Native Messaging Host (`com.devpilot.bridge`)   │
-│  @devpilot/core     100% Pure-CDP Engine (Trusted Input, AXTree, DevTools)   │
+│  @browserpilot/server   Authenticated Local Daemon (127.0.0.1 + 256-bit token)   │
+│                     + Chrome Native Messaging Host (`com.browserpilot.bridge`)   │
+│  @browserpilot/core     100% Pure-CDP Engine (Trusted Input, AXTree, DevTools)   │
 └──────────────────────────┬───────────────────────────────┬───────────────────┘
                            │ Native Messaging (primary)    │ Direct CDP WS
                            │ or Auth WebSocket (fallback)  │ (--cdp <url>)
                            ▼                               ▼
 ┌─────────────────────────────────────────────┐   ┌────────────────────────────┐
-│  @devpilot/extension (Manifest V3)          │   │ Chrome / Chromium          │
+│  @browserpilot/extension (Manifest V3)          │   │ Chrome / Chromium          │
 │  • Zero-click chrome.debugger (CDP v1.3)    │   │ --remote-debugging-port    │
 │  • OOPIF iframes & popup Tab Groups         │   └────────────────────────────┘
 │  • Closed-Shadow-DOM highlight & cursor     │
@@ -48,54 +48,40 @@ AI Coding Agents (Claude Code / Cursor / Codex / Antigravity / Custom SDK)
 
 ---
 
-## Quick Start (2 Minutes)
+## Quick Start (1 Minute)
 
-### 1. Clone & Build
+### Option 1: Install from npm (Recommended)
 
 ```bash
-git clone https://github.com/xy-tuoren/devpilot.git
-cd devpilot
+npm install -g browserpilot
+browserpilot setup
+```
+
+1. Open `chrome://extensions` in Chrome, enable **Developer mode**, click **Load unpacked**, and select the bundled `extension/` path printed by `browserpilot setup`.
+2. Copy the Extension ID from Chrome and run:
+   ```bash
+   browserpilot setup --extension-id <YOUR_EXTENSION_ID>
+   ```
+3. Add `browserpilot` to your AI coding agent MCP config (Claude Code / Cursor / Codex / Antigravity):
+   ```json
+   {
+     "mcpServers": {
+       "browserpilot": {
+         "command": "npx",
+         "args": ["-y", "browserpilot@latest", "mcp"]
+       }
+     }
+   }
+   ```
+
+### Option 2: Build from Source
+
+```bash
+git clone https://github.com/xy-tuoren/browserpilot.git
+cd browserpilot
 pnpm install
 pnpm build
-```
-
-### 2. Load the Chrome Extension (Unpacked)
-
-1. Open `chrome://extensions` in Chrome.
-2. Enable **Developer mode** (top right).
-3. Click **Load unpacked** and select:
-   ```text
-   /path/to/devpilot/packages/extension/dist
-   ```
-4. Copy the generated **Extension ID** shown on the DevPilot card.
-
-### 3. Run Setup (Installs Native Messaging Auto-Auth + Prints MCP Config)
-
-```bash
-node packages/server/dist/cli.js setup --extension-id <YOUR_EXTENSION_ID>
-```
-
-That registers `com.devpilot.bridge` in Chrome's `NativeMessagingHosts` directory so the extension connects to your local daemon automatically with **extension-ID-bound security** and **zero manual token copy-pasting**.
-
-*(Optional)* Link the CLI globally:
-```bash
-cd packages/server && npm link
-devpilot --help
-```
-
-### 4. Connect Your AI Agent via MCP
-
-Add to your MCP config (Claude Code, Cursor, Codex, Antigravity):
-
-```json
-{
-  "mcpServers": {
-    "devpilot": {
-      "command": "node",
-      "args": ["/absolute/path/to/devpilot/packages/server/dist/cli.js", "mcp"]
-    }
-  }
-}
+node packages/server/dist/cli.js setup
 ```
 
 Or connect directly to a `--remote-debugging-port` Chrome without an extension:
@@ -103,14 +89,9 @@ Or connect directly to a `--remote-debugging-port` Chrome without an extension:
 ```json
 {
   "mcpServers": {
-    "devpilot": {
-      "command": "node",
-      "args": [
-        "/absolute/path/to/devpilot/packages/server/dist/cli.js",
-        "mcp",
-        "--cdp",
-        "http://127.0.0.1:9222"
-      ]
+    "browserpilot": {
+      "command": "npx",
+      "args": ["-y", "browserpilot@latest", "mcp", "--cdp", "http://127.0.0.1:9222"]
     }
   }
 }
@@ -123,18 +104,18 @@ Or connect directly to a `--remote-debugging-port` Chrome without an extension:
 ### Stateful Multi-Step Sandbox
 ```bash
 # Create an isolated session grouped into its own Chrome Tab Group
-devpilot session new --tab-group app --tab-group-color cyan
+browserpilot session new --tab-group app --tab-group-color cyan
 # => 1
 
 # Execute stateful JS with full pure-CDP & DevTools helpers
-devpilot exec -s 1 -e '
+browserpilot exec -s 1 -e '
   const t = await tabs.open("http://localhost:3000");
   state.tab = t;
   console.log(await snapshot({ tab: t }));
 '
 
 # Reuse state across calls
-devpilot exec -s 1 -e '
+browserpilot exec -s 1 -e '
   await state.tab.page.fill("e3", "alice@example.com");
   await state.tab.page.click("e4");
   console.log(await getLatestLogs({ tab: state.tab, sinceLastCall: true }));
@@ -143,19 +124,19 @@ devpilot exec -s 1 -e '
 
 ### Direct One-Liner Shortcuts
 ```bash
-devpilot tabs                                    # List all open Chrome tabs
-devpilot open https://example.com                # Open & auto-attach a tab
-devpilot snapshot --search "Sign in"             # Semantic AXTree with refs + auto-diff
-devpilot click e3                                # Trusted CDP mouse click (isTrusted=true)
-devpilot fill e4 "hello world"                   # SPA-safe trusted text input
-devpilot screenshot ./page.png --full-page       # CSS-scaled screenshot
-devpilot labeled-screenshot ./som.png            # Vimium-style Set-of-Mark labeled shot
-devpilot console --level error --since-last      # Incremental console errors & exceptions
-devpilot network --failed                        # Failed HTTP requests + initiator stack
-devpilot styles "#submit-btn"                    # DevTools Styles cascade (file:line)
-devpilot react "#submit-btn"                     # React Fiber component + _debugSource
-devpilot perf metrics                            # Core Web Vitals + CDP metrics
-devpilot skill                                   # Print full Agent Skill instructions
+browserpilot tabs                                    # List all open Chrome tabs
+browserpilot open https://example.com                # Open & auto-attach a tab
+browserpilot snapshot --search "Sign in"             # Semantic AXTree with refs + auto-diff
+browserpilot click e3                                # Trusted CDP mouse click (isTrusted=true)
+browserpilot fill e4 "hello world"                   # SPA-safe trusted text input
+browserpilot screenshot ./page.png --full-page       # CSS-scaled screenshot
+browserpilot labeled-screenshot ./som.png            # Vimium-style Set-of-Mark labeled shot
+browserpilot console --level error --since-last      # Incremental console errors & exceptions
+browserpilot network --failed                        # Failed HTTP requests + initiator stack
+browserpilot styles "#submit-btn"                    # DevTools Styles cascade (file:line)
+browserpilot react "#submit-btn"                     # React Fiber component + _debugSource
+browserpilot perf metrics                            # Core Web Vitals + CDP metrics
+browserpilot skill                                   # Print full Agent Skill instructions
 ```
 
 ---
@@ -177,8 +158,8 @@ devpilot skill                                   # Print full Agent Skill instru
 1. **Profile-Wide Wipe Protection**: Destructive CDP commands (`Network.clearBrowserCookies`, `Network.clearBrowserCache`) are blocked at both the core engine and extension layers so an agent can never log you out of your browser profile.
 2. **Domain Allowlist / Denylist**: Configure blocked domains (e.g., `*.bank.com`) directly in the extension popup.
 3. **Instant Pause Kill-Switch**: One click in the popup or Side Panel immediately pauses all auto-attach and CDP execution.
-4. **Local-Only Authenticated Bridge**: Binds strictly to `127.0.0.1` with a 256-bit random token stored in `~/.devpilot/daemon.json` (`0600`), or uses extension-ID-locked Chrome Native Messaging.
-5. **Chrome Transparency**: Because DevPilot uses Chrome's documented `chrome.debugger` API, Chrome displays its standard debugging infobar while attached (or launch a dedicated local dev Chrome with `--silent-debugger-extension-api` / `devpilot browser start`).
+4. **Local-Only Authenticated Bridge**: Binds strictly to `127.0.0.1` with a 256-bit random token stored in `~/.browserpilot/daemon.json` (`0600`), or uses extension-ID-locked Chrome Native Messaging.
+5. **Chrome Transparency**: Because BrowserPilot uses Chrome's documented `chrome.debugger` API, Chrome displays its standard debugging infobar while attached (or launch a dedicated local dev Chrome with `--silent-debugger-extension-api` / `browserpilot browser start`).
 
 ---
 
@@ -188,7 +169,7 @@ devpilot skill                                   # Print full Agent Skill instru
 - [`packages/core`](./packages/core) — 100% pure-CDP automation, perception, DevTools debugging suite, ffmpeg recorder, and stateful sandbox.
 - [`packages/extension`](./packages/extension) — Zero-click Chrome Manifest V3 extension with closed-Shadow-DOM overlays, Popup, and Companion Side Panel.
 - [`packages/server`](./packages/server) — Authenticated Local Daemon, Chrome Native Messaging Host & installer, MCP Server, CLI, and TypeScript SDK.
-- [`skills/devpilot/SKILL.md`](./skills/devpilot/SKILL.md) — Ready-to-deploy skill instructions for AI coding agents.
+- [`skills/browserpilot/SKILL.md`](./skills/browserpilot/SKILL.md) — Ready-to-deploy skill instructions for AI coding agents.
 
 ## License
 

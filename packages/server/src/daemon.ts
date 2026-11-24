@@ -7,16 +7,16 @@ import {
   SessionManager,
   type CDPTransport,
   type ExtensionChannel,
-} from '@devpilot/core'
+} from '@browserpilot/core'
 import {
   DEFAULT_DAEMON_HOST,
   DEFAULT_DAEMON_PORT,
-  DEVPILOT_VERSION,
+  BROWSERPILOT_VERSION,
   type BridgeMessage,
   type BrowserClientInfo,
   type ExtensionHelloMessage,
   type TabGroupColor,
-} from '@devpilot/protocol'
+} from '@browserpilot/protocol'
 import { loadOrCreateDaemonConfig, writeDaemonRuntimeInfo, type DaemonConfigFile } from './config.js'
 import { executeTool, type ToolRuntimeContext } from './tools.js'
 
@@ -34,12 +34,12 @@ export interface DaemonOptions {
 }
 
 /**
- * Local DevPilot Daemon managing:
+ * Local BrowserPilot Daemon managing:
  * - Authenticated Extension WebSocket connections (direct WS or proxied from Native Messaging Host)
  * - Direct CDP browser connections (--remote-debugging-port)
  * - Stateful isolated sessions and unified HTTP API for CLI, MCP & SDK clients
  */
-export class DevPilotDaemon {
+export class BrowserPilotDaemon {
   private httpServer: http.Server | null = null
   private wss: WebSocketServer | null = null
   private backends = new Map<string, ConnectedBackend>()
@@ -208,7 +208,7 @@ export class DevPilotDaemon {
     const targetId = clientId ?? this.primaryClientId
     if (!targetId) {
       throw new Error(
-        'No browser connected to DevPilot daemon. Load the DevPilot Chrome extension or connect via --cdp <url>.',
+        'No browser connected to BrowserPilot daemon. Load the BrowserPilot Chrome extension or connect via --cdp <url>.',
       )
     }
     const backend = this.backends.get(targetId)
@@ -238,7 +238,7 @@ export class DevPilotDaemon {
       if (method === 'GET' && url.pathname === '/api/health') {
         this.sendJson(res, 200, {
           ok: true,
-          version: DEVPILOT_VERSION,
+          version: BROWSERPILOT_VERSION,
           uptimeMs: Date.now() - this.startedAt,
           clients: this.listClients(),
         })

@@ -1,8 +1,8 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import { DirectCDPTransport, SessionManager } from '@devpilot/core'
-import { DEVPILOT_VERSION, type BrowserClientInfo } from '@devpilot/protocol'
+import { DirectCDPTransport, SessionManager } from '@browserpilot/core'
+import { BROWSERPILOT_VERSION, type BrowserClientInfo } from '@browserpilot/protocol'
 import { DaemonClient } from './client.js'
 import { executeTool, TOOL_DEFINITIONS, type ToolExecutionResult, type ToolRuntimeContext } from './tools.js'
 
@@ -14,7 +14,7 @@ export interface StartMcpOptions {
 }
 
 /**
- * Starts the DevPilot Model Context Protocol (MCP) server on stdio.
+ * Starts the BrowserPilot Model Context Protocol (MCP) server on stdio.
  * Exposes all 39 pure-CDP browser automation & DevTools debugging tools to
  * Claude Code, Cursor, Codex, Antigravity, or any MCP-compatible agent.
  */
@@ -37,7 +37,7 @@ export async function startMcpServer(options: StartMcpOptions = {}): Promise<voi
   }
 
   const server = new Server(
-    { name: 'devpilot', version: DEVPILOT_VERSION },
+    { name: 'browserpilot', version: BROWSERPILOT_VERSION },
     { capabilities: { tools: {} } },
   )
 

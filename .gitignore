@@ -10,3 +10,7 @@ coverage/
 !packages/extension/icons/*.png
 .env
 .env.*
+packages/server/extension/
+packages/server/README.md
+packages/server/LICENSE
+*.tgz

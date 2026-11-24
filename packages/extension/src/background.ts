@@ -3,7 +3,7 @@ import {
   DEFAULT_DAEMON_HOST,
   DEFAULT_DAEMON_PORT,
   DEFAULT_TAB_GROUP_TITLE,
-  DEVPILOT_VERSION,
+  BROWSERPILOT_VERSION,
   isBlockedProfileWideCommand,
   isRestrictedUrl,
   isUrlAllowedByDomainRules,
@@ -19,14 +19,14 @@ import {
   type ExtensionState,
   type TabGroupColor,
   type TabInfo,
-} from '@devpilot/protocol'
+} from '@browserpilot/protocol'
 
-declare const __DEVPILOT_DEFAULT_DAEMON_URL__: string
-declare const __DEVPILOT_DEFAULT_TOKEN__: string
+declare const __BROWSERPILOT_DEFAULT_DAEMON_URL__: string
+declare const __BROWSERPILOT_DEFAULT_TOKEN__: string
 
-const STORAGE_CONFIG_KEY = 'devpilot_config_v1'
-const KEEPALIVE_ALARM = 'devpilot-keepalive'
-const CONTEXT_MENU_PIN_ID = 'devpilot-pin-element'
+const STORAGE_CONFIG_KEY = 'browserpilot_config_v1'
+const KEEPALIVE_ALARM = 'browserpilot-keepalive'
+const CONTEXT_MENU_PIN_ID = 'browserpilot-pin-element'
 
 const DEFAULT_CONFIG: ExtensionConfig = {
   theme: 'dark',
@@ -36,10 +36,10 @@ const DEFAULT_CONFIG: ExtensionConfig = {
   showGhostCursor: true,
   groupTabs: true,
   daemonUrl:
-    typeof __DEVPILOT_DEFAULT_DAEMON_URL__ === 'string' && __DEVPILOT_DEFAULT_DAEMON_URL__
-      ? __DEVPILOT_DEFAULT_DAEMON_URL__
+    typeof __BROWSERPILOT_DEFAULT_DAEMON_URL__ === 'string' && __BROWSERPILOT_DEFAULT_DAEMON_URL__
+      ? __BROWSERPILOT_DEFAULT_DAEMON_URL__
       : `ws://${DEFAULT_DAEMON_HOST}:${DEFAULT_DAEMON_PORT}/extension`,
-  authToken: typeof __DEVPILOT_DEFAULT_TOKEN__ === 'string' ? __DEVPILOT_DEFAULT_TOKEN__ : '',
+  authToken: typeof __BROWSERPILOT_DEFAULT_TOKEN__ === 'string' ? __BROWSERPILOT_DEFAULT_TOKEN__ : '',
   domainRules: {
     blockedDomains: [],
     allowedDomains: [],
@@ -106,7 +106,7 @@ async function getExtensionState(): Promise<ExtensionState> {
     connected: transportMode !== 'disconnected',
     transport: transportMode,
     extensionId: chrome.runtime.id,
-    version: DEVPILOT_VERSION,
+    version: BROWSERPILOT_VERSION,
     config,
     attachedTabs: tabs.filter((t) => t.attached),
     recentActivity: recentActivity.slice(-80),
@@ -118,7 +118,7 @@ async function getExtensionState(): Promise<ExtensionState> {
 function broadcastUiUpdate(): void {
   void getExtensionState()
     .then((state) => {
-      chrome.runtime.sendMessage({ type: 'devpilot:state-update', state }).catch(() => {})
+      chrome.runtime.sendMessage({ type: 'browserpilot:state-update', state }).catch(() => {})
     })
     .catch(() => {})
 }
@@ -212,7 +212,7 @@ function sendHello(transport: 'native' | 'websocket'): void {
     type: 'hello',
     token: config.authToken,
     extensionId: chrome.runtime.id,
-    extensionVersion: DEVPILOT_VERSION,
+    extensionVersion: BROWSERPILOT_VERSION,
     browser: navigator.userAgent.includes('Edg/')
       ? 'Edge'
       : navigator.userAgent.includes('Brave')
@@ -447,7 +447,7 @@ async function ensureAttached(
   options?: { tabGroup?: string; tabGroupColor?: TabGroupColor },
 ): Promise<AttachedTabRecord> {
   if (config.paused) {
-    throw new Error('DevPilot is paused by user in the extension popup.')
+    throw new Error('BrowserPilot is paused by user in the extension popup.')
   }
   const existing = attachedTabs.get(tabId)
   if (existing) return existing
@@ -462,7 +462,7 @@ async function ensureAttached(
       throw new Error(`Cannot attach chrome.debugger to restricted URL: ${url}`)
     }
     if (url.startsWith('http') && !isUrlAllowedByDomainRules(url, config.domainRules)) {
-      throw new Error(`Domain blocked by DevPilot domain rules: ${url}`)
+      throw new Error(`Domain blocked by BrowserPilot domain rules: ${url}`)
     }
 
     await removeForeignExtensionIframes(tabId)
@@ -656,7 +656,7 @@ async function executeBridgeMethod(method: string, params: Record<string, unknow
       if (!config.showHighlights) return { ok: true }
       const tabId = Number(params.tabId)
       await chrome.tabs.sendMessage(tabId, {
-        type: 'devpilot:highlight',
+        type: 'browserpilot:highlight',
         box: params.box,
         label: params.label,
       }).catch(() => {})
@@ -667,7 +667,7 @@ async function executeBridgeMethod(method: string, params: Record<string, unknow
       if (!config.showGhostCursor) return { ok: true }
       const tabId = Number(params.tabId)
       await chrome.tabs.sendMessage(tabId, {
-        type: 'devpilot:ghost-cursor',
+        type: 'browserpilot:ghost-cursor',
         x: params.x,
         y: params.y,
         clicking: params.clicking,
@@ -802,12 +802,12 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener((details) => {
     .catch(() => {})
 })
 
-// Right-click "Pin Element for DevPilot" context menu
+// Right-click "Pin Element for BrowserPilot" context menu
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: CONTEXT_MENU_PIN_ID,
-      title: 'Pin Element for DevPilot',
+      title: 'Pin Element for BrowserPilot',
       contexts: ['all'],
     })
   })
@@ -817,7 +817,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== CONTEXT_MENU_PIN_ID || !tab?.id) return
   const tabId = tab.id
   void (async () => {
-    const resp = (await chrome.tabs.sendMessage(tabId, { type: 'devpilot:pin-last-right-clicked' }).catch(() => null)) as {
+    const resp = (await chrome.tabs.sendMessage(tabId, { type: 'browserpilot:pin-last-right-clicked' }).catch(() => null)) as {
       globalVar?: string
       selector?: string
     } | null
@@ -834,29 +834,29 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || typeof msg !== 'object') return false
 
-  if (msg.type === 'devpilot:get-state') {
+  if (msg.type === 'browserpilot:get-state') {
     void getExtensionState().then(sendResponse)
     return true
   }
-  if (msg.type === 'devpilot:update-config') {
+  if (msg.type === 'browserpilot:update-config') {
     void saveConfig(msg.patch as Partial<ExtensionConfig>).then((cfg) => sendResponse({ ok: true, config: cfg }))
     return true
   }
-  if (msg.type === 'devpilot:detach-tab') {
+  if (msg.type === 'browserpilot:detach-tab') {
     void detachTab(Number(msg.tabId)).then(() => sendResponse({ ok: true }))
     return true
   }
-  if (msg.type === 'devpilot:detach-all') {
+  if (msg.type === 'browserpilot:detach-all') {
     void Promise.all(Array.from(attachedTabs.keys()).map((id) => detachTab(id))).then(() => sendResponse({ ok: true }))
     return true
   }
-  if (msg.type === 'devpilot:reconnect') {
+  if (msg.type === 'browserpilot:reconnect') {
     nativeRetryAfter = 0
     disconnectTransport()
     void connectBridge().then(() => sendResponse({ ok: true }))
     return true
   }
-  if (msg.type === 'devpilot:open-sidepanel') {
+  if (msg.type === 'browserpilot:open-sidepanel') {
     void chrome.windows.getCurrent().then((win) => {
       if (win.id !== undefined && chrome.sidePanel?.open) {
         return chrome.sidePanel.open({ windowId: win.id })
@@ -864,15 +864,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }))
     return true
   }
-  if (msg.type === 'devpilot:start-picker') {
+  if (msg.type === 'browserpilot:start-picker') {
     void chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
       if (tab?.id) {
-        return chrome.tabs.sendMessage(tab.id, { type: 'devpilot:start-picker' })
+        return chrome.tabs.sendMessage(tab.id, { type: 'browserpilot:start-picker' })
       }
     }).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }))
     return true
   }
-  if (msg.type === 'devpilot:picked-element') {
+  if (msg.type === 'browserpilot:picked-element') {
     logActivity('element.picked', 'ok', `${msg.selector} (${msg.text ?? ''})`, _sender.tab?.id)
     sendEvent('element.picked', { tabId: _sender.tab?.id, ...msg })
     sendResponse({ ok: true })

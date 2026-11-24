@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import type { RecordingOptions, RecordingResult } from '@devpilot/protocol'
+import type { RecordingOptions, RecordingResult } from '@browserpilot/protocol'
 import type { TabCDPSession } from './cdp-client.js'
 
 interface ActiveRecording {

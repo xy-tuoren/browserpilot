@@ -3,16 +3,16 @@ import path from 'node:path'
 import esbuild from 'esbuild'
 
 const root = import.meta.dirname
-const distDir = process.env.DEVPILOT_OUT_DIR ? path.resolve(process.env.DEVPILOT_OUT_DIR) : path.join(root, 'dist')
+const distDir = process.env.BROWSERPILOT_OUT_DIR ? path.resolve(process.env.BROWSERPILOT_OUT_DIR) : path.join(root, 'dist')
 
 await fs.rm(distDir, { recursive: true, force: true })
 await fs.mkdir(path.join(distDir, 'icons'), { recursive: true })
 
 const define = {
-  __DEVPILOT_DEFAULT_DAEMON_URL__: JSON.stringify(
-    process.env.DEVPILOT_DAEMON_URL || 'ws://127.0.0.1:19888/extension',
+  __BROWSERPILOT_DEFAULT_DAEMON_URL__: JSON.stringify(
+    process.env.BROWSERPILOT_DAEMON_URL || 'ws://127.0.0.1:19888/extension',
   ),
-  __DEVPILOT_DEFAULT_TOKEN__: JSON.stringify(process.env.DEVPILOT_AUTH_TOKEN || ''),
+  __BROWSERPILOT_DEFAULT_TOKEN__: JSON.stringify(process.env.BROWSERPILOT_AUTH_TOKEN || ''),
 }
 
 await esbuild.build({
@@ -43,4 +43,4 @@ for (const size of [16, 32, 48, 128]) {
   )
 }
 
-console.log('Built @devpilot/extension ->', distDir)
+console.log('Built @browserpilot/extension ->', distDir)

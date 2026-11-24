@@ -1,4 +1,4 @@
-import type { ExtensionState } from '@devpilot/protocol'
+import type { ExtensionState } from '@browserpilot/protocol'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 
@@ -71,7 +71,7 @@ function render(state: ExtensionState): void {
       btn.className = 'sm'
       btn.textContent = 'Detach'
       btn.addEventListener('click', () => {
-        void chrome.runtime.sendMessage({ type: 'devpilot:detach-tab', tabId: tab.tabId })
+        void chrome.runtime.sendMessage({ type: 'browserpilot:detach-tab', tabId: tab.tabId })
       })
       item.appendChild(meta)
       item.appendChild(btn)
@@ -81,12 +81,12 @@ function render(state: ExtensionState): void {
 }
 
 async function refresh(): Promise<void> {
-  const state = (await chrome.runtime.sendMessage({ type: 'devpilot:get-state' })) as ExtensionState
+  const state = (await chrome.runtime.sendMessage({ type: 'browserpilot:get-state' })) as ExtensionState
   if (state) render(state)
 }
 
 function updateConfig(patch: Record<string, unknown>): void {
-  void chrome.runtime.sendMessage({ type: 'devpilot:update-config', patch }).then(() => refresh())
+  void chrome.runtime.sendMessage({ type: 'browserpilot:update-config', patch }).then(() => refresh())
 }
 
 $('btn-pause').addEventListener('click', () => {
@@ -94,13 +94,13 @@ $('btn-pause').addEventListener('click', () => {
   updateConfig({ paused: !currentState.config.paused })
 })
 $('btn-sidepanel').addEventListener('click', () => {
-  void chrome.runtime.sendMessage({ type: 'devpilot:open-sidepanel' })
+  void chrome.runtime.sendMessage({ type: 'browserpilot:open-sidepanel' })
 })
 $('btn-reconnect').addEventListener('click', () => {
-  void chrome.runtime.sendMessage({ type: 'devpilot:reconnect' }).then(() => setTimeout(refresh, 400))
+  void chrome.runtime.sendMessage({ type: 'browserpilot:reconnect' }).then(() => setTimeout(refresh, 400))
 })
 $('btn-detach-all').addEventListener('click', () => {
-  void chrome.runtime.sendMessage({ type: 'devpilot:detach-all' }).then(() => refresh())
+  void chrome.runtime.sendMessage({ type: 'browserpilot:detach-all' }).then(() => refresh())
 })
 
 $('opt-dark-mode').addEventListener('change', (e) => {
@@ -140,7 +140,7 @@ $('btn-save-settings').addEventListener('click', () => {
 })
 
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg?.type === 'devpilot:state-update' && msg.state) {
+  if (msg?.type === 'browserpilot:state-update' && msg.state) {
     render(msg.state as ExtensionState)
   }
 })

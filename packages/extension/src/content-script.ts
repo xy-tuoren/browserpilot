@@ -1,5 +1,5 @@
 /**
- * DevPilot Content Script (Isolated World)
+ * BrowserPilot Content Script (Isolated World)
  * Renders all visual feedback (action highlight box, animated ghost cursor,
  * element picker, and toast notifications) inside a closed Shadow Root
  * so it never interferes with page DOM queries or styles.
@@ -25,7 +25,7 @@ let pickerHoverBox: HTMLDivElement | null = null
 function ensureOverlay(): ShadowRoot {
   if (shadowRoot) return shadowRoot
   const host = document.createElement('div')
-  host.id = '__devpilot_ui_host'
+  host.id = '__browserpilot_ui_host'
   host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;'
   shadowRoot = host.attachShadow({ mode: 'closed' })
 
@@ -127,7 +127,7 @@ function showHighlight(box: { x: number; y: number; width: number; height: numbe
   highlightEl.style.top = `${box.y}px`
   highlightEl.style.width = `${box.width}px`
   highlightEl.style.height = `${box.height}px`
-  highlightLabelEl.textContent = label || 'DevPilot'
+  highlightLabelEl.textContent = label || 'BrowserPilot'
   highlightEl.style.opacity = '1'
   if (highlightTimer) clearTimeout(highlightTimer)
   highlightTimer = setTimeout(() => {
@@ -202,9 +202,9 @@ function onPickerClick(e: MouseEvent): void {
   const selector = computeStableSelector(target)
   const text = (target.textContent || '').trim().slice(0, 80)
   void navigator.clipboard?.writeText(selector).catch(() => {})
-  showToast(`DevPilot picked: ${selector}`)
+  showToast(`BrowserPilot picked: ${selector}`)
   chrome.runtime.sendMessage({
-    type: 'devpilot:picked-element',
+    type: 'browserpilot:picked-element',
     selector,
     tag: target.tagName.toLowerCase(),
     text,
@@ -229,33 +229,33 @@ document.addEventListener(
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || typeof msg !== 'object') return false
 
-  if (msg.type === 'devpilot:highlight' && msg.box) {
+  if (msg.type === 'browserpilot:highlight' && msg.box) {
     showHighlight(msg.box, msg.label)
     sendResponse({ ok: true })
     return false
   }
-  if (msg.type === 'devpilot:ghost-cursor') {
+  if (msg.type === 'browserpilot:ghost-cursor') {
     moveGhostCursor(Number(msg.x ?? 0), Number(msg.y ?? 0), Boolean(msg.clicking))
     sendResponse({ ok: true })
     return false
   }
-  if (msg.type === 'devpilot:start-picker') {
+  if (msg.type === 'browserpilot:start-picker') {
     ensureOverlay()
     pickerActive = true
     document.addEventListener('mousemove', onPickerMove, true)
     document.addEventListener('click', onPickerClick, true)
     document.addEventListener('keydown', onPickerKey, true)
-    showToast('Click any element to inspect with DevPilot (Esc to cancel)')
+    showToast('Click any element to inspect with BrowserPilot (Esc to cancel)')
     sendResponse({ ok: true })
     return false
   }
-  if (msg.type === 'devpilot:pin-last-right-clicked') {
+  if (msg.type === 'browserpilot:pin-last-right-clicked') {
     if (!lastRightClicked) {
       sendResponse({ ok: false })
       return false
     }
     pinCounter++
-    const varName = `__devpilotPinned${pinCounter}`
+    const varName = `__browserpilotPinned${pinCounter}`
     ;(globalThis as Record<string, unknown>)[varName] = lastRightClicked
     const selector = computeStableSelector(lastRightClicked)
     void navigator.clipboard?.writeText(selector).catch(() => {})

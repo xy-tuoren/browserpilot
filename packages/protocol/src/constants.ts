@@ -1,10 +1,10 @@
-export const DEVPILOT_VERSION = '1.0.0'
+export const BROWSERPILOT_VERSION = '1.1.0'
 export const CDP_PROTOCOL_VERSION = '1.3'
 
 export const DEFAULT_DAEMON_HOST = '127.0.0.1'
 export const DEFAULT_DAEMON_PORT = 19888
 
-export const NATIVE_HOST_NAME = 'com.devpilot.bridge'
+export const NATIVE_HOST_NAME = 'com.browserpilot.bridge'
 export const NATIVE_MESSAGE_MAX_BYTES = 1024 * 1024 // Chrome Native Messaging 1MB per-message cap
 
 export const EXTENSION_KEEPALIVE_INTERVAL_MS = 20_000
@@ -16,7 +16,7 @@ export const MAX_CONSOLE_BUFFER = 5_000
 export const MAX_NETWORK_BUFFER = 2_000
 export const MAX_ACTIVITY_BUFFER = 200
 
-export const DEFAULT_TAB_GROUP_TITLE = 'devpilot'
+export const DEFAULT_TAB_GROUP_TITLE = 'browserpilot'
 
 export const TAB_GROUP_COLORS = [
   'grey',

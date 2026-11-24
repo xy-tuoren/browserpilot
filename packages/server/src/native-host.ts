@@ -4,14 +4,14 @@ import {
   encodeNativeMessage,
   NativeMessageDecoder,
   type BridgeMessage,
-} from '@devpilot/protocol'
+} from '@browserpilot/protocol'
 import { DaemonClient } from './client.js'
 
 /**
- * Chrome Native Messaging Host binary (`com.devpilot.bridge`).
+ * Chrome Native Messaging Host binary (`com.browserpilot.bridge`).
  * Launched automatically by Chrome via `chrome.runtime.connectNative()`.
- * Bridges Chrome's 4-byte length-prefixed stdio frames to the local DevPilot Daemon
- * and automatically injects the user's ~/.devpilot/daemon.json auth token.
+ * Bridges Chrome's 4-byte length-prefixed stdio frames to the local BrowserPilot Daemon
+ * and automatically injects the user's ~/.browserpilot/daemon.json auth token.
  */
 async function main(): Promise<void> {
   const daemonClient = await DaemonClient.connectOrStart()

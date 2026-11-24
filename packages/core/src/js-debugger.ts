@@ -4,7 +4,7 @@ import type {
   DebuggerPausedState,
   DebuggerScopeVariable,
   DebuggerScriptInfo,
-} from '@devpilot/protocol'
+} from '@browserpilot/protocol'
 import type { TabCDPSession } from './cdp-client.js'
 
 interface RawCallFrame {

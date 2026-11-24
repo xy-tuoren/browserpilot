@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { BrowserClientInfo, SessionInfo, TabGroupColor } from '@devpilot/protocol'
+import type { BrowserClientInfo, SessionInfo, TabGroupColor } from '@browserpilot/protocol'
 import {
   isDaemonReachable,
   loadOrCreateDaemonConfig,
@@ -32,7 +32,7 @@ export class DaemonClient {
       {
         detached: true,
         stdio: 'ignore',
-        env: { ...process.env, DEVPILOT_DAEMON_TOKEN: cfg.token },
+        env: { ...process.env, BROWSERPILOT_DAEMON_TOKEN: cfg.token },
       },
     )
     child.unref()
@@ -44,7 +44,7 @@ export class DaemonClient {
       }
     }
 
-    throw new Error(`DevPilot daemon failed to start on ${cfg.host}:${cfg.port}`)
+    throw new Error(`BrowserPilot daemon failed to start on ${cfg.host}:${cfg.port}`)
   }
 
   private async request<T>(method: string, route: string, body?: unknown): Promise<T> {

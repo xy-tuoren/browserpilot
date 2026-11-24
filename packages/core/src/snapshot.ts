@@ -1,5 +1,5 @@
 import { createTwoFilesPatch } from 'diff'
-import type { RefTarget, SnapshotOptions, SnapshotResult } from '@devpilot/protocol'
+import type { RefTarget, SnapshotOptions, SnapshotResult } from '@browserpilot/protocol'
 import type { TabCDPSession } from './cdp-client.js'
 
 export interface RawAXValue {

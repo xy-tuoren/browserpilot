@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { DEFAULT_DAEMON_HOST, DEFAULT_DAEMON_PORT } from '@devpilot/protocol'
+import { DEFAULT_DAEMON_HOST, DEFAULT_DAEMON_PORT } from '@browserpilot/protocol'
 
 export interface DaemonConfigFile {
   host: string
@@ -12,20 +12,20 @@ export interface DaemonConfigFile {
   startedAt?: number
 }
 
-export function getDevPilotHomeDir(): string {
-  return process.env.DEVPILOT_HOME || path.join(os.homedir(), '.devpilot')
+export function getBrowserPilotHomeDir(): string {
+  return process.env.BROWSERPILOT_HOME || path.join(os.homedir(), '.browserpilot')
 }
 
 export function getDaemonConfigPath(): string {
-  return path.join(getDevPilotHomeDir(), 'daemon.json')
+  return path.join(getBrowserPilotHomeDir(), 'daemon.json')
 }
 
 export function getDaemonLogPath(): string {
-  return path.join(getDevPilotHomeDir(), 'daemon.log')
+  return path.join(getBrowserPilotHomeDir(), 'daemon.log')
 }
 
-export async function ensureDevPilotHome(): Promise<string> {
-  const dir = getDevPilotHomeDir()
+export async function ensureBrowserPilotHome(): Promise<string> {
+  const dir = getBrowserPilotHomeDir()
   await fs.mkdir(dir, { recursive: true, mode: 0o700 })
   return dir
 }
@@ -35,7 +35,7 @@ export async function loadOrCreateDaemonConfig(overrides?: {
   port?: number
   token?: string
 }): Promise<DaemonConfigFile> {
-  await ensureDevPilotHome()
+  await ensureBrowserPilotHome()
   const filePath = getDaemonConfigPath()
   let existing: Partial<DaemonConfigFile> = {}
   try {
@@ -58,7 +58,7 @@ export async function loadOrCreateDaemonConfig(overrides?: {
 }
 
 export async function writeDaemonRuntimeInfo(cfg: DaemonConfigFile): Promise<void> {
-  await ensureDevPilotHome()
+  await ensureBrowserPilotHome()
   await fs.writeFile(getDaemonConfigPath(), JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 })
 }
 

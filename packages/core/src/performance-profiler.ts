@@ -3,7 +3,7 @@ import type {
   PerformanceMetricsResult,
   TraceInsightResult,
   WebVitalsResult,
-} from '@devpilot/protocol'
+} from '@browserpilot/protocol'
 import type { TabCDPSession } from './cdp-client.js'
 
 interface RawTraceEvent {

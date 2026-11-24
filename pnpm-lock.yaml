@@ -23,7 +23,7 @@ importers:
 
   packages/core:
     dependencies:
-      '@devpilot/protocol':
+      '@browserpilot/protocol':
         specifier: workspace:*
         version: link:../protocol
       diff:
@@ -42,11 +42,11 @@ importers:
 
   packages/extension:
     dependencies:
-      '@devpilot/protocol':
+      '@browserpilot/protocol':
         specifier: workspace:*
         version: link:../protocol
     devDependencies:
-      '@devpilot/core':
+      '@browserpilot/core':
         specifier: workspace:*
         version: link:../core
       '@types/chrome':
@@ -63,19 +63,22 @@ importers:
 
   packages/server:
     dependencies:
-      '@devpilot/core':
-        specifier: workspace:*
-        version: link:../core
-      '@devpilot/protocol':
-        specifier: workspace:*
-        version: link:../protocol
       '@modelcontextprotocol/sdk':
         specifier: ^1.12.0
         version: 1.32.2(zod@4.6.7)
+      diff:
+        specifier: ^7.0.0
+        version: 7.0.0
       ws:
         specifier: ^8.18.0
         version: 8.23.0
     devDependencies:
+      '@browserpilot/core':
+        specifier: workspace:*
+        version: link:../core
+      '@browserpilot/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       '@types/ws':
         specifier: ^8.5.14
         version: 8.18.2

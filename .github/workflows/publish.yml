@@ -1,0 +1,58 @@
+name: Publish npm & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          cache: pnpm
+      - name: Install ffmpeg & Chrome for Testing
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          CHROME_OUT=$(npx --yes @puppeteer/browsers install chrome@stable --path "$HOME/.cache/browserpilot-chrome")
+          CHROME_BIN=$(echo "$CHROME_OUT" | awk '{print $2}' | tail -n 1)
+          echo "BROWSERPILOT_CHROME_BIN=$CHROME_BIN" >> "$GITHUB_ENV"
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build, Typecheck & Test
+        run: |
+          pnpm build
+          pnpm typecheck
+          pnpm -r --workspace-concurrency=1 test
+      - name: Publish browserpilot to npm
+        if: env.NPM_TOKEN != ''
+        working-directory: packages/server
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Package Extension ZIP
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          (cd packages/extension/dist && zip -rq "$GITHUB_WORKSPACE/browserpilot-extension-${TAG}.zip" .)
+      - name: Create or Update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          ZIP="browserpilot-extension-${TAG}.zip"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" --clobber
+          else
+            gh release create "$TAG" "$ZIP" --generate-notes --title "BrowserPilot ${TAG}"
+          fi

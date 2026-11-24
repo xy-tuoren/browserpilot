@@ -4,14 +4,14 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { DEVPILOT_VERSION, type TabGroupColor } from '@devpilot/protocol'
+import { BROWSERPILOT_VERSION, type TabGroupColor } from '@browserpilot/protocol'
 import { DaemonClient } from './client.js'
 import { isDaemonReachable, loadOrCreateDaemonConfig, readDaemonConfig } from './config.js'
-import { DevPilotDaemon } from './daemon.js'
+import { BrowserPilotDaemon } from './daemon.js'
 import { startMcpServer } from './mcp.js'
 import { installNativeHost, getNativeMessagingHostDirs } from './native-install.js'
-import { DEVPILOT_SKILL_DOC } from './skill-doc.js'
-import { NATIVE_HOST_NAME } from '@devpilot/protocol'
+import { BROWSERPILOT_SKILL_DOC } from './skill-doc.js'
+import { NATIVE_HOST_NAME } from '@browserpilot/protocol'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -62,13 +62,19 @@ function printToolOutput(res: { content: Array<{ type: string; text?: string; mi
   if (res.isError) process.exitCode = 1
 }
 
-function getExtensionDistPath(): string {
-  return path.resolve(__dirname, '..', '..', 'extension', 'dist')
+async function getExtensionDistPath(): Promise<string> {
+  const bundled = path.resolve(__dirname, '..', 'extension')
+  try {
+    await fs.access(path.join(bundled, 'manifest.json'))
+    return bundled
+  } catch {
+    return path.resolve(__dirname, '..', '..', 'extension', 'dist')
+  }
 }
 
 async function findChromeBinary(): Promise<string | null> {
   const candidates = [
-    process.env.DEVPILOT_CHROME_BIN,
+    process.env.BROWSERPILOT_CHROME_BIN,
     path.join(
       os.homedir(),
       'Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
@@ -89,37 +95,37 @@ async function findChromeBinary(): Promise<string | null> {
 }
 
 function printHelp(): void {
-  console.log(`DevPilot v${DEVPILOT_VERSION} — Zero-Click Pure-CDP Browser Control & DevTools CLI
+  console.log(`BrowserPilot v${BROWSERPILOT_VERSION} — Zero-Click Pure-CDP Browser Control & DevTools CLI
 
 Usage:
-  devpilot setup [--extension-id <id>] [--dry-run]   Install Native Messaging host & print MCP setup
-  devpilot doctor                                    Diagnose extension, Native Messaging, Chrome, ffmpeg & daemon
-  devpilot daemon start | stop | status | run        Manage local authenticated bridge daemon
-  devpilot mcp [--cdp <url>]                         Start MCP stdio server (for Claude/Cursor/Codex/Antigravity)
-  devpilot connect-cdp <url>                         Attach daemon directly to a --remote-debugging-port Chrome
-  devpilot browser start [--headless] [--cdp-port N] Launch Chrome/Chrome for Testing with DevPilot ready
+  browserpilot setup [--extension-id <id>] [--dry-run]   Install Native Messaging host & print MCP setup
+  browserpilot doctor                                    Diagnose extension, Native Messaging, Chrome, ffmpeg & daemon
+  browserpilot daemon start | stop | status | run        Manage local authenticated bridge daemon
+  browserpilot mcp [--cdp <url>]                         Start MCP stdio server (for Claude/Cursor/Codex/Antigravity)
+  browserpilot connect-cdp <url>                         Attach daemon directly to a --remote-debugging-port Chrome
+  browserpilot browser start [--headless] [--cdp-port N] Launch Chrome/Chrome for Testing with BrowserPilot ready
 
 Stateful Sessions (Playwriter replacement):
-  devpilot session new [--tab-group <name>] [--tab-group-color <color>]
-  devpilot session list | reset <id> | close <id>
-  devpilot exec -s <id> -e '<js>' | -f <script.js> [--timeout <ms>]
+  browserpilot session new [--tab-group <name>] [--tab-group-color <color>]
+  browserpilot session list | reset <id> | close <id>
+  browserpilot exec -s <id> -e '<js>' | -f <script.js> [--timeout <ms>]
 
 Direct Quick Commands:
-  devpilot tabs
-  devpilot open <url> [--tab-group <name>]
-  devpilot close <tabId>
-  devpilot snapshot [--tab <id>] [--search <regex>] [--scope <css>] [--full]
-  devpilot click <ref|selector> [--tab <id>]
-  devpilot fill <ref|selector> <value> [--tab <id>]
-  devpilot screenshot [outputPath] [--full-page] [--tab <id>]
-  devpilot labeled-screenshot [outputPath] [--tab <id>]
-  devpilot console [--level error] [--search <str>] [--since-last] [--tab <id>]
-  devpilot network [--failed] [--search <str>] [--request-id <id>] [--tab <id>]
-  devpilot styles <ref|selector> [--tab <id>]
-  devpilot react <ref|selector> [--tab <id>]
-  devpilot eval '<js>' [--tab <id>]
-  devpilot perf [metrics|heap|trace_start|trace_stop|cpu_start|cpu_stop] [--tab <id>]
-  devpilot skill                                     Output complete AI agent skill documentation
+  browserpilot tabs
+  browserpilot open <url> [--tab-group <name>]
+  browserpilot close <tabId>
+  browserpilot snapshot [--tab <id>] [--search <regex>] [--scope <css>] [--full]
+  browserpilot click <ref|selector> [--tab <id>]
+  browserpilot fill <ref|selector> <value> [--tab <id>]
+  browserpilot screenshot [outputPath] [--full-page] [--tab <id>]
+  browserpilot labeled-screenshot [outputPath] [--tab <id>]
+  browserpilot console [--level error] [--search <str>] [--since-last] [--tab <id>]
+  browserpilot network [--failed] [--search <str>] [--request-id <id>] [--tab <id>]
+  browserpilot styles <ref|selector> [--tab <id>]
+  browserpilot react <ref|selector> [--tab <id>]
+  browserpilot eval '<js>' [--tab <id>]
+  browserpilot perf [metrics|heap|trace_start|trace_stop|cpu_start|cpu_stop] [--tab <id>]
+  browserpilot skill                                     Output complete AI agent skill documentation
 `)
 }
 
@@ -127,23 +133,23 @@ async function main(): Promise<void> {
   const { positional, flags } = parseFlags(process.argv.slice(2))
   const cmd = positional[0]
 
+  if (cmd === 'version' || flags.version || flags.v) {
+    console.log(BROWSERPILOT_VERSION)
+    return
+  }
+
   if (!cmd || cmd === 'help' || flags.help || flags.h) {
     printHelp()
     return
   }
 
-  if (cmd === '--version' || cmd === 'version' || flags.version || flags.v) {
-    console.log(DEVPILOT_VERSION)
-    return
-  }
-
   if (cmd === 'skill') {
-    console.log(DEVPILOT_SKILL_DOC)
+    console.log(BROWSERPILOT_SKILL_DOC)
     return
   }
 
   if (cmd === 'doctor') {
-    const extDist = getExtensionDistPath()
+    const extDist = await getExtensionDistPath()
     let extBuilt = false
     try {
       await fs.access(path.join(extDist, 'manifest.json'))
@@ -183,7 +189,7 @@ async function main(): Promise<void> {
     }
 
     const report = {
-      version: DEVPILOT_VERSION,
+      version: BROWSERPILOT_VERSION,
       node: process.version,
       extensionBuilt: extBuilt,
       extensionDistPath: extDist,
@@ -200,18 +206,18 @@ async function main(): Promise<void> {
       return
     }
 
-    console.log(`DevPilot Doctor (v${DEVPILOT_VERSION})`)
+    console.log(`BrowserPilot Doctor (v${BROWSERPILOT_VERSION})`)
     console.log(`──────────────────────────────────────────`)
     console.log(`Node.js          : ${report.node}`)
     console.log(`Extension dist/  : ${extBuilt ? 'OK' : 'MISSING (run pnpm build)'} (${extDist})`)
-    console.log(`Chrome binary    : ${chromeBin ?? 'Not found (set DEVPILOT_CHROME_BIN)'}`)
+    console.log(`Chrome binary    : ${chromeBin ?? 'Not found (set BROWSERPILOT_CHROME_BIN)'}`)
     console.log(`ffmpeg           : ${hasFfmpeg ? 'OK (video recording ready)' : 'Not found (optional for recording)'}`)
     console.log(`Daemon status    : ${daemonRunning ? `RUNNING (browsers: ${connectedClients})` : 'STOPPED'}`)
     console.log(
       `Native Messaging : ${
         report.nativeMessagingInstalled.length
           ? `Installed (${report.nativeMessagingInstalled.join(', ')})`
-          : 'Not installed (run: devpilot setup --extension-id <id>)'
+          : 'Not installed (run: browserpilot setup --extension-id <id>)'
       }`,
     )
     return
@@ -229,15 +235,15 @@ async function main(): Promise<void> {
 
   if (cmd === 'setup') {
     const cfg = await loadOrCreateDaemonConfig()
-    const extDist = getExtensionDistPath()
+    const extDist = await getExtensionDistPath()
     const extId = typeof flags['extension-id'] === 'string' ? flags['extension-id'] : ''
     const dryRun = Boolean(flags['dry-run'])
 
-    console.log(`\nDevPilot Setup (v${DEVPILOT_VERSION})`)
+    console.log(`\nBrowserPilot Setup (v${BROWSERPILOT_VERSION})`)
     console.log(`────────────────────────────────────────────────────`)
     console.log(`1. Unpacked Extension Path:\n   ${extDist}`)
     console.log(`   -> Open chrome://extensions -> Enable "Developer mode" -> "Load unpacked" -> select the path above.`)
-    console.log(`\n2. Local Daemon Config (~/.devpilot/daemon.json):`)
+    console.log(`\n2. Local Daemon Config (~/.browserpilot/daemon.json):`)
     console.log(`   WebSocket URL : ws://${cfg.host}:${cfg.port}/extension`)
     console.log(`   Auth Token    : ${cfg.token}`)
 
@@ -251,7 +257,7 @@ async function main(): Promise<void> {
     } else {
       console.log(`\n3. Optional (Recommended) Native Messaging Auto-Auth:`)
       console.log(`   After loading the unpacked extension, copy its Extension ID from chrome://extensions and run:`)
-      console.log(`   devpilot setup --extension-id <YOUR_EXTENSION_ID>`)
+      console.log(`   browserpilot setup --extension-id <YOUR_EXTENSION_ID>`)
     }
 
     const cliBin = path.resolve(__dirname, 'cli.js')
@@ -260,7 +266,7 @@ async function main(): Promise<void> {
       JSON.stringify(
         {
           mcpServers: {
-            devpilot: {
+            browserpilot: {
               command: process.execPath,
               args: [cliBin, 'mcp'],
             },
@@ -276,13 +282,13 @@ async function main(): Promise<void> {
   if (cmd === 'daemon') {
     const sub = positional[1] || 'status'
     if (sub === 'run') {
-      const daemon = new DevPilotDaemon()
+      const daemon = new BrowserPilotDaemon()
       const cfg = await daemon.start({
         host: typeof flags.host === 'string' ? flags.host : undefined,
         port: typeof flags.port === 'string' ? Number(flags.port) : undefined,
-        token: process.env.DEVPILOT_DAEMON_TOKEN || (typeof flags.token === 'string' ? flags.token : undefined),
+        token: process.env.BROWSERPILOT_DAEMON_TOKEN || (typeof flags.token === 'string' ? flags.token : undefined),
       })
-      console.log(`DevPilot daemon listening on http://${cfg.host}:${cfg.port} (WS: /extension)`)
+      console.log(`BrowserPilot daemon listening on http://${cfg.host}:${cfg.port} (WS: /extension)`)
       const shutdown = () => {
         void daemon.stop().then(() => process.exit(0))
       }
@@ -293,23 +299,23 @@ async function main(): Promise<void> {
     if (sub === 'start') {
       const client = await DaemonClient.connectOrStart()
       const h = await client.health()
-      console.log(`DevPilot daemon running on http://${client.config.host}:${client.config.port} (clients: ${h.clients.length})`)
+      console.log(`BrowserPilot daemon running on http://${client.config.host}:${client.config.port} (clients: ${h.clients.length})`)
       return
     }
     if (sub === 'stop') {
       const cfg = await readDaemonConfig()
       if (!cfg || !(await isDaemonReachable(cfg))) {
-        console.log('DevPilot daemon is not running.')
+        console.log('BrowserPilot daemon is not running.')
         return
       }
       await new DaemonClient(cfg).shutdown()
-      console.log('DevPilot daemon stopped.')
+      console.log('BrowserPilot daemon stopped.')
       return
     }
     if (sub === 'status') {
       const cfg = await readDaemonConfig()
       if (!cfg || !(await isDaemonReachable(cfg))) {
-        console.log('DevPilot daemon: STOPPED')
+        console.log('BrowserPilot daemon: STOPPED')
         return
       }
       const h = await new DaemonClient(cfg).health()
@@ -321,12 +327,12 @@ async function main(): Promise<void> {
 
   if (cmd === 'browser' && positional[1] === 'start') {
     const chromeBin = await findChromeBinary()
-    if (!chromeBin) throw new Error('No Chrome/Chromium binary found. Set DEVPILOT_CHROME_BIN.')
+    if (!chromeBin) throw new Error('No Chrome/Chromium binary found. Set BROWSERPILOT_CHROME_BIN.')
     const cdpPort = typeof flags['cdp-port'] === 'string' ? Number(flags['cdp-port']) : 9222
     const profileDir =
       typeof flags['user-data-dir'] === 'string'
         ? path.resolve(flags['user-data-dir'])
-        : path.join(os.homedir(), '.devpilot', 'chrome-profile')
+        : path.join(os.homedir(), '.browserpilot', 'chrome-profile')
     await fs.mkdir(profileDir, { recursive: true })
 
     const args = [
@@ -337,7 +343,7 @@ async function main(): Promise<void> {
     ]
     if (flags.headless) args.push('--headless=new')
     if (flags['silent-debugger']) args.push('--silent-debugger-extension-api')
-    const extDist = getExtensionDistPath()
+    const extDist = await getExtensionDistPath()
     if (!flags['no-extension'] && chromeBin.includes('Chrome for Testing')) {
       args.push(`--disable-extensions-except=${extDist}`, `--load-extension=${extDist}`)
     }
@@ -470,7 +476,7 @@ async function main(): Promise<void> {
     case 'screenshot':
       printToolOutput(
         await client.callTool('browser_screenshot', {
-          path: positional[1] || `devpilot-shot-${Date.now()}.png`,
+          path: positional[1] || `browserpilot-shot-${Date.now()}.png`,
           fullPage: Boolean(flags['full-page']),
           tabId,
           sessionId,
@@ -480,7 +486,7 @@ async function main(): Promise<void> {
     case 'labeled-screenshot':
       printToolOutput(
         await client.callTool('browser_labeled_screenshot', {
-          path: positional[1] || `devpilot-som-${Date.now()}.png`,
+          path: positional[1] || `browserpilot-som-${Date.now()}.png`,
           tabId,
           sessionId,
         }),
@@ -522,7 +528,7 @@ async function main(): Promise<void> {
       printToolOutput(await client.callTool('browser_performance', { action: positional[1] || 'metrics', tabId, sessionId }))
       return
     default:
-      throw new Error(`Unknown command "${cmd}". Run "devpilot --help" for usage.`)
+      throw new Error(`Unknown command "${cmd}". Run "browserpilot --help" for usage.`)
   }
 }
 

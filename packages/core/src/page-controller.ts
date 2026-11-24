@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import type { BoundingBox } from '@devpilot/protocol'
+import type { BoundingBox } from '@browserpilot/protocol'
 import type { TabCDPSession } from './cdp-client.js'
 import type { SnapshotEngine } from './snapshot.js'
 import { sleep, waitForCondition, waitForPageLoad } from './wait.js'
@@ -376,12 +376,12 @@ export class PageController {
       nth = Number(nthMatch[2])
     }
 
-    // Pinned element shortcut (e.g. "globalThis.__devpilotPinned1" or "pinned")
-    if (selector === 'pinned' || selector.startsWith('globalThis.__devpilotPinned')) {
+    // Pinned element shortcut (e.g. "globalThis.__browserpilotPinned1" or "pinned")
+    if (selector === 'pinned' || selector.startsWith('globalThis.__browserpilotPinned')) {
       const expr =
         selector === 'pinned'
           ? `(() => {
-              const keys = Object.keys(globalThis).filter((k) => k.startsWith('__devpilotPinned'));
+              const keys = Object.keys(globalThis).filter((k) => k.startsWith('__browserpilotPinned'));
               return keys.length ? globalThis[keys[keys.length - 1]] : null;
             })()`
           : selector

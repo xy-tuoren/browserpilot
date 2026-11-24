@@ -1,15 +1,15 @@
 ---
-name: devpilot
-description: Control and debug the user's real logged-in Chrome browser via DevPilot (zero-click pure-CDP MV3 extension, MCP server, and CLI). Replaces Playwriter and Chrome DevTools MCP with zero per-tab clicks or confirmation popups.
+name: browserpilot
+description: Control and debug the user's real logged-in Chrome browser via BrowserPilot (zero-click pure-CDP MV3 extension, MCP server, and CLI). Replaces Playwriter and Chrome DevTools MCP with zero per-tab clicks or confirmation popups.
 ---
 
-# DevPilot Browser Control & DevTools Skill
+# BrowserPilot Browser Control & DevTools Skill
 
-DevPilot gives you direct, zero-click control and full DevTools inspection over the user's running Chrome browser (existing logins, cookies, and extensions) or a Direct CDP Chromium instance.
+BrowserPilot gives you direct, zero-click control and full DevTools inspection over the user's running Chrome browser (existing logins, cookies, and extensions) or a Direct CDP Chromium instance.
 
 ## Quick Reference
 
-### Via MCP (`devpilot mcp`)
+### Via MCP (`browserpilot mcp`)
 Use the `browser_*` tools directly:
 - **Tabs**: `browser_tabs`, `browser_open_tab`, `browser_select_tab`, `browser_close_tab`
 - **Perceive**: `browser_snapshot` (AXTree + short `e1`/`e2` refs + automatic diffing), `browser_labeled_screenshot` (Set-of-Mark), `browser_screenshot`, `browser_clean_html`, `browser_markdown`, `browser_inspect_element`
@@ -17,24 +17,24 @@ Use the `browser_*` tools directly:
 - **Debug**: `browser_console`, `browser_network`, `browser_network_intercept`, `browser_styles`, `browser_react_info`, `browser_debugger`, `browser_live_edit`, `browser_performance`, `browser_emulate`, `browser_cookies`, `browser_storage`, `browser_evaluate`, `browser_cdp`
 - **Record & Sandbox**: `browser_record`, `browser_exec`
 
-### Via CLI (`devpilot`)
+### Via CLI (`browserpilot`)
 ```bash
 # Check connected browser / tabs
-devpilot tabs
+browserpilot tabs
 
 # Stateful multi-step sandbox (replaces playwriter -s 1 -e '...')
-devpilot session new --tab-group docs
-devpilot exec -s 1 -e 'const t = await tabs.open("https://example.com"); console.log(await snapshot({ tab: t }))'
+browserpilot session new --tab-group docs
+browserpilot exec -s 1 -e 'const t = await tabs.open("https://example.com"); console.log(await snapshot({ tab: t }))'
 
 # Direct shortcuts
-devpilot open https://example.com
-devpilot snapshot --search "Sign in"
-devpilot click e3
-devpilot fill e4 "hello@example.com"
-devpilot console --level error --since-last
-devpilot network --failed
-devpilot styles "#submit-btn"
-devpilot perf metrics
+browserpilot open https://example.com
+browserpilot snapshot --search "Sign in"
+browserpilot click e3
+browserpilot fill e4 "hello@example.com"
+browserpilot console --level error --since-last
+browserpilot network --failed
+browserpilot styles "#submit-btn"
+browserpilot perf metrics
 ```
 
 ## Best Practices

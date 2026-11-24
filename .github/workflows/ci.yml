@@ -21,9 +21,9 @@ jobs:
       - name: Install ffmpeg & Chrome for Testing (for full Direct-CDP, Recording & MV3 Extension E2E)
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-          CHROME_OUT=$(npx --yes @puppeteer/browsers install chrome@stable --path "$HOME/.cache/devpilot-chrome")
+          CHROME_OUT=$(npx --yes @puppeteer/browsers install chrome@stable --path "$HOME/.cache/browserpilot-chrome")
           CHROME_BIN=$(echo "$CHROME_OUT" | awk '{print $2}' | tail -n 1)
-          echo "DEVPILOT_CHROME_BIN=$CHROME_BIN" >> "$GITHUB_ENV"
+          echo "BROWSERPILOT_CHROME_BIN=$CHROME_BIN" >> "$GITHUB_ENV"
           echo "Using Chrome for Testing: $CHROME_BIN"
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

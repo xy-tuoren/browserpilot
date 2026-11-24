@@ -1,4 +1,4 @@
-import type { SnapshotResult, SomLabelItem } from '@devpilot/protocol'
+import type { SnapshotResult, SomLabelItem } from '@browserpilot/protocol'
 import type { PageController } from './page-controller.js'
 
 const ROLE_COLORS: Record<string, string> = {
@@ -74,10 +74,10 @@ export async function captureLabeledScreenshot(
   // Inject overlay in a closed shadow host (never pollutes page CSS/selectors)
   const injectOverlay = async () => {
     await page.evaluate(`(() => {
-      const existing = document.getElementById('__devpilot_som_overlay');
+      const existing = document.getElementById('__browserpilot_som_overlay');
       if (existing) existing.remove();
       const host = document.createElement('div');
-      host.id = '__devpilot_som_overlay';
+      host.id = '__browserpilot_som_overlay';
       host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;';
       const shadow = host.attachShadow({ mode: 'closed' });
       const items = ${JSON.stringify(labels)};
@@ -103,7 +103,7 @@ export async function captureLabeledScreenshot(
 
   const removeOverlay = async () => {
     await page
-      .evaluate(`(() => { const el = document.getElementById('__devpilot_som_overlay'); if (el) el.remove(); })()`)
+      .evaluate(`(() => { const el = document.getElementById('__browserpilot_som_overlay'); if (el) el.remove(); })()`)
       .catch(() => {})
   }
 

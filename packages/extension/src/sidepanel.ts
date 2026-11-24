@@ -1,4 +1,4 @@
-import type { ExtensionState } from '@devpilot/protocol'
+import type { ExtensionState } from '@browserpilot/protocol'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 let state: ExtensionState | null = null
@@ -109,7 +109,7 @@ function render(next: ExtensionState): void {
 }
 
 async function refresh(): Promise<void> {
-  const s = (await chrome.runtime.sendMessage({ type: 'devpilot:get-state' })) as ExtensionState
+  const s = (await chrome.runtime.sendMessage({ type: 'browserpilot:get-state' })) as ExtensionState
   if (s) render(s)
 }
 
@@ -131,26 +131,26 @@ $('sp-theme').addEventListener('click', () => {
   const nextTheme = state.config.theme === 'light' ? 'dark' : 'light'
   document.documentElement.dataset.theme = nextTheme
   void chrome.runtime.sendMessage({
-    type: 'devpilot:update-config',
+    type: 'browserpilot:update-config',
     patch: { theme: nextTheme },
   })
 })
 $('sp-pick').addEventListener('click', () => {
-  void chrome.runtime.sendMessage({ type: 'devpilot:start-picker' })
+  void chrome.runtime.sendMessage({ type: 'browserpilot:start-picker' })
 })
 $('sp-pause').addEventListener('click', () => {
   if (!state) return
   void chrome.runtime.sendMessage({
-    type: 'devpilot:update-config',
+    type: 'browserpilot:update-config',
     patch: { paused: !state.config.paused },
   })
 })
 $('sp-detach-all').addEventListener('click', () => {
-  void chrome.runtime.sendMessage({ type: 'devpilot:detach-all' })
+  void chrome.runtime.sendMessage({ type: 'browserpilot:detach-all' })
 })
 
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg?.type === 'devpilot:state-update' && msg.state) {
+  if (msg?.type === 'browserpilot:state-update' && msg.state) {
     render(msg.state as ExtensionState)
   }
 })
