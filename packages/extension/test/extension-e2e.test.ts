@@ -270,5 +270,12 @@ describe('@browserpilot/extension real Chrome MV3 zero-click E2E', () => {
     await transport.rpc('extension.setConfig', { paused: true })
     await expect(transport.rpc('tabs.create', { url: `${baseUrl}/blocked` })).rejects.toThrow(/paused/i)
     await transport.rpc('extension.setConfig', { paused: false })
+
+    // 9. Detaching a managed tab automatically ungroups it so Chrome doesn't leave Saved Tab Groups behind
+    await transport.detachTab(existing!.tabId)
+    const afterDetach = await transport.listTabs()
+    const detachedTab = afterDetach.find((t) => t.tabId === existing!.tabId)
+    expect(detachedTab?.attached).toBe(false)
+    expect(detachedTab?.groupId).toBeUndefined()
   }, 30_000)
 })

@@ -2,6 +2,14 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
+## [1.2.5] - 2026-11-24
+
+### Fixed
+- **Clean Tab Group Auto-Ungroup on Close & Detach (`background.ts`)**:
+  - Keeps Chrome Tab Grouping enabled by default (and groups newly opened AI tabs into `browserpilot` for clear visual identification while active).
+  - Automatically calls `chrome.tabs.ungroup()` on BrowserPilot-managed tabs right before `chrome.tabs.remove()` and on `detach` / `debugger.onDetach`, ensuring Chrome dissolves empty groups cleanly instead of leaving behind persistent "Saved Tab Groups" capsules in the bookmark bar.
+  - Added E2E verification in `packages/extension/test/extension-e2e.test.ts` confirming `detachTab` cleanly clears `groupId`.
+
 ## [1.2.4] - 2026-11-24
 
 ### Added

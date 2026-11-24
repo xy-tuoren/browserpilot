@@ -1,4 +1,4 @@
-export const BROWSERPILOT_VERSION = '1.2.4'
+export const BROWSERPILOT_VERSION = '1.2.5'
 export const CDP_PROTOCOL_VERSION = '1.3'
 
 export const DEFAULT_DAEMON_HOST = '127.0.0.1'

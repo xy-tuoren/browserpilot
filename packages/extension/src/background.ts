@@ -52,6 +52,8 @@ interface AttachedTabRecord {
   attachedAt: number
   tabGroup?: string
   tabGroupColor?: TabGroupColor
+  groupedByExtension?: boolean
+  assignedGroupId?: number
   childSessions: Set<string>
   lastPinnedVar?: string
 }
@@ -422,8 +424,12 @@ async function removeForeignExtensionIframes(tabId: number): Promise<void> {
   }
 }
 
-async function assignTabGroup(tabId: number, groupTitle?: string, groupColor?: TabGroupColor): Promise<void> {
-  if (!config.groupTabs) return
+async function assignTabGroup(
+  tabId: number,
+  groupTitle?: string,
+  groupColor?: TabGroupColor,
+): Promise<number | undefined> {
+  if (!config.groupTabs) return undefined
   const title = (groupTitle || DEFAULT_TAB_GROUP_TITLE).trim()
   const color: chrome.tabGroups.ColorEnum = (groupColor || 'green') as chrome.tabGroups.ColorEnum
   try {
@@ -454,8 +460,55 @@ async function assignTabGroup(tabId: number, groupTitle?: string, groupColor?: T
     }
     tabGroupIds.set(cacheKey, groupId)
     await chrome.tabGroups.update(groupId, { title, color })
+    return groupId
   } catch {
     // Tab groups may be unsupported in minimal windows
+    return undefined
+  }
+}
+
+/**
+ * Ungroups a tab if BrowserPilot placed it in a managed Tab Group.
+ * Calling `chrome.tabs.ungroup()` before `chrome.tabs.remove()` (or on detach)
+ * ensures modern Chrome dissolves empty groups cleanly instead of persisting
+ * leftover "Saved Tab Groups" capsules in the user's bookmark bar.
+ */
+async function ungroupTabIfManaged(tabId: number, rec?: AttachedTabRecord): Promise<void> {
+  try {
+    const tab = await chrome.tabs.get(tabId).catch(() => null)
+    if (!tab || tab.groupId === undefined || tab.groupId < 0) return
+
+    let isManaged = Boolean(rec?.groupedByExtension)
+    if (!isManaged) {
+      for (const gid of tabGroupIds.values()) {
+        if (gid === tab.groupId) {
+          isManaged = true
+          break
+        }
+      }
+    }
+    if (!isManaged && chrome.tabGroups?.get) {
+      const grp = await chrome.tabGroups.get(tab.groupId).catch(() => null)
+      if (grp?.title === DEFAULT_TAB_GROUP_TITLE || (rec?.tabGroup && grp?.title === rec.tabGroup)) {
+        isManaged = true
+      }
+    }
+    if (!isManaged) return
+
+    const prevGroupId = tab.groupId
+    await chrome.tabs.ungroup(tabId).catch(() => {})
+
+    // Prune cache entry if Chrome dissolved the now-empty group
+    if (chrome.tabGroups?.get) {
+      const stillExists = await chrome.tabGroups.get(prevGroupId).catch(() => null)
+      if (!stillExists) {
+        for (const [k, v] of tabGroupIds.entries()) {
+          if (v === prevGroupId) tabGroupIds.delete(k)
+        }
+      }
+    }
+  } catch {
+    // Best-effort cleanup
   }
 }
 
@@ -517,7 +570,11 @@ async function ensureAttached(
       .catch(() => {})
 
     if (options?.tabGroup) {
-      await assignTabGroup(tabId, options.tabGroup, options.tabGroupColor)
+      const gid = await assignTabGroup(tabId, options.tabGroup, options.tabGroupColor)
+      if (gid !== undefined) {
+        rec.groupedByExtension = true
+        rec.assignedGroupId = gid
+      }
     }
 
     updateBadge()
@@ -536,8 +593,10 @@ async function ensureAttached(
 }
 
 async function detachTab(tabId: number): Promise<void> {
-  if (!attachedTabs.has(tabId)) return
+  const rec = attachedTabs.get(tabId)
+  if (!rec) return
   attachedTabs.delete(tabId)
+  await ungroupTabIfManaged(tabId, rec)
   await chrome.debugger.detach({ tabId }).catch(() => {})
   updateBadge()
   broadcastUiUpdate()
@@ -609,7 +668,12 @@ async function executeBridgeMethod(method: string, params: Record<string, unknow
     case 'tabs.create': {
       const url = typeof params.url === 'string' && params.url ? params.url : 'about:blank'
       const active = params.active !== false
-      const tabGroup = params.tabGroup as string | undefined
+      const tabGroup =
+        typeof params.tabGroup === 'string' && params.tabGroup.trim()
+          ? params.tabGroup
+          : config.groupTabs
+            ? DEFAULT_TAB_GROUP_TITLE
+            : undefined
       const tabGroupColor = params.tabGroupColor as TabGroupColor | undefined
       const tab = await chrome.tabs.create({ url, active })
       if (tab.id === undefined) throw new Error('Failed to create tab')
@@ -622,7 +686,12 @@ async function executeBridgeMethod(method: string, params: Record<string, unknow
 
     case 'tabs.close': {
       const tabId = Number(params.tabId)
-      await detachTab(tabId)
+      const rec = attachedTabs.get(tabId)
+      if (rec) {
+        await detachTab(tabId)
+      } else {
+        await ungroupTabIfManaged(tabId)
+      }
       await chrome.tabs.remove(tabId).catch(() => {})
       return { closed: true }
     }
@@ -824,7 +893,11 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
 chrome.debugger.onDetach.addListener((source, reason) => {
   const tabId = source.tabId
   if (tabId === undefined) return
+  const rec = attachedTabs.get(tabId)
   attachedTabs.delete(tabId)
+  if (reason !== 'target_closed') {
+    void ungroupTabIfManaged(tabId, rec)
+  }
   updateBadge()
   broadcastUiUpdate()
   sendEvent('tab.detached', { tabId, reason })
