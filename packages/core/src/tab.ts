@@ -5,6 +5,7 @@ import { ConsoleCollector } from './console-collector.js'
 import { DOMExtractor } from './dom-extract.js'
 import { DownloadManager } from './downloads.js'
 import { JSDebugger, LiveEditor } from './js-debugger.js'
+import { Locator } from './locator.js'
 import { NetworkInspector } from './network-inspector.js'
 import { PageController } from './page-controller.js'
 import { PerformanceProfiler } from './performance-profiler.js'
@@ -14,6 +15,7 @@ import { SnapshotEngine } from './snapshot.js'
 import { captureLabeledScreenshot } from './som-screenshot.js'
 import { StylesInspector } from './styles-inspector.js'
 import type { CDPTransport } from './transport.js'
+import { sleep } from './wait.js'
 
 /**
  * Unified per-tab controller bundling automation, perception, debugging,
@@ -61,15 +63,55 @@ export class BrowserPilotTab {
 
   /**
    * Executes an action and returns high-signal post-action feedback
-   * (current URL/title, any newly thrown console errors, any newly failed requests).
+   * (current URL/title, newly thrown console errors, newly failed requests,
+   * newly opened popup/blank tabs, and any JS dialogs that appeared).
    */
-  async runWithFeedback<T>(action: () => Promise<T>): Promise<{ result: T; feedback: ActionFeedback }> {
+  async runWithFeedback<T>(
+    action: () => Promise<T>,
+    options: { settle?: boolean } = {},
+  ): Promise<{ result: T; feedback: ActionFeedback }> {
     await this.ensureInitialized()
     const beforeLogId = this.console.getLatestId()
     const beforeTs = Date.now() - 1
+    const beforeMeta = await this.page.getUrlAndTitle().catch(() => ({ url: '', title: '' }))
+    const beforeTabs = new Set((await this.session.transport.listTabs().catch(() => [])).map((t) => t.tabId))
+
+    let sawNavOrRequest = false
+    const offNav = this.session.on('Page.frameNavigated', () => {
+      sawNavOrRequest = true
+    })
+    const offReq = this.session.on('Network.requestWillBeSent', () => {
+      sawNavOrRequest = true
+    })
+
     this.recorder.markAction()
-    const result = await action()
-    const meta = await this.page.getUrlAndTitle().catch(() => ({ url: '', title: '' }))
+    let result: T
+    try {
+      result = await action()
+      if (options.settle !== false) {
+        // Brief adaptive settle: if action triggered a route change / XHR / popup, give it a beat to register
+        await sleep(30)
+        if (sawNavOrRequest) {
+          await sleep(80)
+        }
+      }
+    } finally {
+      offNav()
+      offReq()
+    }
+
+    const meta = await this.page.getUrlAndTitle().catch(() => beforeMeta)
+    const afterTabs = await this.session.transport.listTabs().catch(() => [])
+    const openedTabs = afterTabs
+      .filter((t) => !beforeTabs.has(t.tabId))
+      .map((t) => ({ tabId: t.tabId, url: t.url, title: t.title }))
+    const dialogs = this.session.getDialogsSince(beforeTs).map((d) => ({
+      type: d.type,
+      message: d.message,
+      url: d.url,
+      handled: d.handled,
+    }))
+
     return {
       result,
       feedback: {
@@ -77,8 +119,18 @@ export class BrowserPilotTab {
         title: meta.title,
         newConsoleErrors: this.console.getErrorsSince(beforeLogId),
         newFailedRequests: this.network.getFailedSince(beforeTs),
+        ...(openedTabs.length ? { openedTabIds: openedTabs.map((t) => t.tabId), openedTabs } : {}),
+        ...(dialogs.length ? { dialogs } : {}),
       },
     }
+  }
+
+  locator(selector: string): Locator {
+    return new Locator(this.page, selector)
+  }
+
+  frameLocator(iframeSelector: string): Locator {
+    return new Locator(this.page, iframeSelector)
   }
 
   async getReactInfo(target: string) {

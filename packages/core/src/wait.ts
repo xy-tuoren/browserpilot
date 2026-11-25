@@ -1,4 +1,5 @@
 import type { TabCDPSession } from './cdp-client.js'
+import { countLocatorMatches } from './locator.js'
 
 const IGNORED_ANALYTICS_PATTERNS = [
   /google-analytics\.com/i,
@@ -170,43 +171,50 @@ export async function waitForCondition<T>(
   throw new Error(`Timed out after ${timeoutMs}ms waiting for ${desc}${extra}`)
 }
 
+export type WaitSelectorState = 'visible' | 'hidden' | 'attached' | 'detached'
+
 export async function waitForSelector(
   session: TabCDPSession,
   selector: string,
-  options: { visible?: boolean; timeoutMs?: number } = {},
+  options: { visible?: boolean; state?: WaitSelectorState; timeoutMs?: number; frame?: string } = {},
 ): Promise<boolean> {
-  const visible = options.visible ?? true
+  const state: WaitSelectorState = options.state ?? (options.visible === false ? 'attached' : 'visible')
+  const frameCtx = options.frame ? await session.resolveFrame(options.frame) : null
+  if (options.frame && !frameCtx) {
+    throw new Error(`Frame not found: ${options.frame}`)
+  }
+
   return await waitForCondition(
     async () => {
-      const res = await session.send<{ result?: { value?: boolean } }>('Runtime.evaluate', {
-        expression: `(() => {
-          const el = document.querySelector(${JSON.stringify(selector)});
-          if (!el) return false;
-          if (!${visible}) return true;
-          const style = getComputedStyle(el);
-          if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
-          const rect = el.getBoundingClientRect();
-          return rect.width > 0 && rect.height > 0;
-        })()`,
-        returnByValue: true,
+      const visibilityMode = state === 'visible' || state === 'hidden' ? 'visible-only' : 'any'
+      const count = await countLocatorMatches(session, selector, {
+        visibilityMode,
+        sessionId: frameCtx?.sessionId,
+        contextId: frameCtx?.contextId,
       })
-      return res.result?.value === true
+      if (state === 'visible' || state === 'attached') return count > 0
+      return count === 0
     },
-    { timeoutMs: options.timeoutMs ?? 10_000, description: `selector "${selector}"` },
+    { timeoutMs: options.timeoutMs ?? 10_000, description: `selector "${selector}" (${state})` },
   )
 }
 
 export async function waitForText(
   session: TabCDPSession,
   text: string | RegExp,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; frame?: string; gone?: boolean } = {},
 ): Promise<boolean> {
   const isRegex = text instanceof RegExp
   const source = isRegex ? text.source : text
   const flags = isRegex ? text.flags : ''
+  const frameCtx = options.frame ? await session.resolveFrame(options.frame) : null
+  if (options.frame && !frameCtx) {
+    throw new Error(`Frame not found: ${options.frame}`)
+  }
+
   return await waitForCondition(
     async () => {
-      const res = await session.send<{ result?: { value?: boolean } }>('Runtime.evaluate', {
+      const evalParams: Record<string, unknown> = {
         expression: `(() => {
           const body = document.body?.innerText || '';
           return ${isRegex}
@@ -214,10 +222,99 @@ export async function waitForText(
             : body.includes(${JSON.stringify(source)});
         })()`,
         returnByValue: true,
+      }
+      if (frameCtx?.contextId !== undefined && !frameCtx.sessionId) {
+        evalParams.contextId = frameCtx.contextId
+      }
+      const res = await session.send<{ result?: { value?: boolean } }>('Runtime.evaluate', evalParams, {
+        sessionId: frameCtx?.sessionId,
       })
-      return res.result?.value === true
+      const found = res.result?.value === true
+      return options.gone ? !found : found
     },
-    { timeoutMs: options.timeoutMs ?? 10_000, description: `text "${String(text)}"` },
+    {
+      timeoutMs: options.timeoutMs ?? 10_000,
+      description: `text "${String(text)}"${options.gone ? ' to disappear' : ''}`,
+    },
+  )
+}
+
+export async function waitForUrl(
+  session: TabCDPSession,
+  pattern: string | RegExp,
+  options: { timeoutMs?: number; pollIntervalMs?: number } = {},
+): Promise<string> {
+  const matcher =
+    pattern instanceof RegExp
+      ? (u: string) => pattern.test(u)
+      : (() => {
+          let re: RegExp | null = null
+          try {
+            re = pattern.includes('*')
+              ? new RegExp(pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*'), 'i')
+              : new RegExp(pattern, 'i')
+          } catch {
+            re = null
+          }
+          return (u: string) => u.includes(pattern) || Boolean(re?.test(u))
+        })()
+
+  return await waitForCondition(
+    async () => {
+      const res = await session
+        .send<{ result?: { value?: string } }>('Runtime.evaluate', {
+          expression: 'location.href',
+          returnByValue: true,
+        })
+        .catch(() => null)
+      const href = res?.result?.value ?? ''
+      return href && matcher(href) ? href : false
+    },
+    {
+      timeoutMs: options.timeoutMs ?? 15_000,
+      intervalMs: options.pollIntervalMs ?? 100,
+      description: `URL matching ${String(pattern)}`,
+    },
+  )
+}
+
+export async function waitForFunction<T = unknown>(
+  session: TabCDPSession,
+  expression: string,
+  options: { timeoutMs?: number; pollIntervalMs?: number; frame?: string } = {},
+): Promise<T> {
+  const frameCtx = options.frame ? await session.resolveFrame(options.frame) : null
+  if (options.frame && !frameCtx) {
+    throw new Error(`Frame not found: ${options.frame}`)
+  }
+  const wrapped = expression.trim().startsWith('(') || expression.includes('=>') || expression.trim().startsWith('function')
+    ? `(() => { const __fn = (${expression}); return typeof __fn === 'function' ? __fn() : __fn; })()`
+    : `(() => (${expression}))()`
+
+  return await waitForCondition<T>(
+    async () => {
+      const evalParams: Record<string, unknown> = {
+        expression: wrapped,
+        awaitPromise: true,
+        returnByValue: true,
+      }
+      if (frameCtx?.contextId !== undefined && !frameCtx.sessionId) {
+        evalParams.contextId = frameCtx.contextId
+      }
+      const res = await session.send<{ result?: { value?: T }; exceptionDetails?: unknown }>(
+        'Runtime.evaluate',
+        evalParams,
+        { sessionId: frameCtx?.sessionId },
+      )
+      if (res.exceptionDetails) return false
+      const val = res.result?.value
+      return val ? val : false
+    },
+    {
+      timeoutMs: options.timeoutMs ?? 10_000,
+      intervalMs: options.pollIntervalMs ?? 120,
+      description: `function "${expression.slice(0, 60)}"`,
+    },
   )
 }
 

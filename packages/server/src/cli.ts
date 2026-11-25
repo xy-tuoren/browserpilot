@@ -149,33 +149,44 @@ Usage:
 
 Stateful Sessions (Playwriter replacement):
   browserpilot session new [--tab-group <name>] [--tab-group-color <color>]
-  browserpilot session list | reset <id> | close <id>
+  browserpilot session list | update <id> [--tab-group <name>] [--tab-group-color <color>] | reset <id> | close <id>
   browserpilot exec -s <id> -e '<js>' | -f <script.js> [--timeout <ms>]
 
 Direct Quick Commands:
   browserpilot status
-  browserpilot tabs
+  browserpilot tabs | frames [--tab <id>]
   browserpilot open <url> [--tab-group <name>]
   browserpilot close <tabId>
   browserpilot navigate <url> [--tab <id>]
   browserpilot back | forward | reload [--ignore-cache] [--tab <id>]
-  browserpilot snapshot [--tab <id>] [--search <regex>] [--scope <css>] [--full]
+  browserpilot snapshot [--tab <id>] [--search <regex>] [--scope <css>] [--frame <frame>] [--full]
   browserpilot markdown [--search <regex>] [--full] [--tab <id>]
   browserpilot html [--selector <css>] [--search <regex>] [--full] [--tab <id>]
-  browserpilot click <ref|selector> [--force] [--tab <id>]
-  browserpilot fill <ref|selector> <value> [--tab <id>]
+  browserpilot click <ref|locator> [--force] [--double] [--button left|right|middle] [--modifiers Meta,Shift] [--tab <id>]
+  browserpilot check | uncheck <ref|locator> [--force] [--tab <id>]
+  browserpilot fill <ref|locator> <value> [--tab <id>]
   browserpilot fill-form '<json-fields>' [--tab <id>]
-  browserpilot hover <ref|selector> [--tab <id>]
+  browserpilot select <ref|locator> <val1> [val2...] [--tab <id>]
+  browserpilot upload <ref|locator> <file1> [file2...] [--tab <id>]
+  browserpilot key <combo> [--down|--up] [--repeat <N>] [--tab <id>]
+  browserpilot hover <ref|locator> [--tab <id>]
+  browserpilot drag <from> <to> [--steps <N>] | --points "x1,y1;x2,y2;..." [--tab <id>]
   browserpilot scroll [down|up|left|right] [--amount <px>] [--target <ref|sel>] [--tab <id>]
-  browserpilot wait [--selector <css>] [--text <str>] [--ms <N>] [--timeout <ms>] [--tab <id>]
+  browserpilot dialog <accept|dismiss> [--prompt <text>] [--auto] [--tab <id>]
+  browserpilot wait [--selector <loc>] [--state visible|hidden|attached|detached] [--text <str>] [--gone] [--url <pat>] [--response <url>] [--fn <js>] [--popup] [--frame <f>] [--ms <N>] [--timeout <ms>]
   browserpilot handoff "<message>" [--timeout <ms>] [--tab <id>]
+  browserpilot clipboard <read|write> [text] [--html <html>] [--tab <id>]
+  browserpilot pdf [outputPath] [--landscape] [--scale <N>] [--pages <range>] [--tab <id>]
+  browserpilot init-script <add|remove|list> [jsOrId] [--run-now] [--tab <id>]
+  browserpilot permissions <grant|reset> [perm1,perm2...] [--origin <url>] [--tab <id>]
+  browserpilot locator <ref|selector> [--tab <id>]
   browserpilot screenshot [outputPath] [--full-page] [--grid] [--zoom x,y,w,h] [--clip x,y,w,h] [--tab <id>]
   browserpilot labeled-screenshot [outputPath] [--tab <id>]
   browserpilot console [--level error] [--search <str>] [--since-last] [--tab <id>]
   browserpilot network [--failed] [--search <str>] [--request-id <id>] [--tab <id>]
   browserpilot styles <ref|selector> [--tab <id>]
   browserpilot react <ref|selector> [--tab <id>]
-  browserpilot eval '<js>' [--tab <id>]
+  browserpilot eval '<js>' [--frame <frame>] [--tab <id>]
   browserpilot perf [metrics|heap|trace_start|trace_stop|cpu_start|cpu_stop] [--tab <id>]
   browserpilot downloads [list|wait|clear] [--dir <path>] [--tab <id>]
   browserpilot record-actions [start|stop|status] [--format all|skill|script|batch] [--tab <id>]
@@ -553,6 +564,14 @@ async function main(): Promise<void> {
       console.log(`Reset session ${sess.id}`)
       return
     }
+    if (sub === 'update') {
+      const sess = await client.updateSession(positional[2] || '1', {
+        tabGroup: typeof flags['tab-group'] === 'string' ? flags['tab-group'] : undefined,
+        tabGroupColor: typeof flags['tab-group-color'] === 'string' ? (flags['tab-group-color'] as TabGroupColor) : undefined,
+      })
+      console.log(`Updated session ${sess.id}: group=${sess.tabGroup} (${sess.tabGroupColor})`)
+      return
+    }
     if (sub === 'close') {
       await client.closeSession(positional[2] || '1')
       console.log(`Closed session ${positional[2] || '1'}`)
@@ -584,6 +603,9 @@ async function main(): Promise<void> {
       return
     case 'tabs':
       printToolOutput(await client.callTool('browser_tabs', { clientId }))
+      return
+    case 'frames':
+      printToolOutput(await client.callTool('browser_frames', { tabId, sessionId, clientId }))
       return
     case 'open':
       printToolOutput(
@@ -623,8 +645,10 @@ async function main(): Promise<void> {
         await client.callTool('browser_snapshot', {
           tabId,
           sessionId,
+          clientId,
           search: typeof flags.search === 'string' ? flags.search : undefined,
           scope: typeof flags.scope === 'string' ? flags.scope : undefined,
+          frame: typeof flags.frame === 'string' ? flags.frame : undefined,
           showDiffSinceLastCall: flags.full ? false : undefined,
         }),
       )
@@ -651,10 +675,23 @@ async function main(): Promise<void> {
         }),
       )
       return
-    case 'click':
+    case 'click': {
+      const rawMods = typeof flags.modifiers === 'string'
+        ? flags.modifiers.split(',').map((s) => {
+            const l = s.trim().toLowerCase()
+            if (l === 'cmd' || l === 'meta' || l === 'command') return 'Meta'
+            if (l === 'ctrl' || l === 'control') return 'Control'
+            if (l === 'alt' || l === 'option') return 'Alt'
+            if (l === 'shift') return 'Shift'
+            return s.trim()
+          })
+        : undefined
       printToolOutput(
         await client.callTool('browser_click', {
           target: positional[1],
+          button: typeof flags.button === 'string' ? flags.button : undefined,
+          clickCount: flags.double ? 2 : typeof flags['click-count'] === 'string' ? Number(flags['click-count']) : undefined,
+          modifiers: rawMods,
           force: Boolean(flags.force),
           tabId,
           sessionId,
@@ -662,6 +699,163 @@ async function main(): Promise<void> {
         }),
       )
       return
+    }
+    case 'check':
+    case 'uncheck':
+      printToolOutput(
+        await client.callTool('browser_check', {
+          target: positional[1],
+          checked: cmd === 'check',
+          force: Boolean(flags.force),
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
+      return
+    case 'select': {
+      const values = positional.slice(2)
+      if (!positional[1] || !values.length) throw new Error('Usage: browserpilot select <target> <value> [value2...]')
+      printToolOutput(
+        await client.callTool('browser_select_option', {
+          target: positional[1],
+          value: values.length === 1 ? values[0] : undefined,
+          values: values.length > 1 ? values : undefined,
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
+      return
+    }
+    case 'upload': {
+      const files = positional.slice(2)
+      if (!positional[1] || !files.length) throw new Error('Usage: browserpilot upload <target> <file1> [file2...]')
+      printToolOutput(
+        await client.callTool('browser_upload_file', {
+          target: positional[1],
+          files,
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
+      return
+    }
+    case 'drag': {
+      if (typeof flags.points === 'string') {
+        const points = flags.points.split(';').map((pair) => {
+          const [x, y] = pair.split(',').map((n) => Number(n.trim()))
+          if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error(`Invalid point "${pair}" in --points`)
+          return { x, y }
+        })
+        printToolOutput(
+          await client.callTool('browser_drag', {
+            points,
+            steps: typeof flags.steps === 'string' ? Number(flags.steps) : undefined,
+            tabId,
+            sessionId,
+            clientId,
+          }),
+        )
+        return
+      }
+      printToolOutput(
+        await client.callTool('browser_drag', {
+          fromTarget: positional[1],
+          toTarget: positional[2],
+          steps: typeof flags.steps === 'string' ? Number(flags.steps) : undefined,
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
+      return
+    }
+    case 'dialog': {
+      const action = (positional[1] || 'accept').toLowerCase()
+      printToolOutput(
+        await client.callTool('browser_handle_dialog', {
+          accept: action !== 'dismiss' && action !== 'cancel',
+          promptText: typeof flags.prompt === 'string' ? flags.prompt : undefined,
+          auto: Boolean(flags.auto),
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
+      return
+    }
+    case 'clipboard': {
+      const action = (positional[1] || 'read').toLowerCase()
+      printToolOutput(
+        await client.callTool('browser_clipboard', {
+          action,
+          text: positional.slice(2).join(' ') || undefined,
+          html: typeof flags.html === 'string' ? flags.html : undefined,
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
+      return
+    }
+    case 'pdf':
+      printToolOutput(
+        await client.callTool('browser_pdf', {
+          path: positional[1] || `browserpilot-page-${Date.now()}.pdf`,
+          landscape: Boolean(flags.landscape),
+          printBackground: flags['no-background'] ? false : true,
+          scale: typeof flags.scale === 'string' ? Number(flags.scale) : undefined,
+          pageRanges: typeof flags.pages === 'string' ? flags.pages : undefined,
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
+      return
+    case 'init-script': {
+      const action = (positional[1] || 'list').toLowerCase()
+      printToolOutput(
+        await client.callTool('browser_init_script', {
+          action,
+          script: action === 'add' ? positional[2] : undefined,
+          id: action === 'remove' ? positional[2] : undefined,
+          runNow: Boolean(flags['run-now']),
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
+      return
+    }
+    case 'permissions': {
+      const action = (positional[1] || 'grant').toLowerCase()
+      const perms = positional[2] ? positional[2].split(',').map((s) => s.trim()).filter(Boolean) : []
+      printToolOutput(
+        await client.callTool('browser_permissions', {
+          action,
+          permissions: perms,
+          origin: typeof flags.origin === 'string' ? flags.origin : undefined,
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
+      return
+    }
+    case 'locator': {
+      const res = await client.callTool('browser_inspect_element', {
+        target: positional[1],
+        tabId,
+        sessionId,
+        clientId,
+      })
+      const rec = (res.meta?.info as { recommendedLocator?: string } | undefined)?.recommendedLocator
+      if (rec) console.log(rec)
+      else printToolOutput(res)
+      return
+    }
     case 'fill-form': {
       const rawFields = positional[1]
       if (!rawFields) throw new Error('Provide JSON array of fields: browserpilot fill-form \'[{"target":"#name","value":"Alice"}]\'')
@@ -702,22 +896,41 @@ async function main(): Promise<void> {
       printToolOutput(
         await client.callTool('browser_wait', {
           selector: typeof flags.selector === 'string' ? flags.selector : undefined,
+          state: typeof flags.state === 'string' ? flags.state : undefined,
           text: typeof flags.text === 'string' ? flags.text : undefined,
+          gone: Boolean(flags.gone),
+          url: typeof flags.url === 'string' ? flags.url : undefined,
+          responseUrl: typeof flags.response === 'string' ? flags.response : undefined,
+          responseStatus: typeof flags.status === 'string' ? Number(flags.status) : undefined,
+          responseMethod: typeof flags.method === 'string' ? flags.method : undefined,
+          fn: typeof flags.fn === 'string' ? flags.fn : undefined,
+          popup: Boolean(flags.popup),
+          frame: typeof flags.frame === 'string' ? flags.frame : undefined,
           ms: typeof flags.ms === 'string' ? Number(flags.ms) : undefined,
           timeoutMs: typeof flags.timeout === 'string' ? Number(flags.timeout) : undefined,
           tabId,
           sessionId,
+          clientId,
         }),
       )
       return
     case 'fill':
-      printToolOutput(await client.callTool('browser_fill', { target: positional[1], value: positional[2] ?? '', tabId, sessionId }))
+      printToolOutput(await client.callTool('browser_fill', { target: positional[1], value: positional[2] ?? '', tabId, sessionId, clientId }))
       return
     case 'type':
-      printToolOutput(await client.callTool('browser_type', { target: positional[2] ? positional[1] : undefined, text: positional[2] ?? positional[1], tabId, sessionId }))
+      printToolOutput(await client.callTool('browser_type', { target: positional[2] ? positional[1] : undefined, text: positional[2] ?? positional[1], tabId, sessionId, clientId }))
       return
     case 'key':
-      printToolOutput(await client.callTool('browser_press_key', { key: positional[1], tabId, sessionId }))
+      printToolOutput(
+        await client.callTool('browser_press_key', {
+          key: positional[1],
+          action: flags.down ? 'down' : flags.up ? 'up' : 'press',
+          repeat: typeof flags.repeat === 'string' ? Number(flags.repeat) : undefined,
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
       return
     case 'screenshot': {
       const zoomRect = parseRect(flags.zoom)
@@ -778,7 +991,15 @@ async function main(): Promise<void> {
       printToolOutput(await client.callTool('browser_react_info', { target: positional[1], tabId, sessionId }))
       return
     case 'eval':
-      printToolOutput(await client.callTool('browser_evaluate', { expression: positional[1], tabId, sessionId }))
+      printToolOutput(
+        await client.callTool('browser_evaluate', {
+          expression: positional[1],
+          frame: typeof flags.frame === 'string' ? flags.frame : undefined,
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
       return
     case 'perf':
       printToolOutput(await client.callTool('browser_performance', { action: positional[1] || 'metrics', tabId, sessionId }))

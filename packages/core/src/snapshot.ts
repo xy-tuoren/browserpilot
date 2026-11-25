@@ -387,6 +387,64 @@ export class SnapshotEngine {
           ? ` | Viewport: ${m.vw}x${m.vh}`
           : ''
 
+    // Single-frame targeted snapshot (supports cross-origin OOPIF and same-origin iframes)
+    if (options.frame) {
+      const targetFrame = await session.resolveFrame(options.frame)
+      if (!targetFrame) {
+        throw new Error(`Snapshot frame not found: ${options.frame}`)
+      }
+      let formatted: FormattedAXTree
+      if (targetFrame.sessionId) {
+        await session.send('Accessibility.enable', {}, { sessionId: targetFrame.sessionId }).catch(() => {})
+        const childRes = await session.send<{ nodes: RawAXNode[] }>(
+          'Accessibility.getFullAXTree',
+          {},
+          { sessionId: targetFrame.sessionId },
+        )
+        formatted = formatAXTree(childRes.nodes ?? [], {
+          sessionId: targetFrame.sessionId,
+          includeText: options.includeText,
+          maxDepth: options.maxDepth,
+          startingRefIndex: 1,
+        })
+      } else {
+        const frameRes = await session
+          .send<{ nodes: RawAXNode[] }>('Accessibility.getFullAXTree', { frameId: targetFrame.frameId })
+          .catch(() => ({ nodes: [] as RawAXNode[] }))
+        if (frameRes.nodes && frameRes.nodes.length > 0) {
+          formatted = formatAXTree(frameRes.nodes, {
+            includeText: options.includeText,
+            maxDepth: options.maxDepth,
+            startingRefIndex: 1,
+          })
+        } else {
+          // Fallback via DOM.getFrameOwner subtree inside main AXTree
+          const owner = targetFrame.frameId
+            ? await session.send<{ backendNodeId?: number }>('DOM.getFrameOwner', { frameId: targetFrame.frameId }).catch(() => null)
+            : null
+          const mainRes = await session.send<{ nodes: RawAXNode[] }>('Accessibility.getFullAXTree')
+          formatted = formatAXTree(mainRes.nodes ?? [], {
+            includeText: options.includeText,
+            maxDepth: options.maxDepth,
+            scopeBackendNodeId: owner?.backendNodeId,
+            startingRefIndex: 1,
+          })
+        }
+      }
+
+      this.refMaps.set(session.tabId, formatted.refs)
+      const frameHeader = `URL: ${url}${title ? ` | Title: ${title}` : ''} | Frame: ${cleanText(targetFrame.url || options.frame, 120)}`
+      const frameFullText = `${frameHeader}\n\n${formatted.lines.join('\n') || '(empty frame accessibility tree)'}`
+      return {
+        url: targetFrame.url || url,
+        title,
+        text: options.search !== undefined ? filterSnapshotLines(frameFullText, options.search) : frameFullText,
+        isDiff: false,
+        totalRefs: Object.keys(formatted.refs).length,
+        refs: formatted.refs,
+      }
+    }
+
     // Resolve optional scope element
     let scopeBackendNodeId: number | undefined
     if (options.scope) {

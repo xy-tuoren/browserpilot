@@ -1,5 +1,6 @@
 import type { ElementInspectResult } from '@browserpilot/protocol'
 import type { TabCDPSession } from './cdp-client.js'
+import { queryLocator, STABLE_LOCATOR_FUNCTION } from './locator.js'
 import { computeDiffIfShorter, filterSnapshotLines, type SnapshotEngine } from './snapshot.js'
 
 const DEFAULT_INSPECT_PROPERTIES = [
@@ -228,16 +229,27 @@ export class DOMExtractor {
       )
       objectId = resolved.object?.objectId
     } else {
-      const evalRes = await session.send<{ result?: { objectId?: string } }>('Runtime.evaluate', {
-        expression: `document.querySelector(${JSON.stringify(target)})`,
-        returnByValue: false,
-      })
-      objectId = evalRes.result?.objectId
+      const hit = await queryLocator(session, target, { visibilityMode: 'any' })
+      objectId = hit.objectId
+      sessionId = hit.sessionId
     }
 
     if (!objectId) {
       throw new Error(`Element not found for inspect: ${target}`)
     }
+
+    const locRes = await session
+      .send<{ result?: { value?: string } }>(
+        'Runtime.callFunctionOn',
+        {
+          objectId,
+          returnByValue: true,
+          functionDeclaration: STABLE_LOCATOR_FUNCTION,
+        },
+        { sessionId },
+      )
+      .catch(() => null)
+    const recommendedLocator = locRes?.result?.value || undefined
 
     const callRes = await session.send<{ result?: { value?: Omit<ElementInspectResult, 'formatted'> } }>(
       'Runtime.callFunctionOn',
@@ -347,7 +359,11 @@ export class DOMExtractor {
       )
     }
 
-    return { ...data, formatted: lines.join('\n') }
+    if (recommendedLocator) {
+      lines.push(`Locator: ${recommendedLocator}`)
+    }
+
+    return { ...data, recommendedLocator, formatted: lines.join('\n') }
   }
 
   clearTab(tabId: number): void {

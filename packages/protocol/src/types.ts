@@ -91,12 +91,23 @@ export interface SnapshotOptions {
   showDiffSinceLastCall?: boolean
   /** CSS selector or ref to scope the snapshot to a subtree */
   scope?: string
+  /** Optional iframe selector, frameId, or URL substring/regex to snapshot a single frame only */
+  frame?: string
   /** Include non-interactive text/structure nodes (default true) */
   includeText?: boolean
   /** Maximum depth to traverse (default 40) */
   maxDepth?: number
   /** Include iframe subtrees (default true) */
   includeIframes?: boolean
+}
+
+export interface FrameInfo {
+  frameId: string
+  parentId?: string
+  url: string
+  name?: string
+  sessionId?: string
+  crossOrigin: boolean
 }
 
 export interface SnapshotResult {
@@ -248,6 +259,7 @@ export interface ElementInspectResult {
     type?: string
   }
   aria?: Record<string, string>
+  recommendedLocator?: string
   formatted: string
 }
 
@@ -373,6 +385,8 @@ export interface ActionFeedback {
   newConsoleErrors: ConsoleEntry[]
   newFailedRequests: NetworkEntry[]
   openedTabIds?: number[]
+  openedTabs?: Array<{ tabId: number; url: string; title: string }>
+  dialogs?: Array<{ type: string; message: string; url?: string; handled?: boolean }>
 }
 
 export interface RecordingOptions {
@@ -422,6 +436,8 @@ export interface RecordedStep {
 export interface ActionRecordingResult {
   durationMs: number
   steps: RecordedStep[]
+  apiCalls?: Array<{ timestamp: number; method: string; url: string; status?: number }>
+  errors?: Array<{ timestamp: number; kind: 'console' | 'exception' | 'dialog'; text: string }>
   batchSteps: Array<Record<string, unknown>>
   execScript: string
   skillMarkdown: string

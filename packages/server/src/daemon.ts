@@ -293,6 +293,17 @@ export class BrowserPilotDaemon {
         return
       }
 
+      if (method === 'POST' && url.pathname === '/api/sessions/update') {
+        const body = await this.readJsonBody(req)
+        const mgr = this.getManager(body.clientId as string | undefined)
+        const sess = mgr.updateSession(String(body.id), {
+          tabGroup: body.tabGroup as string | undefined,
+          tabGroupColor: body.tabGroupColor as TabGroupColor | undefined,
+        })
+        this.sendJson(res, 200, { ok: true, session: sess })
+        return
+      }
+
       if (method === 'POST' && url.pathname === '/api/sessions/close') {
         const body = await this.readJsonBody(req)
         const mgr = this.getManager(body.clientId as string | undefined)

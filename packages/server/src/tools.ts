@@ -3,12 +3,17 @@ import {
   formatConsoleLogs,
   formatNetworkEntries,
   formatStylesAsText,
+  waitForFunction,
   waitForPageLoad,
   waitForSelector,
   waitForText,
+  waitForUrl,
+  type FormFieldInput,
   type KeyModifier,
   type MouseButton,
+  type PdfOptions,
   type SessionManager,
+  type WaitSelectorState,
 } from '@browserpilot/core'
 import type { ActionFeedback, BrowserClientInfo, ConsoleLevel, TabGroupColor } from '@browserpilot/protocol'
 
@@ -57,6 +62,20 @@ export function normalizeNavigationUrl(raw: string | undefined): string {
 
 function formatFeedbackSuffix(fb: ActionFeedback): string {
   const parts: string[] = [`URL: ${fb.url}`]
+  if (fb.openedTabs && fb.openedTabs.length > 0) {
+    parts.push(
+      `Opened new tab(s) (${fb.openedTabs.length}):\n${fb.openedTabs
+        .map((t) => `  - [${t.tabId}] ${t.url}${t.title ? ` ("${t.title}")` : ''}`)
+        .join('\n')}`,
+    )
+  }
+  if (fb.dialogs && fb.dialogs.length > 0) {
+    parts.push(
+      `JS dialog(s) (${fb.dialogs.length}):\n${fb.dialogs
+        .map((d) => `  - [${d.type}${d.handled ? ', handled' : ''}] ${d.message.slice(0, 200)}`)
+        .join('\n')}`,
+    )
+  }
   if (fb.newConsoleErrors.length > 0) {
     parts.push(
       `New console errors (${fb.newConsoleErrors.length}):\n${fb.newConsoleErrors
@@ -154,7 +173,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'browser_snapshot',
     description:
-      'Capture a compact semantic Accessibility Tree snapshot with short element refs (e1, e2...). Supports incremental diffing, regex search, and subtree scoping.',
+      'Capture a compact semantic Accessibility Tree snapshot with short element refs (e1, e2...). Supports incremental diffing, regex search, subtree scoping, and single-frame targeting.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -162,6 +181,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         sessionId: { type: 'string' },
         search: { type: 'string', description: 'Filter lines matching substring/regex' },
         scope: { type: 'string', description: 'CSS selector or ref to scope snapshot to a subtree' },
+        frame: { type: 'string', description: 'Iframe CSS selector, frameId, name, or URL substring/regex to snapshot a single frame' },
         showDiffSinceLastCall: { type: 'boolean', description: 'Return concise diff since last snapshot (default true)' },
         includeText: { type: 'boolean' },
         includeIframes: { type: 'boolean' },
@@ -311,11 +331,15 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'browser_press_key',
-    description: 'Press a keyboard key or shortcut combo (e.g. Enter, Escape, Tab, Meta+a, Control+Shift+r).',
+    description:
+      'Press, hold (down), or release (up) a keyboard key or shortcut combo (e.g. Enter, Escape, Tab, Cmd+a, Control+Shift+r) with optional repeat count and native editor commands.',
     inputSchema: {
       type: 'object',
       properties: {
         key: { type: 'string' },
+        action: { type: 'string', enum: ['press', 'down', 'up'], description: 'Key action (default press)' },
+        repeat: { type: 'number', description: 'Repeat count for press (1-50, default 1)' },
+        modifiers: { type: 'array', items: { type: 'string', enum: ['Alt', 'Control', 'Meta', 'Shift'] } },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
@@ -354,7 +378,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'browser_drag',
-    description: 'Perform a smooth mouse drag or canvas stroke between two targets or coordinate pairs.',
+    description: 'Perform a smooth mouse drag between two targets/coordinates, or a multi-point freehand canvas stroke via points[].',
     inputSchema: {
       type: 'object',
       properties: {
@@ -364,6 +388,15 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         fromY: { type: 'number' },
         toX: { type: 'number' },
         toY: { type: 'number' },
+        points: {
+          type: 'array',
+          description: 'Optional multi-point waypoint path [{x,y}, ...] for continuous held-mouse stroke drawing',
+          items: {
+            type: 'object',
+            properties: { x: { type: 'number' }, y: { type: 'number' } },
+            required: ['x', 'y'],
+          },
+        },
         steps: { type: 'number' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
@@ -372,16 +405,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'browser_select_option',
-    description: 'Select an option in a <select> dropdown by option value or label text.',
+    description: 'Select one or more options in a <select> dropdown by option value or visible label text.',
     inputSchema: {
       type: 'object',
       properties: {
         target: { type: 'string' },
-        value: { type: 'string' },
+        value: { type: 'string', description: 'Single option value or label' },
+        values: { type: 'array', items: { type: 'string' }, description: 'Multiple option values/labels for <select multiple>' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
-      required: ['target', 'value'],
+      required: ['target'],
     },
   },
   {
@@ -415,12 +449,22 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'browser_wait',
-    description: 'Wait for page load (ignoring analytics), a CSS selector, visible text, or fixed milliseconds.',
+    description:
+      'Wait for a locator state (visible/hidden/attached/detached), text appearance/disappearance, URL pattern, matching network response, JS condition (fn), new popup tab, page load, or fixed ms.',
     inputSchema: {
       type: 'object',
       properties: {
-        selector: { type: 'string' },
+        selector: { type: 'string', description: 'CSS, rich, or chained locator (e.g. .spinner, role=dialog, iframe#pay >> button)' },
+        state: { type: 'string', enum: ['visible', 'hidden', 'attached', 'detached'], description: 'Desired selector state (default visible)' },
         text: { type: 'string' },
+        gone: { type: 'boolean', description: 'When waiting for text, wait until text disappears' },
+        url: { type: 'string', description: 'Wait until location.href matches substring, glob (*), or regex' },
+        responseUrl: { type: 'string', description: 'Wait for a completed network response whose URL matches substring/glob/regex' },
+        responseStatus: { type: 'number', description: 'Optional HTTP status filter for responseUrl' },
+        responseMethod: { type: 'string', description: 'Optional HTTP method filter for responseUrl' },
+        fn: { type: 'string', description: 'JavaScript expression or arrow function polled until truthy' },
+        popup: { type: 'boolean', description: 'Wait for a newly opened tab/popup and return its tabId' },
+        frame: { type: 'string', description: 'Optional iframe selector/URL/frameId for selector, text, or fn wait' },
         pageLoad: { type: 'boolean' },
         ms: { type: 'number' },
         timeoutMs: { type: 'number' },
@@ -431,11 +475,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'browser_evaluate',
-    description: 'Evaluate a JavaScript expression in the page context (supports async/Promises) and return JSON result.',
+    description: 'Evaluate a JavaScript expression in the page (or a specific iframe) context (supports async/Promises) and return JSON result.',
     inputSchema: {
       type: 'object',
       properties: {
         expression: { type: 'string' },
+        frame: { type: 'string', description: 'Optional iframe CSS selector, frameId, name, or URL substring/regex' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
@@ -794,7 +839,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'browser_fill_form',
     description:
-      'Fill multiple form fields (text inputs, textareas, selects, checkboxes, radios) in a single round-trip with automatic field-type detection.',
+      'Fill multiple form fields (text inputs, textareas, selects/multi-selects, checkboxes, radios, range sliders, file inputs) in a single round-trip with automatic field-type detection.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -803,9 +848,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           items: {
             type: 'object',
             properties: {
-              target: { type: 'string', description: 'Ref (e4), CSS selector, label=..., or placeholder=...' },
-              value: { description: 'Text value, select option, or boolean for checkboxes' },
-              type: { type: 'string', enum: ['auto', 'text', 'select', 'checkbox', 'radio'] },
+              target: { type: 'string', description: 'Ref (e4), CSS selector, chained locator, label=..., or placeholder=...' },
+              value: { description: 'Text value, select option(s), number for range, file path(s), or boolean for checkboxes' },
+              type: { type: 'string', enum: ['auto', 'text', 'select', 'checkbox', 'radio', 'range', 'file'] },
             },
             required: ['target', 'value'],
           },
@@ -829,6 +874,98 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         sessionId: { type: 'string' },
       },
       required: ['message'],
+    },
+  },
+  {
+    name: 'browser_frames',
+    description: 'List all frames and iframes (both same-origin and cross-origin OOPIF) in the active tab.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'browser_check',
+    description: 'Idempotently check or uncheck a checkbox, radio button, or ARIA switch (only clicks if state differs).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Ref, CSS, or rich/chained locator' },
+        checked: { type: 'boolean', description: 'Desired checked state (default true)' },
+        force: { type: 'boolean' },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+      required: ['target'],
+    },
+  },
+  {
+    name: 'browser_clipboard',
+    description: 'Read from or write plain text / rich HTML to the browser clipboard (great for pasting formatted content into Notion/Feishu/Docs via Cmd+V).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['read', 'write'] },
+        text: { type: 'string', description: 'Plain text to copy when action=write' },
+        html: { type: 'string', description: 'Optional rich HTML alongside plain text when action=write' },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'browser_pdf',
+    description: 'Export the current page to a PDF file via CDP Page.printToPDF.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Output .pdf file path' },
+        landscape: { type: 'boolean' },
+        printBackground: { type: 'boolean' },
+        displayHeaderFooter: { type: 'boolean' },
+        scale: { type: 'number' },
+        paperWidth: { type: 'number' },
+        paperHeight: { type: 'number' },
+        pageRanges: { type: 'string', description: 'e.g. "1-3, 5"' },
+        preferCSSPageSize: { type: 'boolean' },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'browser_init_script',
+    description: 'Add, remove, or list persistent initialization scripts that run before any page JavaScript on future navigations.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['add', 'remove', 'list'] },
+        script: { type: 'string', description: 'JavaScript source to inject when action=add' },
+        runNow: { type: 'boolean', description: 'Also execute immediately on the current page when action=add' },
+        id: { type: 'string', description: 'Script identifier returned by add, required when action=remove' },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'browser_permissions',
+    description: 'Grant or reset browser permissions (clipboard-read, clipboard-write, geolocation, notifications, camera, microphone) for the current or explicit origin.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['grant', 'reset'] },
+        permissions: { type: 'array', items: { type: 'string' } },
+        origin: { type: 'string' },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+      required: ['action'],
     },
   },
 ]
@@ -935,6 +1072,7 @@ export async function executeTool(
         const snap = await tab.snapshots.capture(tab.session, {
           search: args.search as string | undefined,
           scope: args.scope as string | undefined,
+          frame: args.frame as string | undefined,
           showDiffSinceLastCall: args.showDiffSinceLastCall as boolean | undefined,
           includeText: args.includeText as boolean | undefined,
           includeIframes: args.includeIframes as boolean | undefined,
@@ -1057,8 +1195,15 @@ export async function executeTool(
 
       case 'browser_press_key': {
         const tab = await resolveTab()
-        const { feedback } = await tab.runWithFeedback(() => tab.page.pressKey(String(args.key)))
-        return textResult(`Pressed ${args.key}\n${formatFeedbackSuffix(feedback)}`)
+        const action = (args.action as 'press' | 'down' | 'up' | undefined) ?? 'press'
+        const repeat = typeof args.repeat === 'number' ? args.repeat : undefined
+        const modifiers = args.modifiers as KeyModifier[] | undefined
+        const { feedback } = await tab.runWithFeedback(() =>
+          tab.page.pressKey(String(args.key), { action, repeat, modifiers }),
+        )
+        return textResult(
+          `${action === 'down' ? 'Key down' : action === 'up' ? 'Key up' : 'Pressed'} ${args.key}${repeat && repeat > 1 ? ` x${repeat}` : ''}\n${formatFeedbackSuffix(feedback)}`,
+        )
       }
 
       case 'browser_hover': {
@@ -1091,6 +1236,11 @@ export async function executeTool(
 
       case 'browser_drag': {
         const tab = await resolveTab()
+        const points = args.points as Array<{ x: number; y: number }> | undefined
+        if (Array.isArray(points) && points.length >= 2) {
+          await tab.page.mouseStroke(points, { stepsPerSegment: args.steps as number | undefined })
+          return textResult(`Completed stroke across ${points.length} waypoints`)
+        }
         const from =
           typeof args.fromTarget === 'string'
             ? args.fromTarget
@@ -1105,8 +1255,13 @@ export async function executeTool(
 
       case 'browser_select_option': {
         const tab = await resolveTab()
-        const selected = await tab.page.selectOption(String(args.target), String(args.value))
-        return textResult(`Selected option "${selected}" in ${args.target}`)
+        const vals = Array.isArray(args.values)
+          ? (args.values as unknown[]).map(String)
+          : Array.isArray(args.value)
+            ? (args.value as unknown[]).map(String)
+            : String(args.value ?? '')
+        const selected = await tab.page.selectOption(String(args.target), vals)
+        return textResult(`Selected option(s) ${JSON.stringify(selected)} in ${args.target}`, { selected })
       }
 
       case 'browser_upload_file': {
@@ -1131,17 +1286,58 @@ export async function executeTool(
       case 'browser_wait': {
         const tab = await resolveTab()
         const timeoutMs = (args.timeoutMs as number | undefined) ?? 10_000
+        const frame = args.frame as string | undefined
         if (typeof args.ms === 'number') {
           await new Promise((r) => setTimeout(r, args.ms as number))
           return textResult(`Waited ${args.ms}ms`)
         }
+        if (args.popup === true) {
+          const popupTab = await manager.waitForPopup({ timeoutMs, sessionId })
+          const meta = await popupTab.page.getUrlAndTitle().catch(() => ({ url: '', title: '' }))
+          return textResult(`Popup tab opened [${popupTab.tabId}]: ${meta.url}${meta.title ? ` ("${meta.title}")` : ''}`, {
+            tabId: popupTab.tabId,
+            ...meta,
+          })
+        }
+        if (typeof args.url === 'string') {
+          const matchedUrl = await waitForUrl(tab.session, args.url, { timeoutMs })
+          return textResult(`URL matched: ${matchedUrl}`, { url: matchedUrl })
+        }
+        if (typeof args.responseUrl === 'string') {
+          const res = await tab.network.waitForResponse({
+            url: args.responseUrl,
+            status: typeof args.responseStatus === 'number' ? args.responseStatus : undefined,
+            method: typeof args.responseMethod === 'string' ? args.responseMethod : undefined,
+            timeoutMs,
+          })
+          return textResult(
+            JSON.stringify(
+              {
+                requestId: res.requestId,
+                method: res.method,
+                status: res.status,
+                url: res.url,
+                body: res.body?.slice(0, 8_000),
+              },
+              null,
+              2,
+            ),
+            { response: res },
+          )
+        }
+        if (typeof args.fn === 'string') {
+          const val = await waitForFunction(tab.session, args.fn, { timeoutMs, frame })
+          return textResult(`Condition truthy: ${typeof val === 'string' ? val : JSON.stringify(val)}`, { value: val })
+        }
         if (typeof args.selector === 'string') {
-          await waitForSelector(tab.session, args.selector, { timeoutMs })
-          return textResult(`Selector visible: ${args.selector}`)
+          const state = (args.state as WaitSelectorState | undefined) ?? 'visible'
+          await waitForSelector(tab.session, args.selector, { state, timeoutMs, frame })
+          return textResult(`Selector ${state}: ${args.selector}`)
         }
         if (typeof args.text === 'string') {
-          await waitForText(tab.session, args.text, { timeoutMs })
-          return textResult(`Text appeared: ${args.text}`)
+          const gone = Boolean(args.gone)
+          await waitForText(tab.session, args.text, { timeoutMs, frame, gone })
+          return textResult(`Text ${gone ? 'disappeared' : 'appeared'}: ${args.text}`)
         }
         const res = await waitForPageLoad(tab.session, { timeoutMs })
         return textResult(JSON.stringify(res))
@@ -1149,7 +1345,7 @@ export async function executeTool(
 
       case 'browser_evaluate': {
         const tab = await resolveTab()
-        const val = await tab.page.evaluate(String(args.expression))
+        const val = await tab.page.evaluate(String(args.expression), { frame: args.frame as string | undefined })
         return textResult(typeof val === 'string' ? val : JSON.stringify(val, null, 2))
       }
 
@@ -1560,9 +1756,20 @@ export async function executeTool(
                 await tab.page.pressKey(String(s.key))
                 completed.push(`${i + 1}. press_key(${s.key})`)
                 break
+              case 'check':
+                await tab.page.check(String(s.target))
+                completed.push(`${i + 1}. check(${s.target})`)
+                break
+              case 'uncheck':
+                await tab.page.uncheck(String(s.target))
+                completed.push(`${i + 1}. uncheck(${s.target})`)
+                break
               case 'select_option':
-                await tab.page.selectOption(String(s.target), String(s.value))
-                completed.push(`${i + 1}. select_option(${s.target}, ${s.value})`)
+                await tab.page.selectOption(
+                  String(s.target),
+                  Array.isArray(s.value) ? (s.value as unknown[]).map(String) : String(s.value),
+                )
+                completed.push(`${i + 1}. select_option(${s.target}, ${JSON.stringify(s.value)})`)
                 break
               case 'hover':
                 await tab.page.hover(String(s.target))
@@ -1578,8 +1785,11 @@ export async function executeTool(
                 break
               case 'wait':
                 if (typeof s.ms === 'number') await new Promise((r) => setTimeout(r, s.ms as number))
-                else if (typeof s.selector === 'string') await waitForSelector(tab.session, s.selector)
-                else if (typeof s.text === 'string') await waitForText(tab.session, s.text)
+                else if (typeof s.url === 'string') await waitForUrl(tab.session, s.url)
+                else if (typeof s.fn === 'string') await waitForFunction(tab.session, s.fn)
+                else if (typeof s.selector === 'string')
+                  await waitForSelector(tab.session, s.selector, { state: s.state as WaitSelectorState | undefined })
+                else if (typeof s.text === 'string') await waitForText(tab.session, s.text, { gone: Boolean(s.gone) })
                 else await waitForPageLoad(tab.session)
                 completed.push(`${i + 1}. wait`)
                 break
@@ -1624,7 +1834,7 @@ export async function executeTool(
 
       case 'browser_fill_form': {
         const tab = await resolveTab()
-        const fields = (args.fields as Array<{ target: string; value: string | boolean; type?: 'auto' | 'text' | 'select' | 'checkbox' | 'radio' }>) ?? []
+        const fields = (args.fields as FormFieldInput[]) ?? []
         if (!fields.length) throw new Error('Provide non-empty fields array')
         const { result, feedback } = await tab.runWithFeedback(() => tab.page.fillForm(fields))
         const summary = result.filled.map((f, i) => `${i + 1}. [${f.type}] ${f.target} = ${JSON.stringify(f.value)}`).join('\n')
@@ -1644,6 +1854,103 @@ export async function executeTool(
           `${status} after ${Math.round(res.elapsedMs / 1000)}s — URL: ${res.url}${res.title ? ` ("${res.title}")` : ''}`,
           { ...res },
         )
+      }
+
+      case 'browser_frames': {
+        const tab = await resolveTab()
+        const frames = await tab.page.listFrames()
+        const formatted = frames
+          .map(
+            (f, idx) =>
+              `${idx + 1}. [${f.frameId}]${f.parentId ? ' (child)' : ' (main)'}${f.crossOrigin ? ' [OOPIF]' : ''}${f.name ? ` name="${f.name}"` : ''} — ${f.url}`,
+          )
+          .join('\n')
+        return textResult(formatted || '(no frames)', { frames })
+      }
+
+      case 'browser_check': {
+        const tab = await resolveTab()
+        const desired = args.checked !== false
+        const { result: changed, feedback } = await tab.runWithFeedback(() =>
+          desired
+            ? tab.page.check(String(args.target), { force: Boolean(args.force) })
+            : tab.page.uncheck(String(args.target), { force: Boolean(args.force) }),
+        )
+        return textResult(
+          `${desired ? 'Checked' : 'Unchecked'} ${args.target} (${changed ? 'toggled' : 'already in desired state'})\n${formatFeedbackSuffix(feedback)}`,
+          { changed, checked: desired },
+        )
+      }
+
+      case 'browser_clipboard': {
+        const tab = await resolveTab()
+        const action = String(args.action)
+        if (action === 'read') {
+          const data = await tab.page.readClipboard()
+          return textResult(data.html ? `Text:\n${data.text}\n\nHTML:\n${data.html}` : data.text, { ...data })
+        }
+        if (action === 'write') {
+          await tab.page.writeClipboard(String(args.text ?? ''), args.html as string | undefined)
+          return textResult(`Copied ${String(args.text ?? '').length} char(s)${args.html ? ' (+ HTML)' : ''} to clipboard`)
+        }
+        throw new Error(`Unsupported clipboard action: ${action}`)
+      }
+
+      case 'browser_pdf': {
+        const tab = await resolveTab()
+        const pdf = await tab.page.printToPDF({
+          path: args.path as string | undefined,
+          landscape: args.landscape as boolean | undefined,
+          printBackground: args.printBackground as boolean | undefined,
+          displayHeaderFooter: args.displayHeaderFooter as boolean | undefined,
+          scale: args.scale as number | undefined,
+          paperWidth: args.paperWidth as number | undefined,
+          paperHeight: args.paperHeight as number | undefined,
+          pageRanges: args.pageRanges as string | undefined,
+          preferCSSPageSize: args.preferCSSPageSize as boolean | undefined,
+        } as PdfOptions)
+        return textResult(
+          pdf.path
+            ? `Saved PDF to ${pdf.path} (${(pdf.sizeBytes / 1024).toFixed(1)} KB)`
+            : `Generated PDF (${(pdf.sizeBytes / 1024).toFixed(1)} KB, base64 length ${pdf.base64.length})`,
+          { path: pdf.path, sizeBytes: pdf.sizeBytes },
+        )
+      }
+
+      case 'browser_init_script': {
+        const tab = await resolveTab()
+        const action = String(args.action)
+        if (action === 'add') {
+          const entry = await tab.page.addInitScript(String(args.script ?? ''), { runNow: Boolean(args.runNow) })
+          return textResult(`Added init script [${entry.id}]: ${entry.preview}`, { entry })
+        }
+        if (action === 'remove') {
+          const removed = await tab.page.removeInitScript(String(args.id ?? ''))
+          return textResult(removed ? `Removed init script [${args.id}]` : `Init script [${args.id}] removed from CDP`)
+        }
+        if (action === 'list') {
+          const list = tab.page.listInitScripts()
+          return textResult(
+            list.length ? list.map((s) => `[${s.id}] ${s.preview}`).join('\n') : '(no active init scripts)',
+            { scripts: list },
+          )
+        }
+        throw new Error(`Unsupported init_script action: ${action}`)
+      }
+
+      case 'browser_permissions': {
+        const tab = await resolveTab()
+        const action = String(args.action)
+        if (action === 'grant') {
+          const perms = (args.permissions as string[]) ?? []
+          await tab.page.grantPermissions(perms, args.origin as string | undefined)
+          return textResult(`Granted permissions: ${perms.join(', ')}`)
+        }
+        if (action === 'reset') {
+          await tab.page.resetPermissions()
+          return textResult('Reset browser permissions')
+        }
+        throw new Error(`Unsupported permissions action: ${action}`)
       }
 
       default:

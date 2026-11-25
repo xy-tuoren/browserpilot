@@ -54,6 +54,29 @@ function wildcardMatch(url: string, pattern: string): boolean {
   return new RegExp(escaped, 'i').test(url)
 }
 
+export interface LiveNetworkResponse {
+  requestId: string
+  url: string
+  method: string
+  status?: number
+  statusText?: string
+  mimeType?: string
+  headers?: Record<string, string>
+  resourceType?: string
+  failed?: boolean
+  errorText?: string
+  text: () => Promise<string>
+  json: <T = unknown>() => Promise<T>
+}
+
+export interface WaitForResponseOptions {
+  url: string | RegExp
+  status?: number
+  method?: string
+  timeoutMs?: number
+  includeBody?: boolean
+}
+
 export class NetworkInspector {
   private readonly session: TabCDPSession
   private entries: NetworkEntry[] = []
@@ -61,6 +84,8 @@ export class NetworkInspector {
   private cursors = new Map<string, number>()
   private interceptRules = new Map<string, NetworkInterceptRule>()
   private fetchEnabled = false
+  private requestListeners = new Set<(entry: NetworkEntry) => void>()
+  private responseListeners = new Set<(res: LiveNetworkResponse) => void>()
   private unsubscribers: Array<() => void> = []
 
   constructor(session: TabCDPSession) {
@@ -92,6 +117,9 @@ export class NetworkInspector {
         if (this.entries.length > MAX_NETWORK_BUFFER) {
           const removed = this.entries.splice(0, this.entries.length - MAX_NETWORK_BUFFER)
           for (const r of removed) this.byId.delete(r.requestId)
+        }
+        for (const listener of this.requestListeners) {
+          try { listener(entry) } catch {}
         }
       }),
     )
@@ -132,6 +160,7 @@ export class NetworkInspector {
           ...entry.timing,
           totalMs: entry.completedAt - entry.timestamp,
         }
+        this.emitResponse(entry)
       }),
     )
 
@@ -142,6 +171,7 @@ export class NetworkInspector {
         entry.failed = true
         entry.errorText = String(params.errorText ?? 'Request failed')
         entry.completedAt = Date.now()
+        this.emitResponse(entry)
       }),
     )
 
@@ -300,9 +330,107 @@ export class NetworkInspector {
     this.byId.clear()
   }
 
+  private emitResponse(entry: NetworkEntry): void {
+    if (this.responseListeners.size === 0) return
+    let cachedBody: Promise<string> | null = null
+    const readText = (): Promise<string> => {
+      if (!cachedBody) {
+        cachedBody = this.getResponseBody(entry.requestId)
+          .then((r) => (r.base64Encoded ? Buffer.from(r.body, 'base64').toString('utf8') : r.body))
+          .catch(() => '')
+      }
+      return cachedBody
+    }
+    const resObj: LiveNetworkResponse = {
+      requestId: entry.requestId,
+      url: entry.url,
+      method: entry.method,
+      status: entry.status,
+      statusText: entry.statusText,
+      mimeType: entry.mimeType,
+      headers: entry.responseHeaders,
+      resourceType: entry.resourceType,
+      failed: entry.failed,
+      errorText: entry.errorText,
+      text: readText,
+      json: async <T = unknown>() => JSON.parse(await readText()) as T,
+    }
+    for (const listener of this.responseListeners) {
+      try { listener(resObj) } catch {}
+    }
+  }
+
+  onRequest(listener: (entry: NetworkEntry) => void): () => void {
+    this.requestListeners.add(listener)
+    return () => this.requestListeners.delete(listener)
+  }
+
+  onResponse(listener: (res: LiveNetworkResponse) => void): () => void {
+    this.responseListeners.add(listener)
+    return () => this.responseListeners.delete(listener)
+  }
+
+  async waitForResponse(options: WaitForResponseOptions): Promise<{
+    requestId: string
+    url: string
+    method: string
+    status?: number
+    headers?: Record<string, string>
+    body?: string
+  }> {
+    const timeoutMs = options.timeoutMs ?? 15_000
+    const urlMatcher =
+      options.url instanceof RegExp
+        ? (u: string) => (options.url as RegExp).test(u)
+        : (() => {
+            const raw = options.url
+            let re: RegExp | null = null
+            try {
+              if (raw.includes('*')) {
+                re = new RegExp(raw.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*'), 'i')
+              } else {
+                re = new RegExp(raw, 'i')
+              }
+            } catch {
+              re = null
+            }
+            return (u: string) => u.includes(raw) || Boolean(re?.test(u))
+          })()
+    const methodFilter = options.method?.toUpperCase()
+
+    return await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        off()
+        reject(new Error(`Timed out after ${timeoutMs}ms waiting for response matching ${String(options.url)}`))
+      }, timeoutMs)
+
+      const off = this.onResponse((res) => {
+        if (!urlMatcher(res.url)) return
+        if (options.status !== undefined && res.status !== options.status) return
+        if (methodFilter && res.method.toUpperCase() !== methodFilter) return
+        clearTimeout(timer)
+        off()
+        const finalize = async () => {
+          const body = options.includeBody !== false ? await res.text().catch(() => undefined) : undefined
+          resolve({
+            requestId: res.requestId,
+            url: res.url,
+            method: res.method,
+            status: res.status,
+            headers: res.headers,
+            body,
+          })
+        }
+        void finalize()
+      })
+    })
+  }
+
   dispose(): void {
     for (const off of this.unsubscribers) off()
     this.unsubscribers = []
+    this.requestListeners.clear()
+    this.responseListeners.clear()
   }
 }
 

@@ -87,6 +87,11 @@ export class DaemonClient {
     return res.session
   }
 
+  async updateSession(id: string, options: { tabGroup?: string; tabGroupColor?: TabGroupColor }): Promise<SessionInfo> {
+    const res = await this.request<{ session: SessionInfo }>('POST', '/api/sessions/update', { id, ...options })
+    return res.session
+  }
+
   async closeSession(id: string): Promise<boolean> {
     const res = await this.request<{ deleted: boolean }>('POST', '/api/sessions/close', { id })
     return res.deleted

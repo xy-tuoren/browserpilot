@@ -1,9 +1,10 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import type { BoundingBox } from '@browserpilot/protocol'
+import type { BoundingBox, FrameInfo } from '@browserpilot/protocol'
 import type { TabCDPSession } from './cdp-client.js'
+import { Locator, queryLocator, STABLE_LOCATOR_FUNCTION } from './locator.js'
 import type { SnapshotEngine } from './snapshot.js'
-import { sleep, waitForCondition, waitForPageLoad } from './wait.js'
+import { sleep, waitForCondition, waitForPageLoad, waitForSelector, type WaitSelectorState } from './wait.js'
 
 export type MouseButton = 'left' | 'right' | 'middle'
 export type KeyModifier = 'Alt' | 'Control' | 'Meta' | 'Shift'
@@ -30,12 +31,36 @@ export interface ScrollResult {
 
 export interface FormFieldInput {
   target: string
-  value: string | boolean
-  type?: 'auto' | 'text' | 'select' | 'checkbox' | 'radio'
+  value: string | string[] | number | boolean
+  type?: 'auto' | 'text' | 'select' | 'checkbox' | 'radio' | 'range' | 'file'
 }
 
 export interface FormFillResult {
-  filled: Array<{ target: string; type: string; value: string | boolean }>
+  filled: Array<{ target: string; type: string; value: string | string[] | number | boolean }>
+}
+
+export interface PdfOptions {
+  path?: string
+  landscape?: boolean
+  printBackground?: boolean
+  displayHeaderFooter?: boolean
+  headerTemplate?: string
+  footerTemplate?: string
+  scale?: number
+  paperWidth?: number
+  paperHeight?: number
+  marginTop?: number
+  marginBottom?: number
+  marginLeft?: number
+  marginRight?: number
+  pageRanges?: string
+  preferCSSPageSize?: boolean
+}
+
+export interface InitScriptEntry {
+  id: string
+  preview: string
+  createdAt: number
 }
 
 export interface HumanHandoffResult {
@@ -180,10 +205,32 @@ export class PageController {
   readonly session: TabCDPSession
   readonly snapshotEngine: SnapshotEngine
   private lastMousePos = { x: 0, y: 0 }
+  private pressedButtonsMask = 0
+  private activeModifiersMask = 0
+  private initScripts: InitScriptEntry[] = []
 
   constructor(session: TabCDPSession, snapshotEngine: SnapshotEngine) {
     this.session = session
     this.snapshotEngine = snapshotEngine
+  }
+
+  locator(selector: string): Locator {
+    return new Locator(this, selector)
+  }
+
+  frameLocator(iframeSelector: string): Locator {
+    return new Locator(this, iframeSelector)
+  }
+
+  async listFrames(): Promise<FrameInfo[]> {
+    return await this.session.listFrames()
+  }
+
+  async waitForLocator(
+    selector: string,
+    options: { state?: WaitSelectorState; timeoutMs?: number; frame?: string } = {},
+  ): Promise<boolean> {
+    return await waitForSelector(this.session, selector, options)
   }
 
   get tabId(): number {
@@ -264,16 +311,22 @@ export class PageController {
   }
 
   /**
-   * Resolve a snapshot ref (`e5`), CSS selector (`#btn`), `text=...`, or `role=...` locator
-   * into an actionable, scrolled-into-view element with viewport coordinates.
+   * Resolve a snapshot ref (`e5`), CSS selector (`#btn`), chained locator (`.card >> has-text=Pro >> button`),
+   * `role=...`, `label=...`, `placeholder=...`, `text=...`, `xpath=...`, or cross-iframe locator (`iframe#pay >> button`)
+   * into an actionable, scrolled-into-view element with top-frame viewport coordinates.
    */
-  async resolveElement(target: string, timeoutMs: number = 8_000): Promise<ResolvedElement> {
+  async resolveElement(
+    target: string,
+    timeoutMs: number = 8_000,
+    options: { allowHidden?: boolean } = {},
+  ): Promise<ResolvedElement> {
     return await waitForCondition(
       async () => {
         const refTarget = this.snapshotEngine.getRef(this.tabId, target)
         let objectId: string | undefined
         let backendNodeId: number | undefined
         let sessionId: string | undefined
+        let frameOffset: { x: number; y: number } | undefined
 
         if (refTarget) {
           backendNodeId = refTarget.backendDOMNodeId
@@ -287,10 +340,17 @@ export class PageController {
             .catch(() => null)
           objectId = resolved?.object?.objectId
         } else {
-          objectId = await this.queryElementObjectId(target)
+          const hit = await queryLocator(this.session, target, {
+            visibilityMode: options.allowHidden ? 'any' : 'prefer-visible',
+          })
+          objectId = hit.objectId
+          sessionId = hit.sessionId
+          if (hit.frameOffset.x !== 0 || hit.frameOffset.y !== 0) {
+            frameOffset = hit.frameOffset
+          }
           if (objectId) {
             const desc = await this.session
-              .send<{ node?: { backendNodeId?: number } }>('DOM.describeNode', { objectId })
+              .send<{ node?: { backendNodeId?: number } }>('DOM.describeNode', { objectId }, { sessionId })
               .catch(() => null)
             backendNodeId = desc?.node?.backendNodeId
           }
@@ -298,26 +358,28 @@ export class PageController {
 
         if (!objectId) return null
 
-        // Scroll into view cleanly
-        if (backendNodeId) {
+        // Scroll into view cleanly (skip when allowHidden is requested for detached/file controls)
+        if (!options.allowHidden) {
+          if (backendNodeId) {
+            await this.session
+              .send('DOM.scrollIntoViewIfNeeded', { backendNodeId }, { sessionId })
+              .catch(() => {})
+          }
           await this.session
-            .send('DOM.scrollIntoViewIfNeeded', { backendNodeId }, { sessionId })
+            .send(
+              'Runtime.callFunctionOn',
+              {
+                objectId,
+                functionDeclaration: `function() {
+                  if (typeof this.scrollIntoView === 'function') {
+                    this.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+                  }
+                }`,
+              },
+              { sessionId },
+            )
             .catch(() => {})
         }
-        await this.session
-          .send(
-            'Runtime.callFunctionOn',
-            {
-              objectId,
-              functionDeclaration: `function() {
-                if (typeof this.scrollIntoView === 'function') {
-                  this.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-                }
-              }`,
-            },
-            { sessionId },
-          )
-          .catch(() => {})
 
         // Compute viewport bounding box (accounting for child iframe offset if needed)
         const rectRes = await this.session.send<{ result?: { value?: BoundingBox | null } }>(
@@ -354,12 +416,16 @@ export class PageController {
           }
         }
 
-        if (!box || (box.width === 0 && box.height === 0)) return null
+        if (!box || (box.width === 0 && box.height === 0)) {
+          if (!options.allowHidden) return null
+          box = { x: 0, y: 0, width: 0, height: 0 }
+        }
 
-        // If element is inside a child OOPIF session, add iframe viewport offset in top frame
-        let frameOffset: { x: number; y: number } | undefined
-        if (sessionId) {
+        // If element is inside a child OOPIF session via refTarget (without locator-computed offset), add iframe offset
+        if (sessionId && !frameOffset) {
           frameOffset = await this.getIframeOffset(refTarget?.frameId, sessionId)
+        }
+        if (frameOffset && (frameOffset.x !== 0 || frameOffset.y !== 0)) {
           box = {
             x: box.x + frameOffset.x,
             y: box.y + frameOffset.y,
@@ -382,6 +448,24 @@ export class PageController {
       },
       { timeoutMs, intervalMs: 100, description: `element "${target}"` },
     )
+  }
+
+  async readElementProperty<T = unknown>(target: string, functionDeclaration: string, timeoutMs = 8_000): Promise<T> {
+    const el = await this.resolveElement(target, timeoutMs, { allowHidden: true })
+    const res = await this.session.send<{ result?: { value?: T } }>(
+      'Runtime.callFunctionOn',
+      {
+        objectId: el.objectId,
+        functionDeclaration,
+        returnByValue: true,
+      },
+      { sessionId: el.sessionId },
+    )
+    return res.result?.value as T
+  }
+
+  async getLocatorString(target: string, timeoutMs = 8_000): Promise<string> {
+    return await this.readElementProperty<string>(target, STABLE_LOCATOR_FUNCTION, timeoutMs)
   }
 
   private async getIframeOffset(frameId?: string, childSessionId?: string): Promise<{ x: number; y: number }> {
@@ -427,159 +511,6 @@ export class PageController {
     return { x: 0, y: 0 }
   }
 
-  private async queryElementObjectId(rawSelector: string): Promise<string | undefined> {
-    // Support optional ">> nth=N" suffix (Playwright/Playwriter compatibility)
-    let selector = rawSelector.trim()
-    let nth = 0
-    const nthMatch = selector.match(/^(.*?)\s*>>\s*nth=(\d+)\s*$/)
-    if (nthMatch) {
-      selector = nthMatch[1].trim()
-      nth = Number(nthMatch[2])
-    }
-
-    // Pinned element shortcut (e.g. "globalThis.__browserpilotPinned1" or "pinned")
-    if (selector === 'pinned' || selector.startsWith('globalThis.__browserpilotPinned')) {
-      const expr =
-        selector === 'pinned'
-          ? `(() => {
-              const keys = Object.keys(globalThis).filter((k) => k.startsWith('__browserpilotPinned'));
-              return keys.length ? globalThis[keys[keys.length - 1]] : null;
-            })()`
-          : selector
-      const res = await this.session.send<{ result?: { objectId?: string } }>('Runtime.evaluate', {
-        expression: expr,
-        returnByValue: false,
-      })
-      return res.result?.objectId
-    }
-
-    // role=button[name="Save"] locator
-    const roleMatch = selector.match(/^role=([a-zA-Z0-9_-]+)(?:\[name=["'](.+?)["']\])?$/i)
-    if (roleMatch) {
-      const role = roleMatch[1].toLowerCase()
-      const nameNeedle = (roleMatch[2] || '').trim().toLowerCase()
-      const res = await this.session.send<{ result?: { objectId?: string } }>('Runtime.evaluate', {
-        expression: `(() => {
-          const targetRole = ${JSON.stringify(role)};
-          const needle = ${JSON.stringify(nameNeedle)};
-          const nthIdx = ${nth};
-          const ROLE_TAGS = {
-            button: 'button, [role="button"], input[type="button"], input[type="submit"]',
-            link: 'a[href], [role="link"]',
-            textbox: 'input:not([type]), input[type="text"], input[type="email"], input[type="search"], input[type="password"], textarea, [role="textbox"], [contenteditable="true"]',
-            checkbox: 'input[type="checkbox"], [role="checkbox"]',
-            radio: 'input[type="radio"], [role="radio"]',
-            combobox: 'select, [role="combobox"]',
-            heading: 'h1, h2, h3, h4, h5, h6, [role="heading"]',
-            tab: '[role="tab"]',
-            menuitem: '[role="menuitem"]',
-          };
-          const css = ROLE_TAGS[targetRole] || ('[role="' + targetRole + '"]');
-          const hits = [];
-          function walk(root) {
-            for (const el of root.querySelectorAll(css)) {
-              const accName = (
-                el.getAttribute('aria-label') ||
-                el.getAttribute('title') ||
-                el.getAttribute('placeholder') ||
-                el.innerText ||
-                el.value ||
-                el.textContent || ''
-              ).replace(/\\s+/g, ' ').trim().toLowerCase();
-              if (!needle || accName === needle || accName.includes(needle)) hits.push(el);
-            }
-            for (const el of root.querySelectorAll('*')) {
-              if (el.shadowRoot) walk(el.shadowRoot);
-            }
-          }
-          walk(document);
-          return hits[nthIdx] || null;
-        })()`,
-        returnByValue: false,
-      })
-      return res.result?.objectId
-    }
-
-    // label=... locator
-    if (selector.startsWith('label=')) {
-      const needle = selector.slice(6).trim().toLowerCase()
-      const res = await this.session.send<{ result?: { objectId?: string } }>('Runtime.evaluate', {
-        expression: `(() => {
-          const needle = ${JSON.stringify(needle)};
-          const hits = [];
-          for (const lbl of document.querySelectorAll('label')) {
-            const t = (lbl.innerText || lbl.textContent || '').trim().toLowerCase();
-            if (t === needle || t.includes(needle)) {
-              const forId = lbl.getAttribute('for');
-              const ctrl = forId ? document.getElementById(forId) : lbl.querySelector('input, textarea, select');
-              if (ctrl) hits.push(ctrl);
-            }
-          }
-          for (const el of document.querySelectorAll('[aria-label]')) {
-            const t = (el.getAttribute('aria-label') || '').trim().toLowerCase();
-            if (t === needle || t.includes(needle)) hits.push(el);
-          }
-          return hits[${nth}] || null;
-        })()`,
-        returnByValue: false,
-      })
-      return res.result?.objectId
-    }
-
-    // placeholder=... locator
-    if (selector.startsWith('placeholder=')) {
-      const needle = selector.slice(12).trim().toLowerCase()
-      const res = await this.session.send<{ result?: { objectId?: string } }>('Runtime.evaluate', {
-        expression: `(() => {
-          const needle = ${JSON.stringify(needle)};
-          const hits = Array.from(document.querySelectorAll('[placeholder]')).filter((el) =>
-            (el.getAttribute('placeholder') || '').trim().toLowerCase().includes(needle)
-          );
-          return hits[${nth}] || null;
-        })()`,
-        returnByValue: false,
-      })
-      return res.result?.objectId
-    }
-
-    // text=... or standard CSS selector (with Shadow DOM + nth support)
-    const expr = selector.startsWith('text=')
-      ? `(() => {
-          const needle = ${JSON.stringify(selector.slice(5))}.trim().toLowerCase();
-          const exact = [];
-          const partial = [];
-          function walk(root) {
-            for (const el of root.querySelectorAll('*')) {
-              if (el.shadowRoot) walk(el.shadowRoot);
-              const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
-              if (txt === needle) exact.push(el);
-              else if (txt.includes(needle) && el.children.length === 0) partial.push(el);
-            }
-          }
-          walk(document);
-          const list = exact.length ? exact : partial;
-          return list[${nth}] || null;
-        })()`
-      : `(() => {
-          const sel = ${JSON.stringify(selector)};
-          const hits = [];
-          function walk(root) {
-            try { hits.push(...root.querySelectorAll(sel)); } catch {}
-            for (const el of root.querySelectorAll('*')) {
-              if (el.shadowRoot) walk(el.shadowRoot);
-            }
-          }
-          walk(document);
-          return hits[${nth}] || null;
-        })()`
-
-    const res = await this.session.send<{ result?: { objectId?: string } }>('Runtime.evaluate', {
-      expression: expr,
-      returnByValue: false,
-    })
-    return res.result?.objectId
-  }
-
   /**
    * Verifies pre-click actionability (position stability, enabled state, and non-occlusion).
    * If a fixed/sticky header occludes the target, automatically re-centers it in viewport.
@@ -606,8 +537,10 @@ export class PageController {
       if (!moved) break
     }
 
-    // 2. Check disabled state and hit-test occlusion (only in main frame where elementFromPoint matches viewport coords)
+    // 2. Check disabled state and hit-test occlusion (handles main frame + same-origin iframes)
     if (current.sessionId) return { el: current, underOwnPill: false }
+    const offsetX = current.frameOffset?.x ?? 0
+    const offsetY = current.frameOffset?.y ?? 0
     for (let retry = 0; retry < 2; retry++) {
       const check = await this.session
         .send<{
@@ -622,12 +555,14 @@ export class PageController {
           }
         }>('Runtime.callFunctionOn', {
           objectId: current.objectId,
-          arguments: [{ value: current.center.x }, { value: current.center.y }],
+          arguments: [{ value: current.center.x - offsetX }, { value: current.center.y - offsetY }],
           functionDeclaration: `function(cx, cy) {
+            const doc = this.ownerDocument || document;
+            const win = doc.defaultView || window;
             if (this.disabled === true || this.getAttribute?.('aria-disabled') === 'true') {
               return { ok: false, reason: 'disabled' };
             }
-            const style = getComputedStyle(this);
+            const style = win.getComputedStyle(this);
             if (style.pointerEvents === 'none') {
               return { ok: false, reason: 'pointer-events-none' };
             }
@@ -640,14 +575,14 @@ export class PageController {
               }
               return hit;
             }
-            let hit = deepHit(document, cx, cy);
+            let hit = deepHit(doc, cx, cy);
             let hitOwnPill = false;
             if (hit && hit.id === '__browserpilot_ui_host') {
               hitOwnPill = true;
               const prevDisplay = hit.style.display;
               hit.style.display = 'none';
-              hit = deepHit(document, cx, cy);
-              const uiHost = document.getElementById('__browserpilot_ui_host');
+              hit = deepHit(doc, cx, cy);
+              const uiHost = doc.getElementById('__browserpilot_ui_host');
               if (uiHost) uiHost.style.display = prevDisplay;
             }
             if (!hit) return { ok: true, underOwnPill: hitOwnPill };
@@ -657,8 +592,8 @@ export class PageController {
             // Walk up occluder to detect fixed/sticky header vs modal overlay
             let cur = hit;
             let isFixedOrSticky = false;
-            while (cur && cur !== document.body && cur !== document.documentElement) {
-              const pos = getComputedStyle(cur).position;
+            while (cur && cur !== doc.body && cur !== doc.documentElement) {
+              const pos = win.getComputedStyle(cur).position;
               if (pos === 'fixed' || pos === 'sticky') {
                 isFixedOrSticky = true;
                 break;
@@ -819,9 +754,17 @@ export class PageController {
     const steps = Math.max(1, options.steps ?? 1)
     const startX = this.lastMousePos.x
     const startY = this.lastMousePos.y
+    const heldButton: MouseButton | 'none' =
+      this.pressedButtonsMask & 1
+        ? 'left'
+        : this.pressedButtonsMask & 2
+          ? 'right'
+          : this.pressedButtonsMask & 4
+            ? 'middle'
+            : 'none'
     for (let i = 1; i <= steps; i++) {
       const t = i / steps
-      // Ease-out cubic glide for natural pointer feel
+      // Ease-out quad glide for natural pointer feel
       const eased = steps > 1 ? 1 - Math.pow(1 - t, 2) : 1
       const cx = startX + (x - startX) * eased
       const cy = startY + (y - startY) * eased
@@ -829,28 +772,32 @@ export class PageController {
         type: 'mouseMoved',
         x: cx,
         y: cy,
+        button: heldButton,
+        buttons: this.pressedButtonsMask,
+        modifiers: this.activeModifiersMask,
       })
       if (steps > 1) {
-        await this.session.transport.moveGhostCursor?.(this.tabId, cx, cy, false).catch(() => {})
+        await this.session.transport.moveGhostCursor?.(this.tabId, cx, cy, this.pressedButtonsMask > 0).catch(() => {})
         await sleep(8)
       }
     }
     this.lastMousePos = { x, y }
     if (steps === 1) {
-      await this.session.transport.moveGhostCursor?.(this.tabId, x, y, false).catch(() => {})
+      await this.session.transport.moveGhostCursor?.(this.tabId, x, y, this.pressedButtonsMask > 0).catch(() => {})
     }
   }
 
   async mouseDown(x: number, y: number, opts: { button?: MouseButton; clickCount?: number; modifiers?: number } = {}): Promise<void> {
     const button = opts.button ?? 'left'
+    this.pressedButtonsMask |= buttonBitmask(button)
     await this.session.send('Input.dispatchMouseEvent', {
       type: 'mousePressed',
       x,
       y,
       button,
-      buttons: buttonBitmask(button),
+      buttons: this.pressedButtonsMask,
       clickCount: opts.clickCount ?? 1,
-      modifiers: opts.modifiers ?? 0,
+      modifiers: (opts.modifiers ?? 0) | this.activeModifiersMask,
     })
     this.lastMousePos = { x, y }
     await this.session.transport.moveGhostCursor?.(this.tabId, x, y, true).catch(() => {})
@@ -858,14 +805,15 @@ export class PageController {
 
   async mouseUp(x: number, y: number, opts: { button?: MouseButton; clickCount?: number; modifiers?: number } = {}): Promise<void> {
     const button = opts.button ?? 'left'
+    this.pressedButtonsMask &= ~buttonBitmask(button)
     await this.session.send('Input.dispatchMouseEvent', {
       type: 'mouseReleased',
       x,
       y,
       button,
-      buttons: 0,
+      buttons: this.pressedButtonsMask,
       clickCount: opts.clickCount ?? 1,
-      modifiers: opts.modifiers ?? 0,
+      modifiers: (opts.modifiers ?? 0) | this.activeModifiersMask,
     })
     this.lastMousePos = { x, y }
     await this.session.transport.moveGhostCursor?.(this.tabId, x, y, false).catch(() => {})
@@ -909,6 +857,30 @@ export class PageController {
     await this.mouseDown(start.x, start.y)
     await this.mouseMove(end.x, end.y, { steps: options.steps ?? 12 })
     await this.mouseUp(end.x, end.y)
+  }
+
+  /**
+   * Executes a continuous held-mouse gesture through multiple waypoints (for Canvas drawing,
+   * annotation widgets, map panning, or non-linear slider drags).
+   */
+  async mouseStroke(
+    points: Array<{ x: number; y: number }>,
+    options: { button?: MouseButton; stepsPerSegment?: number; delayMs?: number } = {},
+  ): Promise<void> {
+    if (points.length < 2) {
+      throw new Error('mouseStroke requires at least 2 points')
+    }
+    const button = options.button ?? 'left'
+    const steps = Math.max(1, options.stepsPerSegment ?? 6)
+    const start = points[0]
+    await this.mouseMove(start.x, start.y)
+    await this.mouseDown(start.x, start.y, { button })
+    for (let i = 1; i < points.length; i++) {
+      await this.mouseMove(points[i].x, points[i].y, { steps })
+      if (options.delayMs) await sleep(options.delayMs)
+    }
+    const end = points[points.length - 1]
+    await this.mouseUp(end.x, end.y, { button })
   }
 
   async scroll(options: {
@@ -1105,7 +1077,36 @@ export class PageController {
     }
   }
 
-  async pressKey(combo: string, options: { modifiers?: KeyModifier[] } = {}): Promise<void> {
+  async pressKey(
+    combo: string,
+    options: { modifiers?: KeyModifier[]; action?: 'press' | 'down' | 'up'; repeat?: number } = {},
+  ): Promise<void> {
+    const action = options.action ?? 'press'
+    const repeat = Math.max(1, Math.min(50, options.repeat ?? 1))
+
+    if (action === 'down') {
+      const def = resolveKeyDef(combo.trim())
+      const keyMod =
+        def.key === 'Alt' || def.key === 'Control' || def.key === 'Meta' || def.key === 'Shift'
+          ? modifierBitmask([def.key])
+          : 0
+      this.activeModifiersMask |= keyMod
+      const mask = modifierBitmask(options.modifiers) | this.activeModifiersMask
+      await this.keyDown(def.key, mask)
+      return
+    }
+    if (action === 'up') {
+      const def = resolveKeyDef(combo.trim())
+      const keyMod =
+        def.key === 'Alt' || def.key === 'Control' || def.key === 'Meta' || def.key === 'Shift'
+          ? modifierBitmask([def.key])
+          : 0
+      this.activeModifiersMask &= ~keyMod
+      const mask = modifierBitmask(options.modifiers) | this.activeModifiersMask
+      await this.keyUp(def.key, mask)
+      return
+    }
+
     const parts = combo.split('+').map((s) => s.trim())
     const keyPart = parts.pop()!
     const mods: KeyModifier[] = [...(options.modifiers ?? [])]
@@ -1127,25 +1128,25 @@ export class PageController {
       activeMods.push(m)
       await this.keyDown(m, modifierBitmask(activeMods))
     }
-    await this.session.send('Input.dispatchKeyEvent', {
-      type: def.text && !hasAccel ? 'keyDown' : 'rawKeyDown',
-      key: def.key,
-      code: def.code,
-      windowsVirtualKeyCode: def.keyCode,
-      nativeVirtualKeyCode: def.keyCode,
-      text: hasAccel ? undefined : def.text,
-      unmodifiedText: def.text,
-      modifiers: mask,
-      ...(commands.length ? { commands } : {}),
-    })
-    await this.session.send('Input.dispatchKeyEvent', {
-      type: 'keyUp',
-      key: def.key,
-      code: def.code,
-      windowsVirtualKeyCode: def.keyCode,
-      nativeVirtualKeyCode: def.keyCode,
-      modifiers: mask,
-    })
+    for (let r = 0; r < repeat; r++) {
+      await this.session.send('Input.dispatchKeyEvent', {
+        type: def.text && !hasAccel ? 'keyDown' : 'rawKeyDown',
+        key: def.key,
+        code: def.code,
+        windowsVirtualKeyCode: def.keyCode,
+        text: hasAccel ? undefined : def.text,
+        unmodifiedText: def.text,
+        modifiers: mask,
+        ...(commands.length ? { commands } : {}),
+      })
+      await this.session.send('Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key: def.key,
+        code: def.code,
+        windowsVirtualKeyCode: def.keyCode,
+        modifiers: mask,
+      })
+    }
     for (let i = mods.length - 1; i >= 0; i--) {
       activeMods.pop()
       await this.keyUp(mods[i], modifierBitmask(activeMods))
@@ -1153,7 +1154,84 @@ export class PageController {
   }
 
   /**
-   * Fills multiple form fields (text, select, checkbox, radio) in a single structured call.
+   * Idempotently ensures a checkbox, radio, or ARIA switch is checked.
+   * Returns true if a click was performed, false if it was already checked.
+   */
+  async check(target: string, options: { timeoutMs?: number; force?: boolean } = {}): Promise<boolean> {
+    const el = await this.resolveElement(target, options.timeoutMs)
+    const res = await this.session
+      .send<{ result?: { value?: boolean } }>(
+        'Runtime.callFunctionOn',
+        {
+          objectId: el.objectId,
+          functionDeclaration: `function() { return Boolean(this.checked || this.getAttribute?.('aria-checked') === 'true'); }`,
+          returnByValue: true,
+        },
+        { sessionId: el.sessionId },
+      )
+      .catch(() => null)
+    if (res?.result?.value === true) return false
+    await this.click(target, { timeoutMs: options.timeoutMs, force: options.force })
+    return true
+  }
+
+  /**
+   * Idempotently ensures a checkbox or ARIA switch is unchecked.
+   * Returns true if a click was performed, false if it was already unchecked.
+   */
+  async uncheck(target: string, options: { timeoutMs?: number; force?: boolean } = {}): Promise<boolean> {
+    const el = await this.resolveElement(target, options.timeoutMs)
+    const res = await this.session
+      .send<{ result?: { value?: boolean } }>(
+        'Runtime.callFunctionOn',
+        {
+          objectId: el.objectId,
+          functionDeclaration: `function() { return Boolean(this.checked || this.getAttribute?.('aria-checked') === 'true'); }`,
+          returnByValue: true,
+        },
+        { sessionId: el.sessionId },
+      )
+      .catch(() => null)
+    if (res?.result?.value === false) return false
+    await this.click(target, { timeoutMs: options.timeoutMs, force: options.force })
+    return true
+  }
+
+  /**
+   * Sets a range input / slider value and fires React/Vue-compatible input & change events.
+   */
+  async setRangeValue(target: string, value: number | string, timeoutMs?: number): Promise<string> {
+    const el = await this.resolveElement(target, timeoutMs)
+    const strVal = String(value)
+    const res = await this.session.send<{ result?: { value?: string } }>(
+      'Runtime.callFunctionOn',
+      {
+        objectId: el.objectId,
+        arguments: [{ value: strVal }],
+        returnByValue: true,
+        functionDeclaration: `function(val) {
+          const tag = (this.tagName || '').toLowerCase();
+          if (tag === 'input') {
+            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+            if (setter) setter.call(this, val);
+            else this.value = val;
+            this.dispatchEvent(new Event('input', { bubbles: true }));
+            this.dispatchEvent(new Event('change', { bubbles: true }));
+            return this.value;
+          }
+          this.setAttribute('aria-valuenow', val);
+          this.dispatchEvent(new Event('input', { bubbles: true }));
+          this.dispatchEvent(new Event('change', { bubbles: true }));
+          return val;
+        }`,
+      },
+      { sessionId: el.sessionId },
+    )
+    return res.result?.value ?? strVal
+  }
+
+  /**
+   * Fills multiple form fields (text, select/multi-select, checkbox, radio, range, file) in a single structured call.
    */
   async fillForm(fields: FormFieldInput[]): Promise<FormFillResult> {
     const filled: FormFillResult['filled'] = []
@@ -1161,13 +1239,13 @@ export class PageController {
       const kind = field.type ?? 'auto'
       let detectedType = kind
       if (kind === 'auto') {
-        const el = await this.resolveElement(field.target)
+        const el = await this.resolveElement(field.target, undefined, { allowHidden: true })
         const meta = await this.session
-          .send<{ result?: { value?: { tag: string; inputType: string } } }>(
+          .send<{ result?: { value?: { tag: string; inputType: string; role: string } } }>(
             'Runtime.callFunctionOn',
             {
               objectId: el.objectId,
-              functionDeclaration: `function() { return { tag: (this.tagName || '').toLowerCase(), inputType: (this.type || '').toLowerCase() }; }`,
+              functionDeclaration: `function() { return { tag: (this.tagName || '').toLowerCase(), inputType: (this.type || '').toLowerCase(), role: (this.getAttribute?.('role') || '').toLowerCase() }; }`,
               returnByValue: true,
             },
             { sessionId: el.sessionId },
@@ -1175,36 +1253,34 @@ export class PageController {
           .catch(() => null)
         const tag = meta?.result?.value?.tag ?? ''
         const inputType = meta?.result?.value?.inputType ?? ''
+        const role = meta?.result?.value?.role ?? ''
         if (tag === 'select') detectedType = 'select'
-        else if (inputType === 'checkbox') detectedType = 'checkbox'
-        else if (inputType === 'radio') detectedType = 'radio'
+        else if (inputType === 'checkbox' || role === 'checkbox' || role === 'switch') detectedType = 'checkbox'
+        else if (inputType === 'radio' || role === 'radio') detectedType = 'radio'
+        else if (inputType === 'range' || role === 'slider') detectedType = 'range'
+        else if (inputType === 'file') detectedType = 'file'
         else detectedType = 'text'
       }
 
       if (detectedType === 'select') {
-        const selected = await this.selectOption(field.target, String(field.value))
-        filled.push({ target: field.target, type: 'select', value: selected })
+        const vals = Array.isArray(field.value) ? field.value.map(String) : String(field.value)
+        const selected = await this.selectOption(field.target, vals)
+        filled.push({ target: field.target, type: 'select', value: selected.length === 1 ? selected[0] : selected })
       } else if (detectedType === 'checkbox') {
         const desired = field.value === true || String(field.value).toLowerCase() === 'true'
-        const el = await this.resolveElement(field.target)
-        const current = await this.session
-          .send<{ result?: { value?: boolean } }>(
-            'Runtime.callFunctionOn',
-            {
-              objectId: el.objectId,
-              functionDeclaration: `function() { return Boolean(this.checked || this.getAttribute?.('aria-checked') === 'true'); }`,
-              returnByValue: true,
-            },
-            { sessionId: el.sessionId },
-          )
-          .catch(() => null)
-        if (Boolean(current?.result?.value) !== desired) {
-          await this.click(field.target)
-        }
+        if (desired) await this.check(field.target)
+        else await this.uncheck(field.target)
         filled.push({ target: field.target, type: 'checkbox', value: desired })
       } else if (detectedType === 'radio') {
-        await this.click(field.target)
+        await this.check(field.target)
         filled.push({ target: field.target, type: 'radio', value: field.value })
+      } else if (detectedType === 'range') {
+        const applied = await this.setRangeValue(field.target, typeof field.value === 'number' ? field.value : String(field.value))
+        filled.push({ target: field.target, type: 'range', value: applied })
+      } else if (detectedType === 'file') {
+        const paths = Array.isArray(field.value) ? field.value.map(String) : [String(field.value)]
+        await this.uploadFiles(field.target, paths)
+        filled.push({ target: field.target, type: 'file', value: paths })
       } else {
         await this.fill(field.target, String(field.value))
         filled.push({ target: field.target, type: 'text', value: String(field.value) })
@@ -1357,7 +1433,6 @@ export class PageController {
       key: def.key,
       code: def.code,
       windowsVirtualKeyCode: def.keyCode,
-      nativeVirtualKeyCode: def.keyCode,
       text: def.text,
       modifiers,
     })
@@ -1370,37 +1445,47 @@ export class PageController {
       key: def.key,
       code: def.code,
       windowsVirtualKeyCode: def.keyCode,
-      nativeVirtualKeyCode: def.keyCode,
       modifiers,
     })
   }
 
-  async selectOption(target: string, valueOrLabel: string): Promise<string> {
+  async selectOption(target: string, valueOrLabels: string | string[]): Promise<string[]> {
     const el = await this.resolveElement(target)
-    const res = await this.session.send<{ result?: { value?: string } }>(
+    const wanted = Array.isArray(valueOrLabels) ? valueOrLabels : [valueOrLabels]
+    const res = await this.session.send<{ result?: { value?: string[] }; exceptionDetails?: { exception?: { description?: string }; text?: string } }>(
       'Runtime.callFunctionOn',
       {
         objectId: el.objectId,
-        arguments: [{ value: valueOrLabel }],
+        arguments: [{ value: wanted }],
         returnByValue: true,
-        functionDeclaration: `function(val) {
+        functionDeclaration: `function(vals) {
           const opts = Array.from(this.options || []);
-          const match = opts.find((o) => o.value === val || o.text.trim() === val);
-          if (!match) throw new Error('Option not found: ' + val);
-          this.value = match.value;
-          match.selected = true;
+          const selected = [];
+          if (this.multiple) {
+            for (const o of opts) o.selected = false;
+          }
+          for (const val of vals) {
+            const match = opts.find((o) => o.value === val || o.text.trim() === val);
+            if (!match) throw new Error('Option not found: ' + val);
+            match.selected = true;
+            if (!this.multiple) this.value = match.value;
+            selected.push(match.value);
+          }
           this.dispatchEvent(new Event('input', { bubbles: true }));
           this.dispatchEvent(new Event('change', { bubbles: true }));
-          return match.value;
+          return selected;
         }`,
       },
       { sessionId: el.sessionId },
     )
-    return res.result?.value ?? valueOrLabel
+    if (res.exceptionDetails) {
+      throw new Error(res.exceptionDetails.exception?.description ?? res.exceptionDetails.text ?? 'selectOption failed')
+    }
+    return res.result?.value ?? wanted
   }
 
   async uploadFiles(target: string, filePaths: string[]): Promise<void> {
-    const el = await this.resolveElement(target)
+    const el = await this.resolveElement(target, undefined, { allowHidden: true })
     if (!el.backendNodeId) {
       throw new Error(`Cannot upload files: unable to resolve backendNodeId for ${target}`)
     }
@@ -1415,21 +1500,200 @@ export class PageController {
     )
   }
 
-  async evaluate<T = unknown>(expression: string): Promise<T> {
-    const res = await this.session.send<{
-      result?: { value?: T; description?: string; type?: string }
-      exceptionDetails?: { text?: string; exception?: { description?: string } }
-    }>('Runtime.evaluate', {
+  async evaluate<T = unknown>(expression: string, options: { frame?: string } = {}): Promise<T> {
+    let sessionId: string | undefined
+    let contextId: number | undefined
+    if (options.frame) {
+      const frameCtx = await this.session.resolveFrame(options.frame)
+      if (!frameCtx) throw new Error(`Frame not found: ${options.frame}`)
+      sessionId = frameCtx.sessionId
+      contextId = frameCtx.contextId
+    }
+    const evalParams: Record<string, unknown> = {
       expression,
       awaitPromise: true,
       returnByValue: true,
       userGesture: true,
-    })
+    }
+    if (contextId !== undefined && !sessionId) evalParams.contextId = contextId
+
+    const res = await this.session.send<{
+      result?: { value?: T; description?: string; type?: string }
+      exceptionDetails?: { text?: string; exception?: { description?: string } }
+    }>('Runtime.evaluate', evalParams, { sessionId })
     if (res.exceptionDetails) {
       const msg = res.exceptionDetails.exception?.description ?? res.exceptionDetails.text ?? 'Evaluation error'
       throw new Error(msg)
     }
     return res.result?.value as T
+  }
+
+  /**
+   * Reads text (and optional HTML) from the browser clipboard after granting clipboardReadWrite permission.
+   */
+  async readClipboard(): Promise<{ text: string; html?: string }> {
+    await this.grantPermissions(['clipboardReadWrite']).catch(() => {})
+    return await this.evaluate<{ text: string; html?: string }>(`(async () => {
+      if (navigator.clipboard && typeof navigator.clipboard.read === 'function') {
+        try {
+          const items = await navigator.clipboard.read();
+          let text = '';
+          let html;
+          for (const item of items) {
+            if (item.types.includes('text/plain')) {
+              text = await (await item.getType('text/plain')).text();
+            }
+            if (item.types.includes('text/html')) {
+              html = await (await item.getType('text/html')).text();
+            }
+          }
+          if (text || html) return html ? { text, html } : { text };
+        } catch {}
+      }
+      if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+        const text = await navigator.clipboard.readText();
+        return { text };
+      }
+      throw new Error('Clipboard API unavailable on this origin (requires HTTPS or localhost)');
+    })()`)
+  }
+
+  /**
+   * Writes plain text (and optional rich HTML) to the browser clipboard so agents can paste via Cmd+V / Ctrl+V.
+   */
+  async writeClipboard(text: string, html?: string): Promise<void> {
+    await this.grantPermissions(['clipboardReadWrite', 'clipboardSanitizedWrite']).catch(() => {})
+    await this.evaluate(`(async () => {
+      const plain = ${JSON.stringify(text)};
+      const rich = ${html !== undefined ? JSON.stringify(html) : 'null'};
+      if (rich && navigator.clipboard && typeof ClipboardItem !== 'undefined' && typeof navigator.clipboard.write === 'function') {
+        try {
+          const item = new ClipboardItem({
+            'text/plain': new Blob([plain], { type: 'text/plain' }),
+            'text/html': new Blob([rich], { type: 'text/html' }),
+          });
+          await navigator.clipboard.write([item]);
+          return true;
+        } catch {}
+      }
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        try {
+          await navigator.clipboard.writeText(plain);
+          return true;
+        } catch {}
+      }
+      // Fallback via hidden textarea + execCommand('copy')
+      const ta = document.createElement('textarea');
+      ta.value = plain;
+      ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+      return true;
+    })()`)
+  }
+
+  /**
+   * Registers a script executed before any page JavaScript on every future navigation (CDP addScriptToEvaluateOnNewDocument).
+   */
+  async addInitScript(script: string, options: { runNow?: boolean } = {}): Promise<InitScriptEntry> {
+    await this.session.ensureBaseDomains()
+    const res = await this.session.send<{ identifier: string }>('Page.addScriptToEvaluateOnNewDocument', {
+      source: script,
+    })
+    const entry: InitScriptEntry = {
+      id: res.identifier,
+      preview: script.replace(/\s+/g, ' ').trim().slice(0, 100),
+      createdAt: Date.now(),
+    }
+    this.initScripts.push(entry)
+    if (options.runNow) {
+      await this.evaluate(script).catch(() => {})
+    }
+    return entry
+  }
+
+  async removeInitScript(id: string): Promise<boolean> {
+    await this.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: id })
+    const before = this.initScripts.length
+    this.initScripts = this.initScripts.filter((s) => s.id !== id)
+    return this.initScripts.length < before
+  }
+
+  listInitScripts(): InitScriptEntry[] {
+    return [...this.initScripts]
+  }
+
+  /**
+   * Grants Chrome permissions to the current page's origin (or an explicit origin) via CDP Browser.grantPermissions.
+   */
+  async grantPermissions(permissions: string[], origin?: string): Promise<void> {
+    const targetOrigin =
+      origin ??
+      (await this.evaluate<string>('location.origin').catch(() => ''))
+    const normalized = permissions.map((p) => {
+      const map: Record<string, string> = {
+        'clipboard-read': 'clipboardReadWrite',
+        'clipboard-write': 'clipboardSanitizedWrite',
+        camera: 'videoCapture',
+        microphone: 'audioCapture',
+      }
+      return map[p] ?? p
+    })
+    const params: Record<string, unknown> = { permissions: normalized }
+    if (targetOrigin && targetOrigin !== 'null') params.origin = targetOrigin
+    if (this.session.transport.sendBrowser) {
+      await this.session.transport.sendBrowser('Browser.grantPermissions', params)
+    } else {
+      await this.session.send('Browser.grantPermissions', params)
+    }
+  }
+
+  async resetPermissions(): Promise<void> {
+    if (this.session.transport.sendBrowser) {
+      await this.session.transport.sendBrowser('Browser.resetPermissions', {})
+    } else {
+      await this.session.send('Browser.resetPermissions', {})
+    }
+  }
+
+  /**
+   * Exports the current page to PDF via CDP Page.printToPDF.
+   */
+  async printToPDF(options: PdfOptions = {}): Promise<{ base64: string; path?: string; sizeBytes: number }> {
+    await this.session.ensureBaseDomains()
+    await this.session.transport.setOverlayVisible?.(this.tabId, false).catch(() => {})
+    try {
+      const params: Record<string, unknown> = {
+        landscape: options.landscape ?? false,
+        printBackground: options.printBackground ?? true,
+        displayHeaderFooter: options.displayHeaderFooter ?? false,
+      }
+      if (options.headerTemplate !== undefined) params.headerTemplate = options.headerTemplate
+      if (options.footerTemplate !== undefined) params.footerTemplate = options.footerTemplate
+      if (options.scale !== undefined) params.scale = options.scale
+      if (options.paperWidth !== undefined) params.paperWidth = options.paperWidth
+      if (options.paperHeight !== undefined) params.paperHeight = options.paperHeight
+      if (options.marginTop !== undefined) params.marginTop = options.marginTop
+      if (options.marginBottom !== undefined) params.marginBottom = options.marginBottom
+      if (options.marginLeft !== undefined) params.marginLeft = options.marginLeft
+      if (options.marginRight !== undefined) params.marginRight = options.marginRight
+      if (options.pageRanges !== undefined) params.pageRanges = options.pageRanges
+      if (options.preferCSSPageSize !== undefined) params.preferCSSPageSize = options.preferCSSPageSize
+
+      const res = await this.session.send<{ data: string }>('Page.printToPDF', params)
+      const buf = Buffer.from(res.data, 'base64')
+      if (options.path) {
+        const absPath = path.resolve(options.path)
+        await fs.mkdir(path.dirname(absPath), { recursive: true })
+        await fs.writeFile(absPath, buf)
+        return { base64: res.data, path: absPath, sizeBytes: buf.byteLength }
+      }
+      return { base64: res.data, sizeBytes: buf.byteLength }
+    } finally {
+      await this.session.transport.setOverlayVisible?.(this.tabId, true).catch(() => {})
+    }
   }
 
   async screenshot(

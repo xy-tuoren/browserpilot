@@ -124,7 +124,14 @@ function buildCaptureScript(maskPasswords: boolean): string {
  * and click-before-fill noise) and renders executable batch steps, JS script,
  * and reusable Agent Skill Markdown.
  */
-export function buildActionRecordingResult(rawSteps: RecordedStep[], durationMs: number): ActionRecordingResult {
+export function buildActionRecordingResult(
+  rawSteps: RecordedStep[],
+  durationMs: number,
+  extras?: {
+    apiCalls?: Array<{ timestamp: number; method: string; url: string; status?: number }>
+    errors?: Array<{ timestamp: number; kind: 'console' | 'exception' | 'dialog'; text: string }>
+  },
+): ActionRecordingResult {
   const steps: RecordedStep[] = []
   for (const s of rawSteps) {
     const prev = steps[steps.length - 1]
@@ -216,11 +223,25 @@ export function buildActionRecordingResult(rawSteps: RecordedStep[], durationMs:
                 : `Scroll ${Number(s.value ?? 0) >= 0 ? 'down' : 'up'} ${Math.abs(Number(s.value ?? 0))}px`
     mdLines.push(`${idx + 1}. ${desc}`)
   })
+  if (extras?.apiCalls?.length) {
+    mdLines.push('', '## Observed API Calls')
+    for (const c of extras.apiCalls.slice(0, 20)) {
+      mdLines.push(`- \`${c.method} ${c.status ?? '?'}\` ${c.url}`)
+    }
+  }
+  if (extras?.errors?.length) {
+    mdLines.push('', '## Observed Errors / Dialogs')
+    for (const e of extras.errors.slice(0, 15)) {
+      mdLines.push(`- [${e.kind}] ${e.text}`)
+    }
+  }
   mdLines.push('', '## Replay Script (`browserpilot exec`)', '```js', execScript, '```')
 
   return {
     durationMs,
     steps,
+    ...(extras?.apiCalls?.length ? { apiCalls: extras.apiCalls } : {}),
+    ...(extras?.errors?.length ? { errors: extras.errors } : {}),
     batchSteps,
     execScript,
     skillMarkdown: mdLines.join('\n'),
@@ -229,13 +250,16 @@ export function buildActionRecordingResult(rawSteps: RecordedStep[], durationMs:
 
 /**
  * Records live user interactions (clicks, fills, selects, keys, scrolls, navigations)
- * across page loads via CDP Runtime.addBinding + addScriptToEvaluateOnNewDocument.
+ * plus concurrent XHR/Fetch API calls, dialogs, and uncaught exceptions across page loads.
  */
 export class ActionRecorder {
   private readonly session: TabCDPSession
   private recording = false
   private startedAt = 0
   private steps: RecordedStep[] = []
+  private apiCalls: Array<{ timestamp: number; method: string; url: string; status?: number }> = []
+  private errors: Array<{ timestamp: number; kind: 'console' | 'exception' | 'dialog'; text: string }> = []
+  private pendingReqMethods = new Map<string, string>()
   private scriptId: string | null = null
   private unsubs: Array<() => void> = []
 
@@ -258,6 +282,9 @@ export class ActionRecorder {
     await this.session.ensureBaseDomains()
     const maskPasswords = options.maskPasswords !== false
     this.steps = []
+    this.apiCalls = []
+    this.errors = []
+    this.pendingReqMethods.clear()
     this.startedAt = Date.now()
     this.recording = true
 
@@ -311,6 +338,40 @@ export class ActionRecorder {
           })
         }
       }),
+      this.session.on('Network.requestWillBeSent', (params) => {
+        if (!this.recording) return
+        const id = String(params.requestId ?? '')
+        const type = String(params.type ?? '')
+        const req = params.request as { method?: string } | undefined
+        if (id && (type === 'XHR' || type === 'Fetch')) {
+          this.pendingReqMethods.set(id, req?.method ?? 'GET')
+        }
+      }),
+      this.session.on('Network.responseReceived', (params) => {
+        if (!this.recording) return
+        const id = String(params.requestId ?? '')
+        const method = this.pendingReqMethods.get(id)
+        if (!method) return
+        this.pendingReqMethods.delete(id)
+        const res = params.response as { url?: string; status?: number } | undefined
+        if (res?.url && this.apiCalls.length < 100) {
+          this.apiCalls.push({ timestamp: Date.now(), method, url: res.url, status: res.status })
+        }
+      }),
+      this.session.on('Runtime.exceptionThrown', (params) => {
+        if (!this.recording || this.errors.length >= 50) return
+        const details = params.exceptionDetails as { text?: string; exception?: { description?: string } } | undefined
+        const text = details?.exception?.description ?? details?.text ?? 'Uncaught exception'
+        this.errors.push({ timestamp: Date.now(), kind: 'exception', text: text.slice(0, 200) })
+      }),
+      this.session.on('Page.javascriptDialogOpening', (params) => {
+        if (!this.recording || this.errors.length >= 50) return
+        this.errors.push({
+          timestamp: Date.now(),
+          kind: 'dialog',
+          text: `${String(params.type ?? 'alert')}: ${String(params.message ?? '').slice(0, 200)}`,
+        })
+      }),
     )
 
     return { startedAt: this.startedAt, url: initialUrl }
@@ -334,7 +395,10 @@ export class ActionRecorder {
       .send('Runtime.evaluate', { expression: 'globalThis.__bpActionRecorderEnabled = false;' })
       .catch(() => {})
 
-    return buildActionRecordingResult(this.steps, durationMs)
+    return buildActionRecordingResult(this.steps, durationMs, {
+      apiCalls: this.apiCalls,
+      errors: this.errors,
+    })
   }
 
   dispose(): void {

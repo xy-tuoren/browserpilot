@@ -10,12 +10,14 @@ import {
   type TabInfo,
 } from '@browserpilot/protocol'
 import { formatConsoleLogs, type GetConsoleOptions } from './console-collector.js'
-import { formatNetworkEntries, type GetNetworkOptions } from './network-inspector.js'
+import { Locator } from './locator.js'
+import { formatNetworkEntries, type GetNetworkOptions, type LiveNetworkResponse, type WaitForResponseOptions } from './network-inspector.js'
+import type { ClickOptions, EmulateOptions, FormFieldInput, KeyModifier, MouseButton, PdfOptions } from './page-controller.js'
 import { createDemoVideo } from './recorder.js'
 import { formatStylesAsText } from './styles-inspector.js'
 import { BrowserPilotTab } from './tab.js'
 import type { CDPTransport } from './transport.js'
-import { sleep, waitForPageLoad, waitForSelector, waitForText } from './wait.js'
+import { sleep, waitForFunction, waitForPageLoad, waitForSelector, waitForText, waitForUrl, type WaitSelectorState } from './wait.js'
 
 const requireFromHere = createRequire(import.meta.url)
 
@@ -216,6 +218,51 @@ export class SessionManager {
     return this.sessions.delete(id)
   }
 
+  updateSession(id: string, options: { tabGroup?: string; tabGroupColor?: TabGroupColor }): SessionInfo {
+    const sess = this.getOrCreateSession(id)
+    if (options.tabGroup !== undefined && options.tabGroup.trim()) {
+      sess.tabGroup = options.tabGroup.trim()
+      if (!options.tabGroupColor) sess.tabGroupColor = colorForGroupName(sess.tabGroup)
+    }
+    if (options.tabGroupColor !== undefined) {
+      sess.tabGroupColor = options.tabGroupColor
+    }
+    sess.lastUsedAt = Date.now()
+    return this.toSessionInfo(sess)
+  }
+
+  /**
+   * Waits for a newly created tab/popup (e.g. triggered by target="_blank" or window.open),
+   * attaches to it, and returns the live BrowserPilotTab handle.
+   */
+  async waitForPopup(options: {
+    action?: () => Promise<unknown>
+    timeoutMs?: number
+    sessionId?: string
+  } = {}): Promise<BrowserPilotTab> {
+    const timeoutMs = options.timeoutMs ?? 15_000
+    const beforeIds = new Set((await this.listTabs()).map((t) => t.tabId))
+    if (options.action) {
+      await options.action()
+    }
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() <= deadline) {
+      const current = await this.listTabs()
+      const created = current.find((t) => !beforeIds.has(t.tabId) && !isRestrictedUrl(t.url))
+      if (created) {
+        const sess = options.sessionId ? this.getOrCreateSession(options.sessionId) : undefined
+        const tab = await this.getOrAttachTab(
+          created.tabId,
+          sess ? { tabGroup: sess.tabGroup, tabGroupColor: sess.tabGroupColor } : undefined,
+        )
+        if (sess) sess.activeTabId = tab.tabId
+        return tab
+      }
+      await sleep(100)
+    }
+    throw new Error(`Timed out after ${timeoutMs}ms waiting for new popup tab`)
+  }
+
   private toSessionInfo(s: InternalSession): SessionInfo {
     return {
       id: s.id,
@@ -298,9 +345,115 @@ export class SessionManager {
       },
 
       // High-level helpers mirroring & expanding Playwriter's sandbox API
-      snapshot: async (opts?: { tab?: BrowserPilotTab; search?: string | RegExp; showDiffSinceLastCall?: boolean; scope?: string }) => {
+      locator: async (selector: string, opts?: { tab?: BrowserPilotTab }): Promise<Locator> => {
+        const t = await getTab(opts?.tab)
+        return t.locator(selector)
+      },
+      frameLocator: async (iframeSelector: string, opts?: { tab?: BrowserPilotTab }): Promise<Locator> => {
+        const t = await getTab(opts?.tab)
+        return t.frameLocator(iframeSelector)
+      },
+      snapshot: async (opts?: { tab?: BrowserPilotTab; search?: string | RegExp; showDiffSinceLastCall?: boolean; scope?: string; frame?: string }) => {
         const t = await getTab(opts?.tab)
         return (await t.snapshots.capture(t.session, opts)).text
+      },
+      listFrames: async (opts?: { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts?.tab)
+        return await t.page.listFrames()
+      },
+      click: async (target: string | { x: number; y: number }, opts?: ClickOptions & { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts?.tab)
+        await t.page.click(target, opts)
+      },
+      dblclick: async (target: string | { x: number; y: number }, opts?: { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts?.tab)
+        await t.page.dblclick(target)
+      },
+      rightClick: async (target: string | { x: number; y: number }, opts?: { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts?.tab)
+        await t.page.rightClick(target)
+      },
+      hover: async (target: string | { x: number; y: number }, opts?: { tab?: BrowserPilotTab; timeoutMs?: number }) => {
+        const t = await getTab(opts?.tab)
+        await t.page.hover(target, opts?.timeoutMs)
+      },
+      fill: async (target: string, value: string, opts?: { tab?: BrowserPilotTab; clear?: boolean; timeoutMs?: number }) => {
+        const t = await getTab(opts?.tab)
+        await t.page.fill(target, value, opts)
+      },
+      type: async (target: string | null, text: string, opts?: { tab?: BrowserPilotTab; delayMs?: number }) => {
+        const t = await getTab(opts?.tab)
+        await t.page.type(target, text, opts)
+      },
+      pressKey: async (combo: string, opts?: { tab?: BrowserPilotTab; modifiers?: KeyModifier[]; action?: 'press' | 'down' | 'up'; repeat?: number }) => {
+        const t = await getTab(opts?.tab)
+        await t.page.pressKey(combo, opts)
+      },
+      check: async (target: string, opts?: { tab?: BrowserPilotTab; timeoutMs?: number; force?: boolean }) => {
+        const t = await getTab(opts?.tab)
+        return await t.page.check(target, opts)
+      },
+      uncheck: async (target: string, opts?: { tab?: BrowserPilotTab; timeoutMs?: number; force?: boolean }) => {
+        const t = await getTab(opts?.tab)
+        return await t.page.uncheck(target, opts)
+      },
+      selectOption: async (target: string, values: string | string[], opts?: { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts?.tab)
+        return await t.page.selectOption(target, values)
+      },
+      uploadFiles: async (target: string, filePaths: string[], opts?: { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts?.tab)
+        await t.page.uploadFiles(target, filePaths)
+      },
+      scroll: async (opts: { tab?: BrowserPilotTab; target?: string; deltaX?: number; deltaY?: number; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number } = {}) => {
+        const t = await getTab(opts.tab)
+        return await t.page.scroll(opts)
+      },
+      drag: async (from: string | { x: number; y: number }, to: string | { x: number; y: number }, opts?: { tab?: BrowserPilotTab; steps?: number }) => {
+        const t = await getTab(opts?.tab)
+        await t.page.drag(from, to, opts)
+      },
+      mouseStroke: async (points: Array<{ x: number; y: number }>, opts?: { tab?: BrowserPilotTab; button?: MouseButton; stepsPerSegment?: number; delayMs?: number }) => {
+        const t = await getTab(opts?.tab)
+        await t.page.mouseStroke(points, opts)
+      },
+      mouse: {
+        move: async (x: number, y: number, opts?: { steps?: number; tab?: BrowserPilotTab }) =>
+          (await getTab(opts?.tab)).page.mouseMove(x, y, opts),
+        down: async (x?: number, y?: number, opts?: { button?: MouseButton; clickCount?: number; tab?: BrowserPilotTab }) => {
+          const t = await getTab(opts?.tab)
+          const pos = x !== undefined && y !== undefined ? { x, y } : { x: 0, y: 0 }
+          await t.page.mouseDown(pos.x, pos.y, opts)
+        },
+        up: async (x?: number, y?: number, opts?: { button?: MouseButton; clickCount?: number; tab?: BrowserPilotTab }) => {
+          const t = await getTab(opts?.tab)
+          const pos = x !== undefined && y !== undefined ? { x, y } : { x: 0, y: 0 }
+          await t.page.mouseUp(pos.x, pos.y, opts)
+        },
+        click: async (x: number, y: number, opts?: { button?: MouseButton; clickCount?: number; tab?: BrowserPilotTab }) =>
+          (await getTab(opts?.tab)).page.mouseClick(x, y, opts),
+        wheel: async (deltaX: number, deltaY: number, opts?: { x?: number; y?: number; tab?: BrowserPilotTab }) =>
+          (await getTab(opts?.tab)).page.wheel(deltaX, deltaY, opts?.x !== undefined && opts?.y !== undefined ? { x: opts.x, y: opts.y } : undefined),
+        stroke: async (points: Array<{ x: number; y: number }>, opts?: { button?: MouseButton; stepsPerSegment?: number; delayMs?: number; tab?: BrowserPilotTab }) =>
+          (await getTab(opts?.tab)).page.mouseStroke(points, opts),
+      },
+      keyboard: {
+        press: async (key: string, opts?: { modifiers?: KeyModifier[]; repeat?: number; tab?: BrowserPilotTab }) =>
+          (await getTab(opts?.tab)).page.pressKey(key, { ...opts, action: 'press' }),
+        down: async (key: string, opts?: { modifiers?: KeyModifier[]; tab?: BrowserPilotTab }) =>
+          (await getTab(opts?.tab)).page.pressKey(key, { ...opts, action: 'down' }),
+        up: async (key: string, opts?: { modifiers?: KeyModifier[]; tab?: BrowserPilotTab }) =>
+          (await getTab(opts?.tab)).page.pressKey(key, { ...opts, action: 'up' }),
+        type: async (text: string, opts?: { delayMs?: number; tab?: BrowserPilotTab }) =>
+          (await getTab(opts?.tab)).page.type(null, text, opts),
+      },
+      evaluate: async <T = unknown>(expression: string, opts?: { tab?: BrowserPilotTab; frame?: string }) => {
+        const t = await getTab(opts?.tab)
+        return await t.page.evaluate<T>(expression, { frame: opts?.frame })
+      },
+      getLocatorString: async (target: string, opts?: { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts?.tab)
+        return await t.page.getLocatorString(target)
       },
       screenshot: async (opts?: {
         tab?: BrowserPilotTab
@@ -314,16 +467,37 @@ export class SessionManager {
         const t = await getTab(opts?.tab)
         return await t.page.screenshot(opts)
       },
+      pdf: async (opts?: PdfOptions & { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts?.tab)
+        return await t.page.printToPDF(opts)
+      },
       handoff: async (message: string, opts?: { tab?: BrowserPilotTab; timeoutMs?: number }) => {
         const t = await getTab(opts?.tab)
         return await t.page.requestHumanHandoff(message, { timeoutMs: opts?.timeoutMs })
       },
-      fillForm: async (
-        fields: Array<{ target: string; value: string | boolean; type?: 'auto' | 'text' | 'select' | 'checkbox' | 'radio' }>,
-        opts?: { tab?: BrowserPilotTab },
-      ) => {
+      fillForm: async (fields: FormFieldInput[], opts?: { tab?: BrowserPilotTab }) => {
         const t = await getTab(opts?.tab)
         return await t.page.fillForm(fields)
+      },
+      clipboard: {
+        read: async (tab?: BrowserPilotTab) => (await getTab(tab)).page.readClipboard(),
+        write: async (text: string, html?: string, tab?: BrowserPilotTab) => (await getTab(tab)).page.writeClipboard(text, html),
+      },
+      addInitScript: async (script: string, opts?: { tab?: BrowserPilotTab; runNow?: boolean }) => {
+        const t = await getTab(opts?.tab)
+        return await t.page.addInitScript(script, { runNow: opts?.runNow })
+      },
+      removeInitScript: async (id: string, opts?: { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts?.tab)
+        return await t.page.removeInitScript(id)
+      },
+      grantPermissions: async (permissions: string[], opts?: { tab?: BrowserPilotTab; origin?: string }) => {
+        const t = await getTab(opts?.tab)
+        await t.page.grantPermissions(permissions, opts?.origin)
+      },
+      emulate: async (opts: EmulateOptions & { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts.tab)
+        await t.page.emulate(opts)
       },
       screenshotWithLabels: async (opts?: { tab?: BrowserPilotTab; path?: string; maxLabels?: number }) => {
         const t = await getTab(opts?.tab)
@@ -349,6 +523,14 @@ export class SessionManager {
         const t = await getTab(opts?.tab)
         return formatNetworkEntries(t.network.getRequests(opts))
       },
+      onRequest: async (cb: (req: unknown) => void, opts?: { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts?.tab)
+        return t.network.onRequest(cb)
+      },
+      onResponse: async (cb: (res: LiveNetworkResponse) => void, opts?: { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts?.tab)
+        return t.network.onResponse(cb)
+      },
       getStyles: async (target: string, opts?: { tab?: BrowserPilotTab; includeInherited?: boolean; computedProperties?: string[] }) => {
         const t = await getTab(opts?.tab)
         const styles = await t.styles.getStyles(target, t.snapshots, opts)
@@ -362,18 +544,37 @@ export class SessionManager {
         const t = await getTab(opts?.tab)
         return await waitForPageLoad(t.session, opts)
       },
-      waitForSelector: async (selector: string, opts?: { tab?: BrowserPilotTab; timeoutMs?: number }) => {
+      waitForSelector: async (selector: string, opts?: { tab?: BrowserPilotTab; state?: WaitSelectorState; visible?: boolean; timeoutMs?: number; frame?: string }) => {
         const t = await getTab(opts?.tab)
         return await waitForSelector(t.session, selector, opts)
       },
-      waitForText: async (text: string | RegExp, opts?: { tab?: BrowserPilotTab; timeoutMs?: number }) => {
+      waitForText: async (text: string | RegExp, opts?: { tab?: BrowserPilotTab; timeoutMs?: number; frame?: string; gone?: boolean }) => {
         const t = await getTab(opts?.tab)
         return await waitForText(t.session, text, opts)
+      },
+      waitForUrl: async (pattern: string | RegExp, opts?: { tab?: BrowserPilotTab; timeoutMs?: number }) => {
+        const t = await getTab(opts?.tab)
+        return await waitForUrl(t.session, pattern, opts)
+      },
+      waitForResponse: async (opts: WaitForResponseOptions & { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts.tab)
+        return await t.network.waitForResponse(opts)
+      },
+      waitForFunction: async <T = unknown>(expression: string, opts?: { tab?: BrowserPilotTab; timeoutMs?: number; frame?: string }) => {
+        const t = await getTab(opts?.tab)
+        return await waitForFunction<T>(t.session, expression, opts)
+      },
+      waitForPopup: async (opts?: { action?: () => Promise<unknown>; timeoutMs?: number }) => {
+        return await this.waitForPopup({ ...opts, sessionId })
       },
       cdp: async (method: string, params?: Record<string, unknown>, tab?: BrowserPilotTab) => {
         const t = await getTab(tab)
         return await t.session.send(method, params)
       },
+      getDebugger: async (tab?: BrowserPilotTab) => (await getTab(tab)).debugger,
+      getLiveEditor: async (tab?: BrowserPilotTab) => (await getTab(tab)).editor,
+      getRecorder: async (tab?: BrowserPilotTab) => (await getTab(tab)).recorder,
+      getPerformance: async (tab?: BrowserPilotTab) => (await getTab(tab)).performance,
       downloads: {
         configure: async (downloadDir?: string, tab?: BrowserPilotTab) => (await getTab(tab)).downloads.configure(downloadDir),
         list: async (tab?: BrowserPilotTab) => (await getTab(tab)).downloads.list(),

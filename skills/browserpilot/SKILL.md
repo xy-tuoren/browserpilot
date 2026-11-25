@@ -33,10 +33,11 @@ BrowserPilot controls the user's running Chrome browser (with existing logins, c
 3. **Interact with trusted CDP input**:
    ```bash
    browserpilot fill e4 "alice@example.com" --tab <id>
-   browserpilot click e5 --tab <id>
+   browserpilot click '.card:has-text("Pro") >> role=button[name="Continue"]' --tab <id>
+   browserpilot wait --selector "#spinner" --state hidden --tab <id>
    browserpilot key Enter --tab <id>
    ```
-   Targets accept snapshot refs (`e5`), CSS selectors (`#submit`), `role=button[name="Save"]`, `label=Email`, `placeholder=Search`, `text=Continue`, `>> nth=N`, or `pinned`.
+   Targets accept refs (`e5`), CSS (`#submit`), chained `>>` pipelines (`.card >> has-text=Pro >> button >> first`), Playwright `:has-text(...)` / `:visible` shorthands, `role=`, `label=`, `placeholder=`, `testid=`, `text=`, `xpath=`, cross-iframe (`iframe#pay >> button`), or `pinned`. Visible elements are prioritized automatically over hidden responsive duplicates.
 4. **Inspect & debug like Chrome DevTools**:
    ```bash
    browserpilot console --level error --since-last --tab <id>
@@ -50,7 +51,7 @@ BrowserPilot controls the user's running Chrome browser (with existing logins, c
 
 Use `session new` + `exec` when chaining multiple steps or persisting variables across calls.
 
-> **Important:** BrowserPilot is **pure CDP, NOT Playwright** — do **not** call `page.locator(...)` or Playwright APIs. Use `t.page.*` and the built-in helpers below.
+> **Important:** BrowserPilot is **100% pure CDP** — use the built-in sandbox helpers (`locator()`, `frameLocator()`, `t.page.*`, `mouse`, `keyboard`, `onResponse`) rather than importing Playwright.
 
 ```bash
 SID=$(browserpilot session new --tab-group work)
@@ -58,13 +59,14 @@ browserpilot exec -s "$SID" -e '
   const t = await tabs.open("http://localhost:3000");
   state.tab = t;
   await waitForSelector("#email", { tab: t });
-  await t.page.fill("#email", "alice@example.com");
-  await t.page.click("role=button[name=\"Sign in\"]");
+  await fill("#email", "alice@example.com");
+  const card = await locator(".card");
+  await card.filter({ hasText: "Pro" }).locator("role=button[name=\"Sign in\"]").click();
   console.log(await snapshot({ tab: t }));
 '
 ```
 
-Available sandbox globals: `state`, `tabs` (`list`, `open`, `use`, `current`, `close`), `snapshot`, `screenshot` (supports `grid`, `zoom`), `screenshotWithLabels`, `cleanHTML`, `markdown`, `inspect`, `fillForm`, `handoff`, `getLatestLogs`, `getNetwork`, `getStyles`, `getReactInfo`, `waitForPageLoad`, `waitForSelector`, `waitForText`, `downloads`, `actionRecorder`, `cdp`, `sleep`, `createDemoVideo`.
+Available sandbox globals: `state`, `tabs` (`list`, `open`, `use`, `current`, `close`), `locator`, `frameLocator`, `click`, `dblclick`, `rightClick`, `hover`, `fill`, `type`, `pressKey`, `check`, `uncheck`, `selectOption`, `uploadFiles`, `scroll`, `drag`, `mouseStroke`, `mouse`, `keyboard`, `fillForm`, `handoff`, `evaluate`, `getLocatorString`, `listFrames`, `snapshot`, `screenshot` (`grid`, `zoom`), `pdf`, `screenshotWithLabels`, `cleanHTML`, `markdown`, `inspect`, `clipboard`, `addInitScript`, `removeInitScript`, `grantPermissions`, `emulate`, `getLatestLogs`, `getNetwork`, `onRequest`, `onResponse`, `getStyles`, `getReactInfo`, `waitForPageLoad`, `waitForSelector` (`state`), `waitForText` (`gone`), `waitForUrl`, `waitForResponse`, `waitForFunction`, `waitForPopup`, `getDebugger`, `getLiveEditor`, `getRecorder`, `getPerformance`, `downloads`, `actionRecorder`, `cdp`, `sleep`, `createDemoVideo`.
 
 ## 4. Safety & Pitfalls
 
@@ -76,4 +78,4 @@ Available sandbox globals: `state`, `tabs` (`list`, `open`, `use`, `current`, `c
 
 ## 5. Detailed Reference
 
-For all 43 MCP tools, rich locator syntax, DevTools debugging/live-edit/mocking/recording workflows, and full CLI options, read [REFERENCE.md](./REFERENCE.md).
+For all 51 MCP tools, full chained/cross-iframe locator grammar, DevTools debugging/live-edit/mocking/recording workflows, and complete CLI options, read [REFERENCE.md](./REFERENCE.md).

@@ -2,6 +2,34 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
+## [1.4.0] - 2026-11-24
+
+### Added
+- **Chained, Visibility-Aware & Cross-Frame Locator Engine (`packages/core/src/locator.ts`)**:
+  - Full multi-stage `>>` pipeline supporting CSS, Shadow DOM piercing, `role=`, `text=`, `label=`, `placeholder=`, `alt=`, `title=`, `testid=`, `xpath=`, `pinned`, plus filter/index stages (`has-text=`, `has=`, `visible=true|false`, `first`, `last`, `nth=N` including negative indices) and Playwright-style `:has-text(...)` / `:visible` shorthand expansion.
+  - Smart default visibility preference (automatically skips hidden responsive mobile/desktop duplicates while preserving hidden `<input type="file">` and `<option>` controls) and interactive-aware exact text tie-breaking (`<button><span>Save</span></button>` clicks the button rather than a full-width wrapper `<div>`).
+  - Seamless same-origin AND cross-origin OOPIF iframe piercing via chained selectors (e.g. `iframe#pay >> role=button[name="Pay"]`).
+  - Fluent immutable `Locator` API (`tab.locator('.card').filter({ hasText: 'Pro' }).locator('button').first().click()` and `frameLocator(...)`) plus reverse stable locator generation (`getLocatorString`, `browser_inspect_element`, `browserpilot locator`).
+- **First-Class Frame Control, Popup Tab Awareness & JS Dialog History (`cdp-client.ts`, `snapshot.ts`, `tab.ts`)**:
+  - Added `browser_frames` / `browserpilot frames` / `tab.page.listFrames()` listing main, same-origin, and cross-origin OOPIF frames.
+  - Added `frame` targeting to `browser_snapshot` (`--frame`), `browser_evaluate` (`--frame`), and `browser_wait` (`--frame`).
+  - Enhanced `ActionFeedback` (`runWithFeedback`) with adaptive post-action settling, automatic `openedTabs` detection (`target="_blank"` / `window.open`), and captured JS `dialogs` history, plus `manager.waitForPopup()` / `browser_wait({ popup: true })`.
+- **Upgraded Smart Wait Engine (`packages/core/src/wait.ts`)**:
+  - Upgraded `waitForSelector` to use the full locator engine and support `state: 'visible' | 'hidden' | 'attached' | 'detached'` (enabling reliable spinner/modal disappearance waits) plus `frame` targeting.
+  - Added `waitForUrl` (substring/glob/regex), `waitForResponse` (with status/method filters and response body capture), `waitForFunction` (async JS polling), and `waitForText({ gone: true })`.
+- **Complete Interaction & System-Context Controls (`page-controller.ts`, `tools.ts`, `cli.ts`)**:
+  - Added idempotent `check()` / `uncheck()` (`browser_check` / `browserpilot check|uncheck`), multi-select `<select multiple>` arrays in `selectOption`, `range` slider & `file` support in `fillForm`, multi-point continuous `mouseStroke()` (`browser_drag({ points })` / `browserpilot drag --points`), and `action: 'press' | 'down' | 'up'` + `repeat` in `pressKey`.
+  - Added `browser_clipboard` (`read`/`write` plain text & rich HTML), `browser_pdf` (`Page.printToPDF`), `browser_init_script` (`add`/`remove`/`list` persistent preload scripts), `browser_permissions` (`grant`/`reset`), and `session update` (dynamic tab group rename/recolor) — **51 MCP tools** total.
+- **Full Sandbox `exec` & Action Recorder Parity (`session-manager.ts`, `action-recorder.ts`)**:
+  - Exposed fluent `locator()`, `frameLocator()`, `mouse` & `keyboard` namespaces, direct action/wait/clipboard/pdf/initScript helpers, real-time `onRequest` / `onResponse` (with `await res.json()` / `res.text()`), and `getDebugger`/`getLiveEditor`/`getRecorder`/`getPerformance` in `browserpilot exec`.
+  - Enhanced `ActionRecorder` to also capture concurrent XHR/Fetch API calls, dialogs, and uncaught exceptions alongside recorded user steps.
+- Added comprehensive real-Chromium E2E test suite `packages/core/test/v14-control.test.ts` and expanded MCP/CLI E2E coverage in `packages/server/test/e2e-full.test.ts`.
+
+### Fixed
+- **macOS Chromium 5-Second Input Stall After Non-Text Keys (`PageController.pressKey`)**: omitted `nativeVirtualKeyCode` from synthetic CDP `Input.dispatchKeyEvent` payloads (retaining `windowsVirtualKeyCode`, `key`, `code`, `modifiers`, `commands`), eliminating a macOS Chromium AppKit input-queue stall that previously slowed subsequent `Input.dispatchMouseEvent` calls to ~5s each after `ArrowDown` / navigation keys.
+- **Held Mouse Buttons & Modifiers During Drags/Strokes (`PageController.mouseMove/mouseDown/mouseUp`)**: tracked active `pressedButtonsMask` and `activeModifiersMask` across mouse and key transitions so Canvas drawing, custom sliders, and Shift+Click selections receive genuine `e.buttons` and `e.shiftKey` states.
+- **Same-Origin Iframe Actionability & OOPIF URL Freshness (`PageController.ensureClickActionable`, `TabCDPSession.listFrames`)**: ran `elementFromPoint` in the target element's `ownerDocument` with frame-local coordinates, tracked `Target.targetInfoChanged` for OOPIF frame URLs, and resolved cross-origin status reliably in `listFrames()`.
+
 ## [1.3.0] - 2026-11-24
 
 ### Added

@@ -297,7 +297,7 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
     await new Promise<void>((r) => proc.once('close', () => r()))
   }, 15_000)
 
-  it('exposes all 39 tools over real MCP stdio server and executes full browser workflow + screenshot image blocks', async () => {
+  it('exposes all 51 tools over real MCP stdio server and executes full browser workflow + v1.4 control tools + screenshot image blocks', async () => {
     if (!chromeOk) return
 
     const cliBin = path.resolve(import.meta.dirname, '..', 'dist', 'cli.js')
@@ -311,9 +311,16 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
     try {
       const { tools } = await client.listTools()
       expect(tools.length).toBe(TOOL_DEFINITIONS.length)
+      expect(tools.length).toBe(51)
       expect(tools.some((t) => t.name === 'browser_snapshot')).toBe(true)
       expect(tools.some((t) => t.name === 'browser_debugger')).toBe(true)
       expect(tools.some((t) => t.name === 'browser_exec')).toBe(true)
+      expect(tools.some((t) => t.name === 'browser_frames')).toBe(true)
+      expect(tools.some((t) => t.name === 'browser_check')).toBe(true)
+      expect(tools.some((t) => t.name === 'browser_clipboard')).toBe(true)
+      expect(tools.some((t) => t.name === 'browser_pdf')).toBe(true)
+      expect(tools.some((t) => t.name === 'browser_init_script')).toBe(true)
+      expect(tools.some((t) => t.name === 'browser_permissions')).toBe(true)
 
       // Open tab & navigate
       await client.callTool({ name: 'browser_open_tab', arguments: { url: baseUrl } })
@@ -388,6 +395,29 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
       })
       const pinnedRes = await client.callTool({ name: 'browser_pinned', arguments: {} })
       expect((pinnedRes.content as Array<{ text?: string }>)[0]?.text).toContain('Search Now')
+
+      // v1.4.0 MCP browser-control tools: frames, wait(fn), clipboard, init_script, pdf
+      const framesRes = await client.callTool({ name: 'browser_frames', arguments: {} })
+      expect((framesRes.content as Array<{ text?: string }>)[0]?.text).toContain('(main)')
+
+      const waitFnRes = await client.callTool({
+        name: 'browser_wait',
+        arguments: { fn: 'document.getElementById("out").textContent === "ok:batch-win"' },
+      })
+      expect((waitFnRes.content as Array<{ text?: string }>)[0]?.text).toContain('Condition truthy')
+
+      await client.callTool({ name: 'browser_clipboard', arguments: { action: 'write', text: 'mcp-clip-14' } })
+      const clipRes = await client.callTool({ name: 'browser_clipboard', arguments: { action: 'read' } })
+      expect((clipRes.content as Array<{ text?: string }>)[0]?.text).toContain('mcp-clip-14')
+
+      const initAddRes = await client.callTool({
+        name: 'browser_init_script',
+        arguments: { action: 'add', script: 'window.__mcpInit = 14;', runNow: true },
+      })
+      expect((initAddRes.content as Array<{ text?: string }>)[0]?.text).toContain('Added init script')
+
+      const pdfRes = await client.callTool({ name: 'browser_pdf', arguments: {} })
+      expect((pdfRes.content as Array<{ text?: string }>)[0]?.text).toContain('Generated PDF')
     } finally {
       await client.close()
     }
@@ -470,6 +500,15 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
       `const t = await tabs.use('127.0.0.1'); await t.page.fill('#query', 'cli-zero-click'); await t.page.click('#go-btn'); await sleep(150); console.log(await t.page.evaluate('document.getElementById("out").textContent'))`,
     )
     expect(execOut.trim()).toContain('ok:cli-zero-click')
+
+    const locOut = await runCli('locator', 'button:has-text("Search Now")')
+    expect(locOut.trim()).toBe('#go-btn')
+
+    const framesOut = await runCli('frames')
+    expect(framesOut).toContain('(main)')
+
+    const updOut = await runCli('session', 'update', sid, '--tab-group', 'cli-renamed', '--tab-group-color', 'cyan')
+    expect(updOut).toContain('group=cli-renamed (cyan)')
 
     const skillOut = await runCli('skill')
     expect(skillOut).toContain('BrowserPilot')
