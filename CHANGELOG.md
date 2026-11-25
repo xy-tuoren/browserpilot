@@ -2,6 +2,27 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
+## [1.5.0] - 2026-11-25
+
+### Added
+- **Playwright-Grade Action Auto-Waiting Retry Loop & Strict Mode (`packages/core/src/page-controller.ts`, `locator.ts`, `tools.ts`, `cli.ts`)**:
+  - Added continuous actionability re-resolution and retry loops to `click()` and `fill()` that automatically recover from rapid React/Vue DOM remounts, detached/stale `objectId` nodes, CSS slide/fade animations, transient loading overlays, and temporarily disabled/read-only controls.
+  - Added optional `strict: true` mode (`browser_click`, `browser_fill`, `browserpilot click --strict`, `Locator`) that fails immediately with `Strict mode violation: "..." resolved to N elements` on ambiguous locators.
+- **Dynamic Code-Level Network Routing (`packages/core/src/network-inspector.ts`, `session-manager.ts`)**:
+  - Added Playwright-compatible `route(pattern, handler, { stage?, resourceType?, times? })` and `unroute(patternOrId?)` in both `NetworkInspector` and `browserpilot exec` sandbox.
+  - Supports `route.continue({ url, method, headers, postData })`, `route.fulfill({ status, headers, contentType, body, json })`, `route.abort(errorReason?)`, and `route.fetch(overrides?)` (automatically forwarding real browser cookies via `Network.getCookies` at Request stage, or reading directly via `Fetch.getResponseBody` inside Chromium's network stack at `stage: 'Response'`), with LIFO precedence, `times` auto-expiration, and guaranteed `finally` auto-continue safety so buggy callbacks never hang pages.
+- **Native CDP `filechooser` Interception & Smart Upload Fallback (`page-controller.ts`, `session-manager.ts`, `tools.ts`)**:
+  - Added `waitForFileChooser({ action?, files?, timeoutMs? })` powered by CDP `Page.setInterceptFileChooserDialog` + `Page.fileChooserOpened` (handles detached dynamically created `<input type="file">` used by Notion, Feishu, Figma, and React Dropzone).
+  - Upgraded `uploadFiles()` / `browser_upload_file` / `browserpilot upload` to automatically detect whether the target is a direct `<input type="file">` or a custom Upload button/dropzone, falling back seamlessly to `waitForFileChooser()`.
+- **Complex SPA Real-World Stress Suite (`packages/core/test/v15-stress.test.ts`)**:
+  - Added 3 comprehensive real-Chromium E2E stress tests covering rapid DOM remounts, transient overlays/disabled/animations, strict mode, ProseMirror-style `contenteditable`, Shadow DOM inside same-origin iframe, sticky header nudging, below-the-fold cross-origin OOPIF iframes, scroll-sensitive portal dropdowns, `sr-only` switches, SVG icon buttons, inner-clipped scrollable lists, POST/500 dynamic route patching, and off-DOM file chooser uploads + cancellation.
+
+### Fixed
+- **Popover-Safe Conditional Scrolling (`PageController.resolveElement`)**: only invokes `scrollIntoView` when an element is outside the viewport or clipped by a scrollable ancestor (`overflow: auto|scroll|hidden|clip`), preventing `window.scroll` events from prematurely dismissing open Ant Design, Element Plus, Radix UI, or Feishu dropdown popovers.
+- **Empty Rich-Text Block Protection & Same-Origin Iframe Selection (`PageController.fill`)**: skips sending `Backspace` when a `contenteditable` block is already empty (preventing block deletion/merging in ProseMirror, TipTap, Notion, and Feishu) and uses the target element's `ownerDocument.defaultView.getSelection()`.
+- **Custom `sr-only` Checkbox/Switch Clickability (`PageController.resolveElement`, `checkClickActionableOnce`)**: recognizes implicit wrapping `<label><input class="sr-only"><span class="track"></label>` controls (Tailwind / Ant Design / Element Plus) and targets the visible label bounding box while preserving native checked-state tracking.
+- **Below-the-Fold OOPIF & Sticky Header Coordinate Accuracy (`PageController.resolveElement`, `scrollChildIframeIntoView`)**: scrolls cross-origin OOPIF iframes into the parent viewport before measuring and refreshes `frameOffset` post-scroll; adds `window.scrollBy` nudging when a sticky top bar still overlaps a centered target.
+
 ## [1.4.1] - 2026-11-25
 
 ### Fixed

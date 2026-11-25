@@ -283,7 +283,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'browser_click',
     description:
-      'Perform a browser-trusted CDP mouse click on a snapshot ref, CSS selector, rich locator, or (x,y) coordinates. Checks pre-click stability & occlusion automatically unless force=true.',
+      'Perform a browser-trusted CDP mouse click on a snapshot ref, CSS selector, rich locator, or (x,y) coordinates. Auto-waits and retries across transient DOM re-renders, animations, overlays, and disabled states unless force=true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -294,6 +294,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         clickCount: { type: 'number' },
         modifiers: { type: 'array', items: { type: 'string', enum: ['Alt', 'Control', 'Meta', 'Shift'] } },
         force: { type: 'boolean', description: 'Bypass pre-click occlusion & stability checks' },
+        strict: { type: 'boolean', description: 'Fail with strict-mode error if locator matches multiple visible elements' },
+        timeoutMs: { type: 'number', description: 'Actionability wait/retry timeout in ms' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
@@ -301,13 +303,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'browser_fill',
-    description: 'Focus an input/textarea/contenteditable, clear it, and insert text via trusted CDP input.',
+    description:
+      'Focus an input/textarea/contenteditable, clear it safely, and insert text via trusted CDP input with auto-waiting retry for dynamic SPAs.',
     inputSchema: {
       type: 'object',
       properties: {
         target: { type: 'string' },
         value: { type: 'string' },
         clear: { type: 'boolean' },
+        force: { type: 'boolean' },
+        strict: { type: 'boolean' },
+        timeoutMs: { type: 'number' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
@@ -420,7 +426,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'browser_upload_file',
-    description: 'Attach one or more local files to an <input type="file"> element.',
+    description:
+      'Attach one or more local files to either an <input type="file"> (including hidden inputs) OR any custom Upload button/dropzone that dynamically opens a file chooser on click.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1170,6 +1177,8 @@ export async function executeTool(
             clickCount: args.clickCount as number | undefined,
             modifiers: args.modifiers as KeyModifier[] | undefined,
             force: Boolean(args.force),
+            strict: Boolean(args.strict),
+            timeoutMs: typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
           }),
         )
         return textResult(`Clicked ${typeof target === 'string' ? target : `(${target.x}, ${target.y})`}\n${formatFeedbackSuffix(feedback)}`)
@@ -1178,7 +1187,12 @@ export async function executeTool(
       case 'browser_fill': {
         const tab = await resolveTab()
         const { feedback } = await tab.runWithFeedback(() =>
-          tab.page.fill(String(args.target), String(args.value), { clear: args.clear as boolean | undefined }),
+          tab.page.fill(String(args.target), String(args.value), {
+            clear: args.clear as boolean | undefined,
+            force: Boolean(args.force),
+            strict: Boolean(args.strict),
+            timeoutMs: typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
+          }),
         )
         return textResult(`Filled ${args.target}\n${formatFeedbackSuffix(feedback)}`)
       }

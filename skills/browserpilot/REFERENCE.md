@@ -6,7 +6,7 @@
 | :--- | :--- | :--- |
 | **Browser, Tabs & Frames** | `browser_status`, `browser_tabs`, `browser_frames`, `browser_open_tab`, `browser_close_tab`, `browser_select_tab` | `browser_frames` lists main, same-origin, and cross-origin OOPIF frames. `browser_open_tab` normalizes bare domains (`example.com`, `localhost:3000`). |
 | **Navigation & Perception** | `browser_navigate`, `browser_history`, `browser_snapshot`, `browser_screenshot`, `browser_labeled_screenshot`, `browser_clean_html`, `browser_markdown`, `browser_inspect_element`, `browser_pinned` | `browser_snapshot` supports `frame`, `scope`, `search`, and incremental diffs. `browser_screenshot` auto-hides overlays and supports `grid` + `zoom`. `browser_inspect_element` returns `recommendedLocator`. |
-| **Trusted Interaction & Waits** | `browser_click`, `browser_check`, `browser_fill`, `browser_fill_form`, `browser_type`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_drag`, `browser_select_option`, `browser_upload_file`, `browser_handle_dialog`, `browser_wait`, `browser_batch`, `browser_handoff` | `browser_click` checks stability/occlusion & reports newly opened popup tabs + JS dialogs. `browser_check` is idempotent. `browser_select_option` supports multi-select arrays. `browser_drag` supports multi-point `points[]` canvas strokes. `browser_press_key` supports `down`/`up`/`repeat` + native editor commands. `browser_wait` supports `selector`+`state`, `text`+`gone`, `url`, `responseUrl`, `fn`, `popup`, and `frame`. |
+| **Trusted Interaction & Waits** | `browser_click`, `browser_check`, `browser_fill`, `browser_fill_form`, `browser_type`, `browser_press_key`, `browser_hover`, `browser_scroll`, `browser_drag`, `browser_select_option`, `browser_upload_file`, `browser_handle_dialog`, `browser_wait`, `browser_batch`, `browser_handoff` | `browser_click` & `browser_fill` run Playwright-grade auto-waiting retry loops across DOM remounts, animations, overlays, and disabled states, support `strict` mode, and never scroll already-visible popovers. `browser_upload_file` works on both `<input type="file">` AND dynamic off-DOM file-chooser buttons. `browser_check` handles `sr-only` switches wrapped in `<label>`. `browser_wait` supports `selector`+`state`, `text`+`gone`, `url`, `responseUrl`, `fn`, `popup`, and `frame`. |
 | **Context & System Control** | `browser_clipboard`, `browser_pdf`, `browser_init_script`, `browser_permissions`, `browser_emulate`, `browser_cookies`, `browser_storage` | `browser_clipboard` reads/writes plain text & rich HTML. `browser_pdf` exports PDF via CDP `Page.printToPDF`. `browser_init_script` injects scripts before page JS across navigations. `browser_permissions` grants/resets browser permissions. |
 | **DevTools Debugging** | `browser_evaluate`, `browser_console`, `browser_network`, `browser_network_intercept`, `browser_styles`, `browser_react_info`, `browser_debugger`, `browser_live_edit`, `browser_performance`, `browser_cdp` | `browser_evaluate` supports `frame` targeting. `browser_network` with `requestId` returns headers, timing, initiator stack, and body. `browser_styles` returns clean author rules with `file:line`. |
 | **Downloads, Media & Sandbox** | `browser_downloads`, `browser_action_recorder`, `browser_record`, `browser_exec` | `browser_action_recorder` captures user steps + concurrent XHR/Fetch API calls & dialogs/errors. `browser_exec` exposes fluent `locator()`, `onResponse`, `mouse`, `keyboard`, and DevTools handles. |
@@ -57,7 +57,7 @@ browserpilot screenshot [outputPath] [--full-page] [--grid] [--zoom x,y,w,h] [--
 browserpilot labeled-screenshot [outputPath] [--tab <id>]
 
 # Actions & waits
-browserpilot click <ref|locator> [--force] [--double] [--button left|right|middle] [--modifiers Meta,Shift] [--tab <id>]
+browserpilot click <ref|locator> [--force] [--strict] [--timeout <ms>] [--double] [--button left|right|middle] [--modifiers Meta,Shift] [--tab <id>]
 browserpilot check | uncheck <ref|locator> [--force] [--tab <id>]
 browserpilot fill <ref|locator> <value> [--tab <id>]
 browserpilot fill-form '<json-fields>' [--tab <id>]
@@ -111,11 +111,12 @@ Inside `browserpilot exec -s <id> -e '...'` (or MCP `browser_exec`):
   - `const frame = await frameLocator('iframe#pay')` -> `await frame.locator('button').click()`
   - Methods: `.click()`, `.dblclick()`, `.rightClick()`, `.hover()`, `.fill()`, `.type()`, `.check()`, `.uncheck()`, `.selectOption()`, `.uploadFiles()`, `.dragTo()`, `.waitFor({ state })`, `.count()`, `.isVisible()`, `.isEnabled()`, `.isChecked()`, `.textContent()`, `.innerText()`, `.inputValue()`, `.getAttribute()`, `.boundingBox()`, `.getLocatorString()`, `.screenshot()`.
 - **Direct Actions & Low-Level Input**:
-  - `click`, `dblclick`, `rightClick`, `hover`, `fill`, `type`, `pressKey`, `check`, `uncheck`, `selectOption`, `uploadFiles`, `scroll`, `drag`, `mouseStroke`, `fillForm`, `handoff`, `evaluate(expr, { frame? })`, `getLocatorString`, `listFrames`.
+  - `click`, `dblclick`, `rightClick`, `hover`, `fill`, `type`, `pressKey`, `check`, `uncheck`, `selectOption`, `uploadFiles`, `waitForFileChooser({ action?, files?, timeoutMs? })`, `scroll`, `drag`, `mouseStroke`, `fillForm`, `handoff`, `evaluate(expr, { frame? })`, `getLocatorString`, `listFrames`.
   - `mouse`: `move(x, y, { steps? })`, `down(x, y)`, `up(x, y)`, `click(x, y)`, `wheel(dx, dy)`, `stroke(points)`.
-  - `keyboard`: `press(key, { repeat? })`, `down(key)`, `up(key)`, `type(text)`.
-- **Waits & Live Network Callbacks**:
+  - `keyboard`: `press(key, { repeat? })`, `down(key, { ... })`, `up(key, { ... })`, `type(text)`.
+- **Waits, Dynamic Routing & Live Network Callbacks**:
   - `waitForPageLoad`, `waitForSelector(sel, { state?, frame? })`, `waitForText(txt, { gone?, frame? })`, `waitForUrl(pattern)`, `waitForResponse({ url, status?, method? })`, `waitForFunction(expr, { frame? })`, `waitForPopup({ action? })`.
+  - `const id = await route('**/api/profile*', async (r) => { const resp = await r.fetch(); const d = await resp.json(); d.plan = 'pro'; await r.fulfill({ json: d }) })` + `route(pattern, fn, { stage: 'Response', times })` + `unroute(id?)`.
   - `const off = await onResponse(async (res) => { if (res.url.includes('/api/')) state.data.push(await res.json()) })` + `onRequest(cb)`.
 - **Perception, System Context & DevTools**:
   - `snapshot({ frame?, scope?, search? })`, `screenshot({ grid?, zoom? })`, `pdf(opts)`, `screenshotWithLabels`, `cleanHTML`, `markdown`, `inspect`.

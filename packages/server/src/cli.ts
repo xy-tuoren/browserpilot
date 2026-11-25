@@ -693,6 +693,8 @@ async function main(): Promise<void> {
           clickCount: flags.double ? 2 : typeof flags['click-count'] === 'string' ? Number(flags['click-count']) : undefined,
           modifiers: rawMods,
           force: Boolean(flags.force),
+          strict: Boolean(flags.strict),
+          timeoutMs: typeof flags.timeout === 'string' ? Number(flags.timeout) : undefined,
           tabId,
           sessionId,
           clientId,

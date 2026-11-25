@@ -16,6 +16,30 @@ export interface ClickOptions {
   timeoutMs?: number
   /** Skip pre-click occlusion & stability checks and click directly */
   force?: boolean
+  /** Throw a Playwright-style strict-mode error if locator matches multiple visible elements */
+  strict?: boolean
+}
+
+export interface FillOptions {
+  clear?: boolean
+  timeoutMs?: number
+  force?: boolean
+  strict?: boolean
+}
+
+export interface FileChooserHandle {
+  isMultiple: boolean
+  frameId: string
+  backendNodeId: number
+  setFiles: (filePaths: string[]) => Promise<void>
+  cancel: () => Promise<void>
+}
+
+export interface WaitForFileChooserOptions {
+  action?: () => Promise<unknown>
+  /** If provided, files are automatically supplied and interception is closed cleanly */
+  files?: string[]
+  timeoutMs?: number
 }
 
 export interface ScrollResult {
@@ -318,10 +342,12 @@ export class PageController {
   async resolveElement(
     target: string,
     timeoutMs: number = 8_000,
-    options: { allowHidden?: boolean } = {},
+    options: { allowHidden?: boolean; strict?: boolean } = {},
   ): Promise<ResolvedElement> {
-    return await waitForCondition(
+    let strictError: Error | null = null
+    const resolved = await waitForCondition<ResolvedElement | { __strictAbort: true }>(
       async () => {
+        strictError = null
         const refTarget = this.snapshotEngine.getRef(this.tabId, target)
         let objectId: string | undefined
         let backendNodeId: number | undefined
@@ -331,18 +357,24 @@ export class PageController {
         if (refTarget) {
           backendNodeId = refTarget.backendDOMNodeId
           sessionId = refTarget.sessionId
-          const resolved = await this.session
+          const r = await this.session
             .send<{ object?: { objectId?: string } }>(
               'DOM.resolveNode',
               { backendNodeId },
               { sessionId },
             )
             .catch(() => null)
-          objectId = resolved?.object?.objectId
+          objectId = r?.object?.objectId
         } else {
           const hit = await queryLocator(this.session, target, {
             visibilityMode: options.allowHidden ? 'any' : 'prefer-visible',
           })
+          if (options.strict && hit.count > 1) {
+            strictError = new Error(
+              `Strict mode violation: "${target}" resolved to ${hit.count} elements. Narrow the locator or add >> first / >> nth=0.`,
+            )
+            return { __strictAbort: true }
+          }
           objectId = hit.objectId
           sessionId = hit.sessionId
           if (hit.frameOffset.x !== 0 || hit.frameOffset.y !== 0) {
@@ -358,45 +390,126 @@ export class PageController {
 
         if (!objectId) return null
 
-        // Scroll into view cleanly (skip when allowHidden is requested for detached/file controls)
+        // Scroll into view ONLY when outside viewport or clipped by a scrollable ancestor
+        // (avoids triggering window scroll listeners that close AntD/Radix/Element/Feishu popovers!)
         if (!options.allowHidden) {
-          if (backendNodeId) {
-            await this.session
-              .send('DOM.scrollIntoViewIfNeeded', { backendNodeId }, { sessionId })
-              .catch(() => {})
+          // If inside a cross-origin OOPIF iframe, ensure the host <iframe> itself is scrolled into parent viewport first
+          if (sessionId) {
+            await this.scrollChildIframeIntoView(refTarget?.frameId, sessionId).catch(() => {})
           }
-          await this.session
-            .send(
+          const needScrollRes = await this.session
+            .send<{ result?: { value?: boolean } }>(
               'Runtime.callFunctionOn',
               {
                 objectId,
+                returnByValue: true,
                 functionDeclaration: `function() {
-                  if (typeof this.scrollIntoView === 'function') {
-                    this.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+                  if (!this.isConnected) return false;
+                  const doc = this.ownerDocument || document;
+                  const win = doc.defaultView || window;
+                  const r = this.getBoundingClientRect();
+                  if (!r || (r.width === 0 && r.height === 0)) return true;
+                  const vw = win.innerWidth || doc.documentElement.clientWidth || 1280;
+                  const vh = win.innerHeight || doc.documentElement.clientHeight || 720;
+                  if (r.top < 0 || r.left < 0 || r.bottom > vh || r.right > vw) return true;
+                  // Check if clipped by any scrollable/clipping ancestor container (e.g. sidebar, modal, table)
+                  let cur = this.parentElement;
+                  while (cur && cur !== doc.body && cur !== doc.documentElement) {
+                    const st = win.getComputedStyle(cur);
+                    const clipY = /(auto|scroll|hidden|clip)/.test(st.overflowY) && cur.scrollHeight > cur.clientHeight + 2;
+                    const clipX = /(auto|scroll|hidden|clip)/.test(st.overflowX) && cur.scrollWidth > cur.clientWidth + 2;
+                    if (clipY || clipX) {
+                      const ar = cur.getBoundingClientRect();
+                      if (clipY && (r.top < ar.top - 1 || r.bottom > ar.bottom + 1)) return true;
+                      if (clipX && (r.left < ar.left - 1 || r.right > ar.right + 1)) return true;
+                    }
+                    cur = cur.parentElement;
                   }
+                  return false;
                 }`,
               },
               { sessionId },
             )
-            .catch(() => {})
+            .catch(() => null)
+
+          if (needScrollRes?.result?.value !== false) {
+            if (backendNodeId) {
+              await this.session
+                .send('DOM.scrollIntoViewIfNeeded', { backendNodeId }, { sessionId })
+                .catch(() => {})
+            }
+            await this.session
+              .send(
+                'Runtime.callFunctionOn',
+                {
+                  objectId,
+                  functionDeclaration: `function() {
+                    if (typeof this.scrollIntoView === 'function') {
+                      this.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+                    }
+                  }`,
+                },
+                { sessionId },
+              )
+              .catch(() => {})
+          }
         }
 
-        // Compute viewport bounding box (accounting for child iframe offset if needed)
-        const rectRes = await this.session.send<{ result?: { value?: BoundingBox | null } }>(
-          'Runtime.callFunctionOn',
-          {
-            objectId,
-            returnByValue: true,
-            functionDeclaration: `function() {
-              const r = this.getBoundingClientRect();
-              if (!r || (r.width === 0 && r.height === 0)) return null;
-              return { x: r.left, y: r.top, width: r.width, height: r.height };
-            }`,
-          },
-          { sessionId },
-        )
+        // Compute fresh viewport bounding box + live same-origin frameOffset after scrolling
+        // For sr-only/1px custom checkboxes/radios wrapped in a visible <label>, target the label box for reliable clicks!
+        const rectRes = await this.session
+          .send<{
+            result?: { value?: { x: number; y: number; width: number; height: number; offsetX: number; offsetY: number; connected: boolean } | null }
+          }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId,
+              returnByValue: true,
+              functionDeclaration: `function() {
+                if (!this.isConnected) return { x: 0, y: 0, width: 0, height: 0, offsetX: 0, offsetY: 0, connected: false };
+                const doc = this.ownerDocument || document;
+                let r = this.getBoundingClientRect();
+                const tag = (this.tagName || '').toLowerCase();
+                const inputType = (this.type || '').toLowerCase();
+                if (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio') && (!r || r.width <= 2 || r.height <= 2)) {
+                  const lbl = this.closest?.('label') || (this.id ? doc.querySelector('label[for="' + CSS.escape(this.id) + '"]') : null);
+                  if (lbl) {
+                    const lr = lbl.getBoundingClientRect();
+                    if (lr && lr.width > 2 && lr.height > 2) r = lr;
+                  }
+                }
+                if (!r || (r.width === 0 && r.height === 0)) return { x: 0, y: 0, width: 0, height: 0, offsetX: 0, offsetY: 0, connected: true };
+                let ox = 0, oy = 0;
+                let win = doc.defaultView;
+                while (win && win !== win.parent) {
+                  try {
+                    const fe = win.frameElement;
+                    if (!fe) break;
+                    const fr = fe.getBoundingClientRect();
+                    ox += fr.left;
+                    oy += fr.top;
+                    win = win.parent;
+                  } catch { break; }
+                }
+                return { x: r.left, y: r.top, width: r.width, height: r.height, offsetX: ox, offsetY: oy, connected: true };
+              }`,
+            },
+            { sessionId },
+          )
+          .catch(() => null)
 
-        let box = rectRes.result?.value ?? null
+        const rawRect = rectRes?.result?.value ?? null
+        if (rawRect && !rawRect.connected) return null
+
+        let box: BoundingBox | null =
+          rawRect && (rawRect.width > 0 || rawRect.height > 0)
+            ? { x: rawRect.x, y: rawRect.y, width: rawRect.width, height: rawRect.height }
+            : null
+
+        if (rawRect && (rawRect.offsetX !== 0 || rawRect.offsetY !== 0) && !sessionId) {
+          frameOffset = { x: rawRect.offsetX, y: rawRect.offsetY }
+        }
+
         if (!box && backendNodeId) {
           const quads = await this.session
             .send<{ quads?: number[][] }>('DOM.getContentQuads', { backendNodeId }, { sessionId })
@@ -421,9 +534,12 @@ export class PageController {
           box = { x: 0, y: 0, width: 0, height: 0 }
         }
 
-        // If element is inside a child OOPIF session via refTarget (without locator-computed offset), add iframe offset
-        if (sessionId && !frameOffset) {
-          frameOffset = await this.getIframeOffset(refTarget?.frameId, sessionId)
+        // Refresh cross-origin OOPIF iframe offset AFTER scrolling so below-the-fold OOPIFs stay accurate
+        if (sessionId) {
+          const freshOffset = await this.getIframeOffset(refTarget?.frameId, sessionId)
+          if (freshOffset.x !== 0 || freshOffset.y !== 0 || !frameOffset) {
+            frameOffset = freshOffset
+          }
         }
         if (frameOffset && (frameOffset.x !== 0 || frameOffset.y !== 0)) {
           box = {
@@ -446,8 +562,13 @@ export class PageController {
           },
         }
       },
-      { timeoutMs, intervalMs: 100, description: `element "${target}"` },
+      { timeoutMs, intervalMs: 80, description: `element "${target}"` },
     )
+    if (strictError) throw strictError
+    if ('__strictAbort' in resolved) {
+      throw new Error(`Strict mode violation for "${target}"`)
+    }
+    return resolved
   }
 
   async readElementProperty<T = unknown>(target: string, functionDeclaration: string, timeoutMs = 8_000): Promise<T> {
@@ -466,6 +587,42 @@ export class PageController {
 
   async getLocatorString(target: string, timeoutMs = 8_000): Promise<string> {
     return await this.readElementProperty<string>(target, STABLE_LOCATOR_FUNCTION, timeoutMs)
+  }
+
+  private async scrollChildIframeIntoView(frameId?: string, childSessionId?: string): Promise<void> {
+    const child = childSessionId
+      ? this.session.getChildSessions().find((c) => c.sessionId === childSessionId)
+      : undefined
+    const effectiveFrameId = frameId || child?.targetId
+    if (effectiveFrameId) {
+      try {
+        const owner = await this.session.send<{ backendNodeId?: number }>('DOM.getFrameOwner', {
+          frameId: effectiveFrameId,
+        })
+        if (owner.backendNodeId) {
+          await this.session.send('DOM.scrollIntoViewIfNeeded', { backendNodeId: owner.backendNodeId })
+          return
+        }
+      } catch {
+        // fall through to URL-based iframe lookup
+      }
+    }
+    if (child?.url) {
+      await this.evaluate(`(() => {
+        const targetUrl = ${JSON.stringify(child.url)};
+        for (const f of document.querySelectorAll('iframe')) {
+          const src = f.src || f.getAttribute('src') || '';
+          if (src && (src === targetUrl || targetUrl.startsWith(src) || src.startsWith(targetUrl))) {
+            const r = f.getBoundingClientRect();
+            if (r.top < 0 || r.bottom > window.innerHeight || r.left < 0 || r.right > window.innerWidth) {
+              f.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+            }
+            return true;
+          }
+        }
+        return false;
+      })()`).catch(() => {})
+    }
   }
 
   private async getIframeOffset(frameId?: string, childSessionId?: string): Promise<{ x: number; y: number }> {
@@ -512,20 +669,32 @@ export class PageController {
   }
 
   /**
-   * Verifies pre-click actionability (position stability, enabled state, and non-occlusion).
-   * If a fixed/sticky header occludes the target, automatically re-centers it in viewport.
+   * Verifies pre-click actionability (connected DOM node, position stability, enabled state, and non-occlusion).
+   * Returns a structured outcome so callers can retry cleanly on transient React/Vue re-renders,
+   * animations, loading spinners, or temporarily disabled controls.
    */
-  private async ensureClickActionable(
+  private async checkClickActionableOnce(
     el: ResolvedElement,
     targetLabel: string,
-  ): Promise<{ el: ResolvedElement; underOwnPill: boolean }> {
+  ): Promise<
+    | { ok: true; el: ResolvedElement; underOwnPill: boolean }
+    | { ok: false; retryable: boolean; reason: string; error: Error }
+  > {
     let current = el
     let underOwnPill = false
-    // 1. Wait briefly for CSS animations/transitions to settle (max ~320ms)
-    for (let attempt = 0; attempt < 6; attempt++) {
-      await sleep(35)
+    // 1. Wait briefly for CSS animations/transitions to settle (max ~220ms per attempt)
+    let stable = false
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await sleep(30)
       const nextBox = await this.readElementViewportBox(current)
-      if (!nextBox) break
+      if (!nextBox) {
+        return {
+          ok: false,
+          retryable: true,
+          reason: 'detached',
+          error: new Error(`Element "${targetLabel}" detached or hidden during actionability check.`),
+        }
+      }
       const moved =
         Math.abs(nextBox.x - current.box.x) > 2 ||
         Math.abs(nextBox.y - current.box.y) > 2
@@ -534,11 +703,61 @@ export class PageController {
         box: nextBox,
         center: { x: nextBox.x + nextBox.width / 2, y: nextBox.y + nextBox.height / 2 },
       }
-      if (!moved) break
+      if (!moved) {
+        stable = true
+        break
+      }
+    }
+    if (!stable) {
+      return {
+        ok: false,
+        retryable: true,
+        reason: 'animating',
+        error: new Error(`Element "${targetLabel}" kept moving / animating and did not stabilize.`),
+      }
     }
 
-    // 2. Check disabled state and hit-test occlusion (handles main frame + same-origin iframes)
-    if (current.sessionId) return { el: current, underOwnPill: false }
+    // 2. Check connected, disabled state and hit-test occlusion (handles main frame + same-origin iframes)
+    if (current.sessionId) {
+      // For cross-origin OOPIF elements, still verify connected & enabled inside child session
+      const childCheck = await this.session
+        .send<{ result?: { value?: { ok: boolean; reason?: string } } }>(
+          'Runtime.callFunctionOn',
+          {
+            objectId: current.objectId,
+            returnByValue: true,
+            functionDeclaration: `function() {
+              if (!this.isConnected) return { ok: false, reason: 'detached' };
+              if (this.disabled === true || this.getAttribute?.('aria-disabled') === 'true') return { ok: false, reason: 'disabled' };
+              return { ok: true };
+            }`,
+          },
+          { sessionId: current.sessionId },
+        )
+        .catch(() => null)
+      const cval = childCheck?.result?.value
+      if (!cval) {
+        return {
+          ok: false,
+          retryable: true,
+          reason: 'detached',
+          error: new Error(`Element "${targetLabel}" detached inside cross-origin frame.`),
+        }
+      }
+      if (!cval.ok) {
+        return {
+          ok: false,
+          retryable: true,
+          reason: cval.reason ?? 'disabled',
+          error:
+            cval.reason === 'disabled'
+              ? new Error(`Element "${targetLabel}" is disabled and cannot be clicked.`)
+              : new Error(`Element "${targetLabel}" detached inside cross-origin frame.`),
+        }
+      }
+      return { ok: true, el: current, underOwnPill: false }
+    }
+
     const offsetX = current.frameOffset?.x ?? 0
     const offsetY = current.frameOffset?.y ?? 0
     for (let retry = 0; retry < 2; retry++) {
@@ -550,6 +769,7 @@ export class PageController {
               reason?: string
               occluder?: string
               isFixedOrSticky?: boolean
+              occluderBottom?: number
               underOwnPill?: boolean
             }
           }
@@ -557,6 +777,9 @@ export class PageController {
           objectId: current.objectId,
           arguments: [{ value: current.center.x - offsetX }, { value: current.center.y - offsetY }],
           functionDeclaration: `function(cx, cy) {
+            if (!this.isConnected) {
+              return { ok: false, reason: 'detached' };
+            }
             const doc = this.ownerDocument || document;
             const win = doc.defaultView || window;
             if (this.disabled === true || this.getAttribute?.('aria-disabled') === 'true') {
@@ -587,15 +810,19 @@ export class PageController {
             }
             if (!hit) return { ok: true, underOwnPill: hitOwnPill };
             if (hit === this || this.contains(hit) || hit.contains(this)) return { ok: true, underOwnPill: hitOwnPill };
-            // Allow clicking associated <label> for form controls
+            // Allow clicking associated <label> (both explicit label[for] and implicit wrapping <label>) for form controls
             if (this.id && hit.closest && hit.closest('label[for="' + CSS.escape(this.id) + '"]')) return { ok: true, underOwnPill: hitOwnPill };
+            const ownLabel = this.closest?.('label');
+            if (ownLabel && (hit === ownLabel || ownLabel.contains(hit))) return { ok: true, underOwnPill: hitOwnPill };
             // Walk up occluder to detect fixed/sticky header vs modal overlay
             let cur = hit;
             let isFixedOrSticky = false;
+            let occluderBottom = 0;
             while (cur && cur !== doc.body && cur !== doc.documentElement) {
               const pos = win.getComputedStyle(cur).position;
               if (pos === 'fixed' || pos === 'sticky') {
                 isFixedOrSticky = true;
+                occluderBottom = cur.getBoundingClientRect().bottom;
                 break;
               }
               cur = cur.parentElement;
@@ -611,6 +838,7 @@ export class PageController {
               reason: 'occluded',
               occluder: '<' + tag + id + cls + '>' + (txt ? ' ("' + txt + '")' : ''),
               isFixedOrSticky,
+              occluderBottom,
               underOwnPill: hitOwnPill,
             };
           }`,
@@ -619,24 +847,58 @@ export class PageController {
         .catch(() => null)
 
       const val = check?.result?.value
-      if (val?.underOwnPill) underOwnPill = true
-      if (!val || val.ok) return { el: current, underOwnPill }
+      if (!val) {
+        return {
+          ok: false,
+          retryable: true,
+          reason: 'detached',
+          error: new Error(`Element "${targetLabel}" became stale during actionability check.`),
+        }
+      }
+      if (val.underOwnPill) underOwnPill = true
+      if (val.ok) return { ok: true, el: current, underOwnPill }
 
+      if (val.reason === 'detached') {
+        return {
+          ok: false,
+          retryable: true,
+          reason: 'detached',
+          error: new Error(`Element "${targetLabel}" detached from DOM before click.`),
+        }
+      }
       if (val.reason === 'disabled') {
-        throw new Error(`Element "${targetLabel}" is disabled and cannot be clicked.`)
+        return {
+          ok: false,
+          retryable: true,
+          reason: 'disabled',
+          error: new Error(`Element "${targetLabel}" is disabled and cannot be clicked.`),
+        }
       }
       if (val.reason === 'pointer-events-none') {
-        throw new Error(`Element "${targetLabel}" has pointer-events: none (pass force: true to override).`)
+        return {
+          ok: false,
+          retryable: true,
+          reason: 'pointer-events-none',
+          error: new Error(`Element "${targetLabel}" has pointer-events: none (pass force: true to override).`),
+        }
       }
       if (val.reason === 'occluded' && val.isFixedOrSticky && retry === 0) {
-        // Re-center in viewport to clear sticky header/footer and re-measure
+        // Re-center in viewport (and nudge below sticky top bars if needed)
         await this.session
           .send('Runtime.callFunctionOn', {
             objectId: current.objectId,
-            functionDeclaration: `function() { this.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); }`,
+            arguments: [{ value: val.occluderBottom ?? 0 }],
+            functionDeclaration: `function(stickyBottom) {
+              this.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+              const r = this.getBoundingClientRect();
+              if (stickyBottom > 0 && r.top < stickyBottom + 8) {
+                const win = this.ownerDocument?.defaultView || window;
+                win.scrollBy(0, -(stickyBottom - r.top + 24));
+              }
+            }`,
           })
           .catch(() => {})
-        await sleep(60)
+        await sleep(50)
         const recentered = await this.readElementViewportBox(current)
         if (recentered) {
           current = {
@@ -648,39 +910,106 @@ export class PageController {
         }
       }
       if (val.reason === 'occluded') {
-        throw new Error(
-          `Element "${targetLabel}" is occluded at (${Math.round(current.center.x)}, ${Math.round(current.center.y)}) by ${val.occluder ?? 'another element'}. Dismiss the overlay/banner first or pass force: true.`,
-        )
+        return {
+          ok: false,
+          retryable: true,
+          reason: 'occluded',
+          error: new Error(
+            `Element "${targetLabel}" is occluded at (${Math.round(current.center.x)}, ${Math.round(current.center.y)}) by ${val.occluder ?? 'another element'}. Dismiss the overlay/banner first or pass force: true.`,
+          ),
+        }
       }
     }
-    return { el: current, underOwnPill }
+    return { ok: true, el: current, underOwnPill }
+  }
+
+  /**
+   * Playwright-grade Action Auto-Waiting Retry Loop:
+   * continuously re-resolves the target locator and verifies actionability across transient
+   * React/Vue re-renders, DOM detachments, CSS animations, loading spinners, and brief disabled states.
+   */
+  private async resolveActionableForClick(
+    target: string,
+    options: { timeoutMs?: number; force?: boolean; strict?: boolean } = {},
+  ): Promise<{ el: ResolvedElement; underOwnPill: boolean }> {
+    const resolveBudget = options.timeoutMs ?? 8_000
+    const actionBudget = options.timeoutMs ?? 1_500
+    const start = Date.now()
+    let actionDeadline: number | null = null
+    let lastError: Error | null = null
+
+    while (true) {
+      const remainingResolve = Math.max(100, resolveBudget - (Date.now() - start))
+      const el = await this.resolveElement(target, remainingResolve, { strict: options.strict })
+      if (options.force) {
+        return { el, underOwnPill: false }
+      }
+      if (actionDeadline === null) {
+        actionDeadline = Date.now() + actionBudget
+      }
+
+      const check = await this.checkClickActionableOnce(el, target)
+      if (check.ok) {
+        return { el: check.el, underOwnPill: check.underOwnPill }
+      }
+      lastError = check.error
+      if (!check.retryable || Date.now() >= actionDeadline) {
+        throw lastError
+      }
+      // Detached/stale nodes re-resolve immediately; disabled/occluded/animating poll cleanly
+      await sleep(check.reason === 'detached' ? 35 : 80)
+    }
   }
 
   private async readElementViewportBox(el: ResolvedElement): Promise<BoundingBox | null> {
     try {
-      const res = await this.session.send<{ result?: { value?: BoundingBox } }>(
+      const res = await this.session.send<{
+        result?: { value?: { x: number; y: number; width: number; height: number; offsetX: number; offsetY: number; connected: boolean } }
+      }>(
         'Runtime.callFunctionOn',
         {
           objectId: el.objectId,
           functionDeclaration: `function() {
-            const r = this.getBoundingClientRect();
-            return { x: r.left, y: r.top, width: r.width, height: r.height };
+            if (!this.isConnected) return { x: 0, y: 0, width: 0, height: 0, offsetX: 0, offsetY: 0, connected: false };
+            const doc = this.ownerDocument || document;
+            let r = this.getBoundingClientRect();
+            const tag = (this.tagName || '').toLowerCase();
+            const inputType = (this.type || '').toLowerCase();
+            if (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio') && (!r || r.width <= 2 || r.height <= 2)) {
+              const lbl = this.closest?.('label') || (this.id ? doc.querySelector('label[for="' + CSS.escape(this.id) + '"]') : null);
+              if (lbl) {
+                const lr = lbl.getBoundingClientRect();
+                if (lr && lr.width > 2 && lr.height > 2) r = lr;
+              }
+            }
+            let ox = 0, oy = 0;
+            let win = doc.defaultView;
+            while (win && win !== win.parent) {
+              try {
+                const fe = win.frameElement;
+                if (!fe) break;
+                const fr = fe.getBoundingClientRect();
+                ox += fr.left;
+                oy += fr.top;
+                win = win.parent;
+              } catch { break; }
+            }
+            return { x: r.left, y: r.top, width: r.width, height: r.height, offsetX: ox, offsetY: oy, connected: true };
           }`,
           returnByValue: true,
         },
         { sessionId: el.sessionId },
       )
       const b = res.result?.value
-      if (!b || b.width <= 0 || b.height <= 0) return null
-      if (el.frameOffset) {
-        return {
-          x: b.x + el.frameOffset.x,
-          y: b.y + el.frameOffset.y,
-          width: b.width,
-          height: b.height,
-        }
+      if (!b || !b.connected || b.width <= 0 || b.height <= 0) return null
+      const ox = el.sessionId ? (el.frameOffset?.x ?? 0) : b.offsetX || (el.frameOffset?.x ?? 0)
+      const oy = el.sessionId ? (el.frameOffset?.y ?? 0) : b.offsetY || (el.frameOffset?.y ?? 0)
+      return {
+        x: b.x + ox,
+        y: b.y + oy,
+        width: b.width,
+        height: b.height,
       }
-      return b
     } catch {
       return null
     }
@@ -695,12 +1024,13 @@ export class PageController {
     let y: number
     let underOwnPill = false
     if (typeof targetOrCoords === 'string') {
-      let el = await this.resolveElement(targetOrCoords, options.timeoutMs)
-      if (!options.force) {
-        const checked = await this.ensureClickActionable(el, targetOrCoords)
-        el = checked.el
-        underOwnPill = checked.underOwnPill
-      }
+      const checked = await this.resolveActionableForClick(targetOrCoords, {
+        timeoutMs: options.timeoutMs,
+        force: options.force,
+        strict: options.strict,
+      })
+      const el = checked.el
+      underOwnPill = checked.underOwnPill
       x = el.center.x
       y = el.center.y
       await this.session.transport
@@ -995,10 +1325,59 @@ export class PageController {
 
   /**
    * Focuses element, clears existing value, and inserts text via trusted CDP Input.insertText.
-   * Works cleanly with React/Vue controlled inputs, textareas, and contenteditable elements.
+   * Includes auto-waiting retry for detached/re-rendered/transiently disabled inputs and
+   * safe contenteditable handling (never presses Backspace on empty rich-text blocks).
    */
-  async fill(target: string, value: string, options: { clear?: boolean; timeoutMs?: number } = {}): Promise<void> {
-    const el = await this.resolveElement(target, options.timeoutMs)
+  async fill(target: string, value: string, options: FillOptions = {}): Promise<void> {
+    const resolveBudget = options.timeoutMs ?? 8_000
+    const actionBudget = options.timeoutMs ?? 1_500
+    const start = Date.now()
+    let actionDeadline: number | null = null
+
+    let el!: ResolvedElement
+    let editableCheck!: { ok: boolean; reason?: string; isContentEditable?: boolean }
+
+    while (true) {
+      const remaining = Math.max(100, resolveBudget - (Date.now() - start))
+      el = await this.resolveElement(target, remaining, { strict: options.strict })
+      if (options.force) break
+      if (actionDeadline === null) actionDeadline = Date.now() + actionBudget
+
+      const stateRes = await this.session
+        .send<{ result?: { value?: { ok: boolean; reason?: string; isContentEditable?: boolean } } }>(
+          'Runtime.callFunctionOn',
+          {
+            objectId: el.objectId,
+            returnByValue: true,
+            functionDeclaration: `function() {
+              if (!this.isConnected) return { ok: false, reason: 'detached' };
+              if (this.disabled === true || this.getAttribute?.('aria-disabled') === 'true') {
+                return { ok: false, reason: 'disabled' };
+              }
+              if (this.readOnly === true || this.getAttribute?.('aria-readonly') === 'true') {
+                return { ok: false, reason: 'readonly' };
+              }
+              return { ok: true, isContentEditable: Boolean(this.isContentEditable) };
+            }`,
+          },
+          { sessionId: el.sessionId },
+        )
+        .catch(() => null)
+
+      editableCheck = stateRes?.result?.value ?? { ok: false, reason: 'detached' }
+      if (editableCheck.ok) break
+      if (Date.now() >= actionDeadline) {
+        if (editableCheck.reason === 'disabled') {
+          throw new Error(`Element "${target}" is disabled and cannot be filled.`)
+        }
+        if (editableCheck.reason === 'readonly') {
+          throw new Error(`Element "${target}" is read-only and cannot be filled (pass force: true to override).`)
+        }
+        throw new Error(`Element "${target}" detached from DOM before fill.`)
+      }
+      await sleep(editableCheck.reason === 'detached' ? 35 : 80)
+    }
+
     await this.session.transport
       .setControlBanner?.(this.tabId, { active: true, status: `Filling ${target}`, mode: 'working' })
       .catch(() => {})
@@ -1006,31 +1385,93 @@ export class PageController {
 
     // Click to focus natively
     await this.mouseClick(el.center.x, el.center.y)
-    await this.session
-      .send(
+
+    // Re-check node after click (React/Vue frameworks may re-render/replace input on focus)
+    const selectRes = await this.session
+      .send<{ result?: { value?: { hadContent: boolean; isContentEditable: boolean; connected: boolean } } }>(
         'Runtime.callFunctionOn',
         {
           objectId: el.objectId,
+          returnByValue: true,
           functionDeclaration: `function() {
+            if (!this.isConnected) return { hadContent: false, isContentEditable: false, connected: false };
+            const doc = this.ownerDocument || document;
+            const win = doc.defaultView || window;
             if (typeof this.focus === 'function') this.focus();
+            const isCE = Boolean(this.isContentEditable);
+            let hadContent = false;
             if (${options.clear !== false}) {
-              if (typeof this.select === 'function') {
-                this.select();
-              } else if (this.isContentEditable) {
-                const range = document.createRange();
-                range.selectNodeContents(this);
-                const sel = window.getSelection();
-                sel?.removeAllRanges();
-                sel?.addRange(range);
+              if (!isCE && typeof this.value === 'string') {
+                hadContent = this.value.length > 0;
+                if (hadContent) {
+                  try {
+                    if (typeof this.select === 'function') this.select();
+                    if (typeof this.setSelectionRange === 'function') {
+                      this.setSelectionRange(0, this.value.length);
+                    }
+                  } catch {}
+                }
+              } else if (isCE) {
+                const rawText = (this.innerText ?? this.textContent ?? '').replace(/\\u200B/g, '');
+                hadContent = rawText.replace(/\\n+$/, '').length > 0;
+                if (hadContent) {
+                  const range = doc.createRange();
+                  range.selectNodeContents(this);
+                  const sel = win.getSelection();
+                  sel?.removeAllRanges();
+                  sel?.addRange(range);
+                }
               }
             }
+            return { hadContent, isContentEditable: isCE, connected: true };
           }`,
         },
         { sessionId: el.sessionId },
       )
-      .catch(() => {})
+      .catch(() => null)
 
-    if (options.clear !== false) {
+    let selState = selectRes?.result?.value
+    if (!selState || !selState.connected) {
+      // Input got re-mounted on focus! Re-resolve once cleanly and re-focus
+      el = await this.resolveElement(target, 2_000, { strict: options.strict })
+      const retrySel = await this.session
+        .send<{ result?: { value?: { hadContent: boolean; isContentEditable: boolean; connected: boolean } } }>(
+          'Runtime.callFunctionOn',
+          {
+            objectId: el.objectId,
+            returnByValue: true,
+            functionDeclaration: `function() {
+              const doc = this.ownerDocument || document;
+              const win = doc.defaultView || window;
+              if (typeof this.focus === 'function') this.focus();
+              const isCE = Boolean(this.isContentEditable);
+              let hadContent = false;
+              if (${options.clear !== false}) {
+                if (!isCE && typeof this.value === 'string') {
+                  hadContent = this.value.length > 0;
+                  if (hadContent && typeof this.select === 'function') this.select();
+                } else if (isCE) {
+                  hadContent = (this.innerText ?? this.textContent ?? '').replace(/\\u200B/g, '').replace(/\\n+$/, '').length > 0;
+                  if (hadContent) {
+                    const range = doc.createRange();
+                    range.selectNodeContents(this);
+                    const sel = win.getSelection();
+                    sel?.removeAllRanges();
+                    sel?.addRange(range);
+                  }
+                }
+              }
+              return { hadContent, isContentEditable: isCE, connected: true };
+            }`,
+          },
+          { sessionId: el.sessionId },
+        )
+        .catch(() => null)
+      selState = retrySel?.result?.value ?? { hadContent: false, isContentEditable: false, connected: true }
+    }
+
+    // Only send Backspace when there is actual content selected (prevents deleting empty ProseMirror/Notion/Feishu blocks!)
+    if (options.clear !== false && selState.hadContent) {
       await this.pressKey('Backspace')
     }
 
@@ -1038,7 +1479,7 @@ export class PageController {
       await this.session.send('Input.insertText', { text: value })
     }
 
-    // Verify value actually applied on standard inputs (fallback for tricky controlled widgets)
+    // Verify value actually applied on standard inputs (fallback for tricky controlled widgets or date/color/number inputs)
     await this.session
       .send(
         'Runtime.callFunctionOn',
@@ -1046,6 +1487,7 @@ export class PageController {
           objectId: el.objectId,
           arguments: [{ value }],
           functionDeclaration: `function(expected) {
+            if (!this.isConnected) return;
             const tag = this.tagName?.toLowerCase();
             if ((tag === 'input' || tag === 'textarea') && this.value !== expected) {
               const proto = tag === 'textarea' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -1484,20 +1926,121 @@ export class PageController {
     return res.result?.value ?? wanted
   }
 
+  /**
+   * Intercepts native OS file chooser dialogs via CDP `Page.setInterceptFileChooserDialog`
+   * (essential for React Dropzone / Notion / Feishu buttons that dynamically create detached `<input type="file">`).
+   */
+  async waitForFileChooser(options: WaitForFileChooserOptions = {}): Promise<FileChooserHandle> {
+    await this.session.ensureBaseDomains()
+    const timeoutMs = options.timeoutMs ?? 15_000
+
+    await this.session.send('Page.setInterceptFileChooserDialog', { enabled: true })
+
+    let cleanedUp = false
+    const disableIntercept = async () => {
+      if (cleanedUp) return
+      cleanedUp = true
+      await this.session.send('Page.setInterceptFileChooserDialog', { enabled: false }).catch(() => {})
+    }
+
+    const chooserPromise = this.session.once(
+      'Page.fileChooserOpened',
+      undefined,
+      timeoutMs,
+    )
+
+    try {
+      if (options.action) {
+        await options.action()
+      }
+      const ev = await chooserPromise
+      const frameId = String(ev.params.frameId ?? '')
+      const mode = String(ev.params.mode ?? 'selectSingle')
+      const backendNodeId = Number(ev.params.backendNodeId ?? 0)
+      if (!backendNodeId) {
+        await disableIntercept()
+        throw new Error('File chooser opened without a valid backendNodeId')
+      }
+
+      // Resolve child session if file chooser opened inside a cross-origin OOPIF
+      const childSessionId =
+        ev.sessionId ??
+        this.session.getChildSessions().find((c) => c.targetId === frameId)?.sessionId
+
+      const handle: FileChooserHandle = {
+        isMultiple: mode === 'selectMultiple',
+        frameId,
+        backendNodeId,
+        setFiles: async (filePaths: string[]) => {
+          const absolutePaths = filePaths.map((p) => path.resolve(p))
+          try {
+            await this.session.send(
+              'DOM.setFileInputFiles',
+              { backendNodeId, files: absolutePaths },
+              { sessionId: childSessionId },
+            )
+          } finally {
+            await disableIntercept()
+          }
+        },
+        cancel: async () => {
+          await disableIntercept()
+        },
+      }
+
+      if (options.files) {
+        await handle.setFiles(options.files)
+      }
+      return handle
+    } catch (err) {
+      await disableIntercept()
+      throw err
+    }
+  }
+
+  /**
+   * Uploads one or more local files to either:
+   * - a direct `<input type="file">` element (even if hidden), OR
+   * - any trigger button / dropzone that dynamically spawns a file chooser on click!
+   */
   async uploadFiles(target: string, filePaths: string[]): Promise<void> {
     const el = await this.resolveElement(target, undefined, { allowHidden: true })
-    if (!el.backendNodeId) {
-      throw new Error(`Cannot upload files: unable to resolve backendNodeId for ${target}`)
+    const meta = await this.session
+      .send<{ result?: { value?: { isFileInput: boolean } } }>(
+        'Runtime.callFunctionOn',
+        {
+          objectId: el.objectId,
+          returnByValue: true,
+          functionDeclaration: `function() {
+            const tag = (this.tagName || '').toLowerCase();
+            return { isFileInput: tag === 'input' && (this.type || '').toLowerCase() === 'file' };
+          }`,
+        },
+        { sessionId: el.sessionId },
+      )
+      .catch(() => null)
+
+    if (meta?.result?.value?.isFileInput) {
+      if (!el.backendNodeId) {
+        throw new Error(`Cannot upload files: unable to resolve backendNodeId for ${target}`)
+      }
+      const absolutePaths = filePaths.map((p) => path.resolve(p))
+      await this.session.send(
+        'DOM.setFileInputFiles',
+        {
+          backendNodeId: el.backendNodeId,
+          files: absolutePaths,
+        },
+        { sessionId: el.sessionId },
+      )
+      return
     }
-    const absolutePaths = filePaths.map((p) => path.resolve(p))
-    await this.session.send(
-      'DOM.setFileInputFiles',
-      {
-        backendNodeId: el.backendNodeId,
-        files: absolutePaths,
-      },
-      { sessionId: el.sessionId },
-    )
+
+    // Smart fallback: target is a custom Upload button / dropzone that triggers a dynamic file chooser on click!
+    await this.waitForFileChooser({
+      action: () => this.click(target),
+      files: filePaths,
+    })
   }
 
   async evaluate<T = unknown>(expression: string, options: { frame?: string } = {}): Promise<T> {

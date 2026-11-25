@@ -11,8 +11,25 @@ import {
 } from '@browserpilot/protocol'
 import { formatConsoleLogs, type GetConsoleOptions } from './console-collector.js'
 import { Locator } from './locator.js'
-import { formatNetworkEntries, type GetNetworkOptions, type LiveNetworkResponse, type WaitForResponseOptions } from './network-inspector.js'
-import type { ClickOptions, EmulateOptions, FormFieldInput, KeyModifier, MouseButton, PdfOptions } from './page-controller.js'
+import {
+  formatNetworkEntries,
+  type DynamicRouteHandler,
+  type GetNetworkOptions,
+  type LiveNetworkResponse,
+  type RouteOptions,
+  type RouteUrlPattern,
+  type WaitForResponseOptions,
+} from './network-inspector.js'
+import type {
+  ClickOptions,
+  EmulateOptions,
+  FillOptions,
+  FormFieldInput,
+  KeyModifier,
+  MouseButton,
+  PdfOptions,
+  WaitForFileChooserOptions,
+} from './page-controller.js'
 import { createDemoVideo } from './recorder.js'
 import { formatStylesAsText } from './styles-inspector.js'
 import { BrowserPilotTab } from './tab.js'
@@ -377,7 +394,7 @@ export class SessionManager {
         const t = await getTab(opts?.tab)
         await t.page.hover(target, opts?.timeoutMs)
       },
-      fill: async (target: string, value: string, opts?: { tab?: BrowserPilotTab; clear?: boolean; timeoutMs?: number }) => {
+      fill: async (target: string, value: string, opts?: FillOptions & { tab?: BrowserPilotTab }) => {
         const t = await getTab(opts?.tab)
         await t.page.fill(target, value, opts)
       },
@@ -404,6 +421,10 @@ export class SessionManager {
       uploadFiles: async (target: string, filePaths: string[], opts?: { tab?: BrowserPilotTab }) => {
         const t = await getTab(opts?.tab)
         await t.page.uploadFiles(target, filePaths)
+      },
+      waitForFileChooser: async (opts?: WaitForFileChooserOptions & { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts?.tab)
+        return await t.page.waitForFileChooser(opts)
       },
       scroll: async (opts: { tab?: BrowserPilotTab; target?: string; deltaX?: number; deltaY?: number; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number } = {}) => {
         const t = await getTab(opts.tab)
@@ -530,6 +551,18 @@ export class SessionManager {
       onResponse: async (cb: (res: LiveNetworkResponse) => void, opts?: { tab?: BrowserPilotTab }) => {
         const t = await getTab(opts?.tab)
         return t.network.onResponse(cb)
+      },
+      route: async (
+        pattern: RouteUrlPattern,
+        handler: DynamicRouteHandler,
+        opts?: RouteOptions & { tab?: BrowserPilotTab },
+      ) => {
+        const t = await getTab(opts?.tab)
+        return await t.network.route(pattern, handler, opts)
+      },
+      unroute: async (patternOrId?: RouteUrlPattern, opts?: { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts?.tab)
+        return await t.network.unroute(patternOrId)
       },
       getStyles: async (target: string, opts?: { tab?: BrowserPilotTab; includeInherited?: boolean; computedProperties?: string[] }) => {
         const t = await getTab(opts?.tab)

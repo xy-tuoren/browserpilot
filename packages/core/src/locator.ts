@@ -1,6 +1,6 @@
 import type { BoundingBox } from '@browserpilot/protocol'
 import type { TabCDPSession } from './cdp-client.js'
-import type { ClickOptions, PageController, ScreenshotOptions } from './page-controller.js'
+import type { ClickOptions, FillOptions, PageController, ScreenshotOptions } from './page-controller.js'
 
 export type LocatorVisibilityMode = 'prefer-visible' | 'visible-only' | 'any'
 
@@ -833,7 +833,7 @@ export class Locator {
     await this.page.hover(this.selector, timeoutMs)
   }
 
-  async fill(value: string, options?: { clear?: boolean; timeoutMs?: number }): Promise<void> {
+  async fill(value: string, options?: FillOptions): Promise<void> {
     await this.page.fill(this.selector, value, options)
   }
 
