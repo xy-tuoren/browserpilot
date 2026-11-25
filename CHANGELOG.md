@@ -2,6 +2,30 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
+## [1.5.3] - 2026-11-25
+
+### Changed
+- **Modular Architecture Refactor (Zero Breaking Public API Changes)**:
+  - Split `packages/core/src/page-controller.ts` (2,518 -> 1,117 lines) into zero-cycle submodules under `packages/core/src/page/{types,input,actionability,capture,handoff}.ts`.
+  - Split `packages/extension/src/background.ts` (1,257 -> 350 lines) into zero-cycle submodules under `packages/extension/src/bg/{state,bridge,tabs,rpc}.ts`.
+  - Split `packages/server/src/tools.ts` (1,979 -> 75 lines) into domain-focused tool registries under `packages/server/src/tools/{types,navigation,interaction,devtools,context}.ts` and updated `browserpilot setup` output to read the tool count dynamically (`TOOL_DEFINITIONS.length`).
+- **Cross-Platform CI Matrix (`.github/workflows/ci.yml`)**:
+  - Expanded GitHub Actions CI to run build, typecheck, and full real Chromium + MV3 Extension E2E suites on both `ubuntu-latest` and `macos-latest` (`sed`-safe Chrome binary path resolution for macOS `.app` bundle spaces).
+
+### Fixed
+- **267x Background-Tab Concurrency Speedup (`packages/core/src/cdp-client.ts`)**:
+  - Enabled `Emulation.setFocusEmulationEnabled({ enabled: true })` in `TabCDPSession.ensureBaseDomains()`, eliminating Chromium's 5,000ms-per-event `InputRouter` compositor stall on `Input.dispatchMouseEvent('mouseMoved')` in background tabs (3 concurrent background tabs dropped from 30s+ timeout to 364ms) without stealing the user's active tab or window focus.
+- **MV3 Service Worker Sleep/Wake Attached-Tab Restoration (`packages/extension/src/bg/tabs.ts`)**:
+  - Persists lightweight attached-tab & Tab Group metadata to `chrome.storage.session` and reconciles `chrome.debugger.getTargets()` on SW boot with `Target.getTargetInfo` ownership probes, preserving BrowserPilot-owned sessions across MV3 SW restarts without ever claiming tabs owned by Chrome DevTools or another extension.
+- **Byte-Safe Adaptive Native Messaging Chunking (`packages/protocol/src/rpc.ts`)**:
+  - Upgraded `encodeNativeMessageFrames()` to adaptively cap each chunk strictly below Chrome's 1MB Native Messaging frame limit even under 3-4 byte UTF-8 CJK/emoji or heavy double-JSON-escaping expansion, while preventing UTF-16 surrogate pair splits across chunk boundaries.
+  - Hardened `BridgeChunkReassembler` with strict chunk bounds/total validation and configurable TTL eviction.
+
+### Added
+- **Foundation Stability & Stress Tests (`packages/protocol/test/protocol.test.ts`, `packages/extension/test/extension-stability.test.ts`)**:
+  - Added 12MB+ multi-byte CJK/emoji/heavily-escaped chunking stress tests, interleaved out-of-order concurrent stream + duplicate + TTL eviction tests.
+  - Added real Chrome MV3 stability tests covering 3-tab concurrent control across separate Tab Groups with auto-ungroup cleanup, >2MB UTF-8 CDP responses and >1MB full-page PNG screenshots over the extension bridge, abrupt WebSocket disconnect/reconnect recovery preserving attached tabs, and graceful restricted-URL rejection.
+
 ## [1.5.2] - 2026-11-25
 
 ### Changed

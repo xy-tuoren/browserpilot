@@ -4,6 +4,7 @@ import {
   encodeNativeMessage,
   encodeNativeMessageFrames,
   NATIVE_INCOMING_MAX_BYTES,
+  NATIVE_MESSAGE_MAX_BYTES,
   NativeMessageDecoder,
   isBlockedProfileWideCommand,
   isRestrictedUrl,
@@ -68,6 +69,106 @@ describe('@browserpilot/protocol', () => {
         }
       }
       expect(assembled).toEqual(bigOutgoing)
+    })
+
+    it('streams 12MB+ multi-byte CJK, emoji & heavily JSON-escaped payloads strictly under Chrome 1MB per frame', () => {
+      // Mix of 3-byte CJK, 4-byte emoji surrogate pairs, and quotes/backslashes/control chars
+      // that expand significantly on double JSON-escaping inside chunk envelopes.
+      const unit = '你好BrowserPilot🚀\\"\\\\\u0007\n'
+      const hugePayload = {
+        type: 'request' as const,
+        id: 'req-12mb-stress',
+        method: 'cdp.send',
+        params: {
+          blobA: unit.repeat(260_000), // > 6MB raw UTF-8, > 10MB after escaping
+          blobB: '中'.repeat(1_500_000), // 4.5MB UTF-8 CJK
+        },
+      }
+      const rawBytes = Buffer.byteLength(JSON.stringify(hugePayload), 'utf8')
+      expect(rawBytes).toBeGreaterThan(10 * 1024 * 1024)
+
+      const frames = encodeNativeMessageFrames(hugePayload)
+      expect(frames.length).toBeGreaterThan(10)
+
+      // Every single encoded frame MUST obey Chrome's strict 1MB host->extension limit
+      for (const frame of frames) {
+        const bodyLen = frame.readUInt32LE(0)
+        expect(bodyLen).toBe(frame.length - 4)
+        expect(bodyLen).toBeLessThanOrEqual(NATIVE_MESSAGE_MAX_BYTES)
+      }
+
+      // Stream all frames through NativeMessageDecoder in irregular slice sizes and reassemble
+      const combined = Buffer.concat(frames)
+      const decoder = new NativeMessageDecoder()
+      const reassembler = new BridgeChunkReassembler()
+      let assembled: unknown = null
+      for (let off = 0; off < combined.length; off += 65_537) {
+        const msgs = decoder.push(combined.subarray(off, off + 65_537)) as BridgeChunkMessage[]
+        for (const msg of msgs) {
+          expect(msg.type).toBe('chunk')
+          // Verify no chunk ends with a dangling UTF-16 high surrogate
+          const lastCode = msg.data.charCodeAt(msg.data.length - 1)
+          expect(lastCode >= 0xd800 && lastCode <= 0xdbff).toBe(false)
+          assembled = reassembler.push(msg)
+        }
+      }
+
+      expect(reassembler.pendingCount).toBe(0)
+      expect(assembled).toEqual(hugePayload)
+    })
+
+    it('reassembles interleaved out-of-order concurrent chunk streams, ignores duplicates, and evicts stale chunks', async () => {
+      const msgA = { type: 'request' as const, id: 'stream-a', method: 'eval', params: { data: 'A'.repeat(1_300_000) } }
+      const msgB = { type: 'request' as const, id: 'stream-b', method: 'eval', params: { data: 'B'.repeat(1_300_000) } }
+      const msgC = { type: 'request' as const, id: 'stream-c', method: 'eval', params: { data: '汉'.repeat(450_000) } }
+
+      const decodeChunks = (m: unknown): BridgeChunkMessage[] => {
+        const dec = new NativeMessageDecoder()
+        return encodeNativeMessageFrames(m).flatMap((f) => dec.push(f) as BridgeChunkMessage[])
+      }
+
+      const chunksA = decodeChunks(msgA)
+      const chunksB = decodeChunks(msgB).reverse() // reverse arrival order!
+      const chunksC = decodeChunks(msgC)
+
+      // Interleave chunks from all 3 concurrent streams + duplicate chunk A[0]
+      const interleaved: BridgeChunkMessage[] = [chunksA[0]]
+      const maxLen = Math.max(chunksA.length, chunksB.length, chunksC.length)
+      for (let i = 0; i < maxLen; i++) {
+        if (chunksA[i]) interleaved.push(chunksA[i])
+        if (chunksB[i]) interleaved.push(chunksB[i])
+        if (chunksC[i]) interleaved.push(chunksC[i])
+      }
+
+      const reassembler = new BridgeChunkReassembler(50)
+      const completed: unknown[] = []
+      for (const ch of interleaved) {
+        const res = reassembler.push(ch)
+        if (res) completed.push(res)
+      }
+
+      expect(completed).toHaveLength(3)
+      expect(completed).toContainEqual(msgA)
+      expect(completed).toContainEqual(msgB)
+      expect(completed).toContainEqual(msgC)
+      expect(reassembler.pendingCount).toBe(0)
+
+      // Verify stale incomplete chunk streams are evicted cleanly after TTL
+      expect(
+        reassembler.push({ type: 'chunk', chunkId: 'stale-1', index: 0, total: 3, data: '{"partial":' }),
+      ).toBeNull()
+      expect(reassembler.pendingCount).toBe(1)
+
+      await new Promise((r) => setTimeout(r, 70))
+      // Pushing any new chunk triggers TTL cleanup of stale-1
+      const fresh = reassembler.push({ type: 'chunk', chunkId: 'fresh-1', index: 0, total: 1, data: '{"type":"ping","ts":1}' })
+      expect(fresh).toEqual({ type: 'ping', ts: 1 })
+      expect(reassembler.pendingCount).toBe(0)
+
+      // Invalid chunk bounds must fail loudly rather than corrupting memory
+      expect(() =>
+        reassembler.push({ type: 'chunk', chunkId: 'bad-1', index: 5, total: 2, data: 'x' }),
+      ).toThrow(/Invalid bridge chunk bounds/)
     })
   })
 

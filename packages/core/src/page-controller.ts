@@ -1,241 +1,71 @@
-import fs from 'node:fs/promises'
 import path from 'node:path'
-import type { BoundingBox, FrameInfo } from '@browserpilot/protocol'
+import type { FrameInfo } from '@browserpilot/protocol'
 import type { TabCDPSession } from './cdp-client.js'
-import { Locator, queryLocator, STABLE_LOCATOR_FUNCTION } from './locator.js'
+import { Locator, STABLE_LOCATOR_FUNCTION } from './locator.js'
+import { resolveActionableForClick, resolveElement } from './page/actionability.js'
+import { capturePageScreenshot, exportPageToPDF } from './page/capture.js'
+import { requestHumanHandoff } from './page/handoff.js'
+import { modifierBitmask, PageInputDriver } from './page/input.js'
+import type {
+  ClickOptions,
+  EmulateOptions,
+  FileChooserHandle,
+  FillOptions,
+  FormFieldInput,
+  FormFillResult,
+  HumanHandoffResult,
+  InitScriptEntry,
+  KeyModifier,
+  MouseButton,
+  PdfOptions,
+  ResolvedElement,
+  ScreenshotOptions,
+  ScrollResult,
+  WaitForFileChooserOptions,
+} from './page/types.js'
 import type { SnapshotEngine } from './snapshot.js'
-import { sleep, waitForCondition, waitForPageLoad, waitForSelector, type WaitSelectorState } from './wait.js'
+import { sleep, waitForPageLoad, waitForSelector, type WaitSelectorState } from './wait.js'
 
-export type MouseButton = 'left' | 'right' | 'middle'
-export type KeyModifier = 'Alt' | 'Control' | 'Meta' | 'Shift'
-
-export interface ClickOptions {
-  button?: MouseButton
-  clickCount?: number
-  modifiers?: KeyModifier[]
-  timeoutMs?: number
-  /** Skip pre-click occlusion & stability checks and click directly */
-  force?: boolean
-  /** Throw a Playwright-style strict-mode error if locator matches multiple visible elements */
-  strict?: boolean
-}
-
-export interface FillOptions {
-  clear?: boolean
-  timeoutMs?: number
-  force?: boolean
-  strict?: boolean
-}
-
-export interface FileChooserHandle {
-  isMultiple: boolean
-  frameId: string
-  backendNodeId: number
-  setFiles: (filePaths: string[]) => Promise<void>
-  cancel: () => Promise<void>
-}
-
-export interface WaitForFileChooserOptions {
-  action?: () => Promise<unknown>
-  /** If provided, files are automatically supplied and interception is closed cleanly */
-  files?: string[]
-  timeoutMs?: number
-}
-
-export interface ScrollResult {
-  scrolled: boolean
-  scrollX: number
-  scrollY: number
-  maxScrollY: number
-  percentY: number
-  atTop: boolean
-  atBottom: boolean
-  container: string
-}
-
-export interface FormFieldInput {
-  target: string
-  value: string | string[] | number | boolean
-  type?: 'auto' | 'text' | 'select' | 'checkbox' | 'radio' | 'range' | 'file'
-}
-
-export interface FormFillResult {
-  filled: Array<{ target: string; type: string; value: string | string[] | number | boolean }>
-}
-
-export interface PdfOptions {
-  path?: string
-  landscape?: boolean
-  printBackground?: boolean
-  displayHeaderFooter?: boolean
-  headerTemplate?: string
-  footerTemplate?: string
-  scale?: number
-  paperWidth?: number
-  paperHeight?: number
-  marginTop?: number
-  marginBottom?: number
-  marginLeft?: number
-  marginRight?: number
-  pageRanges?: string
-  preferCSSPageSize?: boolean
-}
-
-export interface InitScriptEntry {
-  id: string
-  preview: string
-  createdAt: number
-}
-
-export interface HumanHandoffResult {
-  resumed: boolean
-  cancelled: boolean
-  timedOut: boolean
-  elapsedMs: number
-  url: string
-  title: string
-}
-
-export interface ScreenshotOptions {
-  path?: string
-  fullPage?: boolean
-  format?: 'png' | 'jpeg' | 'webp'
-  quality?: number
-  clip?: BoundingBox
-  /** Crop & upscale a viewport region (e.g. for Canvas, Figma, or tiny icons) */
-  zoom?: { x: number; y: number; width: number; height: number; scale?: number }
-  /** Overlay a translucent pixel coordinate grid for visual/Canvas coordinate clicking */
-  grid?: boolean
-  /** Grid spacing in CSS pixels (default 200 for full viewport, 50 for zoomed regions) */
-  gridStep?: number
-  maxDimension?: number
-}
-
-export interface EmulateOptions {
-  width?: number
-  height?: number
-  deviceScaleFactor?: number
-  mobile?: boolean
-  userAgent?: string
-  colorScheme?: 'light' | 'dark' | 'no-preference'
-  cpuThrottlingRate?: number
-  networkPreset?: 'online' | 'offline' | 'slow-3g' | 'fast-3g' | '4g'
-  timezone?: string
-  locale?: string
-  geolocation?: { latitude: number; longitude: number; accuracy?: number }
-}
-
-interface KeyDef {
-  key: string
-  code: string
-  keyCode: number
-  text?: string
-}
-
-const SPECIAL_KEYS: Record<string, KeyDef> = {
-  Enter: { key: 'Enter', code: 'Enter', keyCode: 13, text: '\r' },
-  Tab: { key: 'Tab', code: 'Tab', keyCode: 9 },
-  Escape: { key: 'Escape', code: 'Escape', keyCode: 27 },
-  Backspace: { key: 'Backspace', code: 'Backspace', keyCode: 8 },
-  Delete: { key: 'Delete', code: 'Delete', keyCode: 46 },
-  Space: { key: ' ', code: 'Space', keyCode: 32, text: ' ' },
-  ' ': { key: ' ', code: 'Space', keyCode: 32, text: ' ' },
-  ArrowUp: { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
-  ArrowDown: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
-  ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
-  ArrowRight: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
-  Home: { key: 'Home', code: 'Home', keyCode: 36 },
-  End: { key: 'End', code: 'End', keyCode: 35 },
-  PageUp: { key: 'PageUp', code: 'PageUp', keyCode: 33 },
-  PageDown: { key: 'PageDown', code: 'PageDown', keyCode: 34 },
-  Insert: { key: 'Insert', code: 'Insert', keyCode: 45 },
-  Control: { key: 'Control', code: 'ControlLeft', keyCode: 17 },
-  Shift: { key: 'Shift', code: 'ShiftLeft', keyCode: 16 },
-  Alt: { key: 'Alt', code: 'AltLeft', keyCode: 18 },
-  Meta: { key: 'Meta', code: 'MetaLeft', keyCode: 91 },
-}
-
-for (let i = 1; i <= 12; i++) {
-  SPECIAL_KEYS[`F${i}`] = { key: `F${i}`, code: `F${i}`, keyCode: 111 + i }
-}
-
-function modifierBitmask(modifiers?: KeyModifier[]): number {
-  if (!modifiers?.length) return 0
-  let mask = 0
-  for (const m of modifiers) {
-    if (m === 'Alt') mask |= 1
-    else if (m === 'Control') mask |= 2
-    else if (m === 'Meta') mask |= 4
-    else if (m === 'Shift') mask |= 8
-  }
-  return mask
-}
-
-function buttonBitmask(button: MouseButton): number {
-  if (button === 'right') return 2
-  if (button === 'middle') return 4
-  return 1
-}
-
-function resolveEditingCommands(key: string, mods: KeyModifier[]): string[] {
-  const hasAccel = mods.includes('Meta') || mods.includes('Control')
-  const hasShift = mods.includes('Shift')
-  const lower = key.toLowerCase()
-  if (hasAccel && !mods.includes('Alt')) {
-    if (lower === 'a' && !hasShift) return ['selectAll']
-    if (lower === 'c' && !hasShift) return ['copy']
-    if (lower === 'x' && !hasShift) return ['cut']
-    if (lower === 'v' && !hasShift) return ['paste']
-    if (lower === 'v' && hasShift) return ['pasteAndMatchStyle']
-    if (lower === 'z' && !hasShift) return ['undo']
-    if ((lower === 'z' && hasShift) || (lower === 'y' && !hasShift)) return ['redo']
-  }
-  if (!hasAccel && !mods.includes('Alt')) {
-    if (key === 'Backspace') return ['deleteBackward']
-    if (key === 'Delete') return ['deleteForward']
-  }
-  return []
-}
-
-function resolveKeyDef(keyName: string): KeyDef {
-  if (SPECIAL_KEYS[keyName]) return SPECIAL_KEYS[keyName]
-  if (keyName.length === 1) {
-    const ch = keyName
-    const upper = ch.toUpperCase()
-    const code = /[A-Z]/.test(upper)
-      ? `Key${upper}`
-      : /[0-9]/.test(ch)
-        ? `Digit${ch}`
-        : ch
-    return { key: ch, code, keyCode: upper.charCodeAt(0), text: ch }
-  }
-  return { key: keyName, code: keyName, keyCode: 0 }
-}
-
-export interface ResolvedElement {
-  objectId: string
-  backendNodeId?: number
-  sessionId?: string
-  frameOffset?: { x: number; y: number }
-  box: BoundingBox
-  center: { x: number; y: number }
-}
+export type {
+  ClickOptions,
+  EmulateOptions,
+  FileChooserHandle,
+  FillOptions,
+  FormFieldInput,
+  FormFillResult,
+  HumanHandoffResult,
+  InitScriptEntry,
+  KeyModifier,
+  MouseButton,
+  PdfOptions,
+  ResolvedElement,
+  ScreenshotOptions,
+  ScrollResult,
+  WaitForFileChooserOptions,
+} from './page/types.js'
 
 /**
- * Pure-CDP Page Controller executing real, browser-trusted (`isTrusted === true`)
- * interactions without Playwright or Puppeteer.
+ * Pure-CDP Page Controller executing browser-trusted (`isTrusted === true`)
+ * interactions, waits, uploads, captures, and context controls without Playwright/Puppeteer.
  */
 export class PageController {
   readonly session: TabCDPSession
   readonly snapshotEngine: SnapshotEngine
-  private lastMousePos = { x: 0, y: 0 }
-  private pressedButtonsMask = 0
-  private activeModifiersMask = 0
+  private readonly input: PageInputDriver
   private initScripts: InitScriptEntry[] = []
 
   constructor(session: TabCDPSession, snapshotEngine: SnapshotEngine) {
     this.session = session
     this.snapshotEngine = snapshotEngine
+    this.input = new PageInputDriver(session)
+  }
+
+  private get actionabilityDeps() {
+    return {
+      session: this.session,
+      snapshotEngine: this.snapshotEngine,
+      evaluate: <T = unknown>(expr: string) => this.evaluate<T>(expr),
+    }
   }
 
   locator(selector: string): Locator {
@@ -260,6 +90,10 @@ export class PageController {
   get tabId(): number {
     return this.session.tabId
   }
+
+  // ============================================================================
+  // Navigation
+  // ============================================================================
 
   async getUrlAndTitle(): Promise<{ url: string; title: string }> {
     const res = await this.session.send<{ result?: { value?: { url: string; title: string } } }>('Runtime.evaluate', {
@@ -334,241 +168,16 @@ export class PageController {
     return await this.getUrlAndTitle()
   }
 
-  /**
-   * Resolve a snapshot ref (`e5`), CSS selector (`#btn`), chained locator (`.card >> has-text=Pro >> button`),
-   * `role=...`, `label=...`, `placeholder=...`, `text=...`, `xpath=...`, or cross-iframe locator (`iframe#pay >> button`)
-   * into an actionable, scrolled-into-view element with top-frame viewport coordinates.
-   */
+  // ============================================================================
+  // Element Resolution & Trusted Interaction
+  // ============================================================================
+
   async resolveElement(
     target: string,
     timeoutMs: number = 8_000,
     options: { allowHidden?: boolean; strict?: boolean } = {},
   ): Promise<ResolvedElement> {
-    let strictError: Error | null = null
-    const resolved = await waitForCondition<ResolvedElement | { __strictAbort: true }>(
-      async () => {
-        strictError = null
-        const refTarget = this.snapshotEngine.getRef(this.tabId, target)
-        let objectId: string | undefined
-        let backendNodeId: number | undefined
-        let sessionId: string | undefined
-        let frameOffset: { x: number; y: number } | undefined
-
-        if (refTarget) {
-          backendNodeId = refTarget.backendDOMNodeId
-          sessionId = refTarget.sessionId
-          const r = await this.session
-            .send<{ object?: { objectId?: string } }>(
-              'DOM.resolveNode',
-              { backendNodeId },
-              { sessionId },
-            )
-            .catch(() => null)
-          objectId = r?.object?.objectId
-        } else {
-          const hit = await queryLocator(this.session, target, {
-            visibilityMode: options.allowHidden ? 'any' : 'prefer-visible',
-          })
-          if (options.strict && hit.count > 1) {
-            strictError = new Error(
-              `Strict mode violation: "${target}" resolved to ${hit.count} elements. Narrow the locator or add >> first / >> nth=0.`,
-            )
-            return { __strictAbort: true }
-          }
-          objectId = hit.objectId
-          sessionId = hit.sessionId
-          if (hit.frameOffset.x !== 0 || hit.frameOffset.y !== 0) {
-            frameOffset = hit.frameOffset
-          }
-          if (objectId) {
-            const desc = await this.session
-              .send<{ node?: { backendNodeId?: number } }>('DOM.describeNode', { objectId }, { sessionId })
-              .catch(() => null)
-            backendNodeId = desc?.node?.backendNodeId
-          }
-        }
-
-        if (!objectId) return null
-
-        // Scroll into view ONLY when outside viewport or clipped by a scrollable ancestor
-        // (avoids triggering window scroll listeners that close AntD/Radix/Element/Feishu popovers!)
-        if (!options.allowHidden) {
-          // If inside a cross-origin OOPIF iframe, ensure the host <iframe> itself is scrolled into parent viewport first
-          if (sessionId) {
-            await this.scrollChildIframeIntoView(refTarget?.frameId, sessionId).catch(() => {})
-          }
-          const needScrollRes = await this.session
-            .send<{ result?: { value?: boolean } }>(
-              'Runtime.callFunctionOn',
-              {
-                objectId,
-                returnByValue: true,
-                functionDeclaration: `function() {
-                  if (!this.isConnected) return false;
-                  const doc = this.ownerDocument || document;
-                  const win = doc.defaultView || window;
-                  const r = this.getBoundingClientRect();
-                  if (!r || (r.width === 0 && r.height === 0)) return true;
-                  const vw = win.innerWidth || doc.documentElement.clientWidth || 1280;
-                  const vh = win.innerHeight || doc.documentElement.clientHeight || 720;
-                  if (r.top < 0 || r.left < 0 || r.bottom > vh || r.right > vw) return true;
-                  // Check if clipped by any scrollable/clipping ancestor container (e.g. sidebar, modal, table)
-                  let cur = this.parentElement;
-                  while (cur && cur !== doc.body && cur !== doc.documentElement) {
-                    const st = win.getComputedStyle(cur);
-                    const clipY = /(auto|scroll|hidden|clip)/.test(st.overflowY) && cur.scrollHeight > cur.clientHeight + 2;
-                    const clipX = /(auto|scroll|hidden|clip)/.test(st.overflowX) && cur.scrollWidth > cur.clientWidth + 2;
-                    if (clipY || clipX) {
-                      const ar = cur.getBoundingClientRect();
-                      if (clipY && (r.top < ar.top - 1 || r.bottom > ar.bottom + 1)) return true;
-                      if (clipX && (r.left < ar.left - 1 || r.right > ar.right + 1)) return true;
-                    }
-                    cur = cur.parentElement;
-                  }
-                  return false;
-                }`,
-              },
-              { sessionId },
-            )
-            .catch(() => null)
-
-          if (needScrollRes?.result?.value !== false) {
-            if (backendNodeId) {
-              await this.session
-                .send('DOM.scrollIntoViewIfNeeded', { backendNodeId }, { sessionId })
-                .catch(() => {})
-            }
-            await this.session
-              .send(
-                'Runtime.callFunctionOn',
-                {
-                  objectId,
-                  functionDeclaration: `function() {
-                    if (typeof this.scrollIntoView === 'function') {
-                      this.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-                    }
-                  }`,
-                },
-                { sessionId },
-              )
-              .catch(() => {})
-          }
-        }
-
-        // Compute fresh viewport bounding box + live same-origin frameOffset after scrolling
-        // For sr-only/1px custom checkboxes/radios wrapped in a visible <label>, target the label box for reliable clicks!
-        const rectRes = await this.session
-          .send<{
-            result?: { value?: { x: number; y: number; width: number; height: number; offsetX: number; offsetY: number; connected: boolean } | null }
-          }>(
-            'Runtime.callFunctionOn',
-            {
-              objectId,
-              returnByValue: true,
-              functionDeclaration: `function() {
-                if (!this.isConnected) return { x: 0, y: 0, width: 0, height: 0, offsetX: 0, offsetY: 0, connected: false };
-                const doc = this.ownerDocument || document;
-                let r = this.getBoundingClientRect();
-                const tag = (this.tagName || '').toLowerCase();
-                const inputType = (this.type || '').toLowerCase();
-                if (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio') && (!r || r.width <= 2 || r.height <= 2)) {
-                  const lbl = this.closest?.('label') || (this.id ? doc.querySelector('label[for="' + CSS.escape(this.id) + '"]') : null);
-                  if (lbl) {
-                    const lr = lbl.getBoundingClientRect();
-                    if (lr && lr.width > 2 && lr.height > 2) r = lr;
-                  }
-                }
-                if (!r || (r.width === 0 && r.height === 0)) return { x: 0, y: 0, width: 0, height: 0, offsetX: 0, offsetY: 0, connected: true };
-                let ox = 0, oy = 0;
-                let win = doc.defaultView;
-                while (win && win !== win.parent) {
-                  try {
-                    const fe = win.frameElement;
-                    if (!fe) break;
-                    const fr = fe.getBoundingClientRect();
-                    ox += fr.left;
-                    oy += fr.top;
-                    win = win.parent;
-                  } catch { break; }
-                }
-                return { x: r.left, y: r.top, width: r.width, height: r.height, offsetX: ox, offsetY: oy, connected: true };
-              }`,
-            },
-            { sessionId },
-          )
-          .catch(() => null)
-
-        const rawRect = rectRes?.result?.value ?? null
-        if (rawRect && !rawRect.connected) return null
-
-        let box: BoundingBox | null =
-          rawRect && (rawRect.width > 0 || rawRect.height > 0)
-            ? { x: rawRect.x, y: rawRect.y, width: rawRect.width, height: rawRect.height }
-            : null
-
-        if (rawRect && (rawRect.offsetX !== 0 || rawRect.offsetY !== 0) && !sessionId) {
-          frameOffset = { x: rawRect.offsetX, y: rawRect.offsetY }
-        }
-
-        if (!box && backendNodeId) {
-          const quads = await this.session
-            .send<{ quads?: number[][] }>('DOM.getContentQuads', { backendNodeId }, { sessionId })
-            .catch(() => null)
-          const q = quads?.quads?.[0]
-          if (q && q.length >= 8) {
-            const xs = [q[0], q[2], q[4], q[6]]
-            const ys = [q[1], q[3], q[5], q[7]]
-            const minX = Math.min(...xs)
-            const minY = Math.min(...ys)
-            box = {
-              x: minX,
-              y: minY,
-              width: Math.max(...xs) - minX,
-              height: Math.max(...ys) - minY,
-            }
-          }
-        }
-
-        if (!box || (box.width === 0 && box.height === 0)) {
-          if (!options.allowHidden) return null
-          box = { x: 0, y: 0, width: 0, height: 0 }
-        }
-
-        // Refresh cross-origin OOPIF iframe offset AFTER scrolling so below-the-fold OOPIFs stay accurate
-        if (sessionId) {
-          const freshOffset = await this.getIframeOffset(refTarget?.frameId, sessionId)
-          if (freshOffset.x !== 0 || freshOffset.y !== 0 || !frameOffset) {
-            frameOffset = freshOffset
-          }
-        }
-        if (frameOffset && (frameOffset.x !== 0 || frameOffset.y !== 0)) {
-          box = {
-            x: box.x + frameOffset.x,
-            y: box.y + frameOffset.y,
-            width: box.width,
-            height: box.height,
-          }
-        }
-
-        return {
-          objectId,
-          backendNodeId,
-          sessionId,
-          frameOffset,
-          box,
-          center: {
-            x: Math.round(box.x + box.width / 2),
-            y: Math.round(box.y + box.height / 2),
-          },
-        }
-      },
-      { timeoutMs, intervalMs: 80, description: `element "${target}"` },
-    )
-    if (strictError) throw strictError
-    if ('__strictAbort' in resolved) {
-      throw new Error(`Strict mode violation for "${target}"`)
-    }
-    return resolved
+    return await resolveElement(this.actionabilityDeps, target, timeoutMs, options)
   }
 
   async readElementProperty<T = unknown>(target: string, functionDeclaration: string, timeoutMs = 8_000): Promise<T> {
@@ -589,432 +198,6 @@ export class PageController {
     return await this.readElementProperty<string>(target, STABLE_LOCATOR_FUNCTION, timeoutMs)
   }
 
-  private async scrollChildIframeIntoView(frameId?: string, childSessionId?: string): Promise<void> {
-    const child = childSessionId
-      ? this.session.getChildSessions().find((c) => c.sessionId === childSessionId)
-      : undefined
-    const effectiveFrameId = frameId || child?.targetId
-    if (effectiveFrameId) {
-      try {
-        const owner = await this.session.send<{ backendNodeId?: number }>('DOM.getFrameOwner', {
-          frameId: effectiveFrameId,
-        })
-        if (owner.backendNodeId) {
-          await this.session.send('DOM.scrollIntoViewIfNeeded', { backendNodeId: owner.backendNodeId })
-          return
-        }
-      } catch {
-        // fall through to URL-based iframe lookup
-      }
-    }
-    if (child?.url) {
-      await this.evaluate(`(() => {
-        const targetUrl = ${JSON.stringify(child.url)};
-        for (const f of document.querySelectorAll('iframe')) {
-          const src = f.src || f.getAttribute('src') || '';
-          if (src && (src === targetUrl || targetUrl.startsWith(src) || src.startsWith(targetUrl))) {
-            const r = f.getBoundingClientRect();
-            if (r.top < 0 || r.bottom > window.innerHeight || r.left < 0 || r.right > window.innerWidth) {
-              f.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-            }
-            return true;
-          }
-        }
-        return false;
-      })()`).catch(() => {})
-    }
-  }
-
-  private async getIframeOffset(frameId?: string, childSessionId?: string): Promise<{ x: number; y: number }> {
-    const child = childSessionId
-      ? this.session.getChildSessions().find((c) => c.sessionId === childSessionId)
-      : undefined
-    const effectiveFrameId = frameId || child?.targetId
-    if (effectiveFrameId) {
-      try {
-        const owner = await this.session.send<{ backendNodeId?: number }>('DOM.getFrameOwner', {
-          frameId: effectiveFrameId,
-        })
-        if (owner.backendNodeId) {
-          const box = await this.session.send<{ model?: { content?: number[] } }>('DOM.getBoxModel', {
-            backendNodeId: owner.backendNodeId,
-          })
-          const c = box.model?.content
-          if (c && c.length >= 2) return { x: c[0], y: c[1] }
-        }
-      } catch {
-        // fall through to URL-based iframe rect lookup
-      }
-    }
-
-    if (child?.url) {
-      try {
-        const rect = await this.evaluate<{ x: number; y: number } | null>(`(() => {
-          const targetUrl = ${JSON.stringify(child.url)};
-          for (const f of document.querySelectorAll('iframe')) {
-            const src = f.src || f.getAttribute('src') || '';
-            if (src && (src === targetUrl || targetUrl.startsWith(src) || src.startsWith(targetUrl))) {
-              const r = f.getBoundingClientRect();
-              return { x: r.left, y: r.top };
-            }
-          }
-          return null;
-        })()`)
-        if (rect) return rect
-      } catch {
-        // ignore
-      }
-    }
-    return { x: 0, y: 0 }
-  }
-
-  /**
-   * Verifies pre-click actionability (connected DOM node, position stability, enabled state, and non-occlusion).
-   * Returns a structured outcome so callers can retry cleanly on transient React/Vue re-renders,
-   * animations, loading spinners, or temporarily disabled controls.
-   */
-  private async checkClickActionableOnce(
-    el: ResolvedElement,
-    targetLabel: string,
-  ): Promise<
-    | { ok: true; el: ResolvedElement; underOwnPill: boolean }
-    | { ok: false; retryable: boolean; reason: string; error: Error }
-  > {
-    let current = el
-    let underOwnPill = false
-    // 1. Wait briefly for CSS animations/transitions to settle (max ~220ms per attempt)
-    let stable = false
-    for (let attempt = 0; attempt < 5; attempt++) {
-      await sleep(30)
-      const nextBox = await this.readElementViewportBox(current)
-      if (!nextBox) {
-        return {
-          ok: false,
-          retryable: true,
-          reason: 'detached',
-          error: new Error(`Element "${targetLabel}" detached or hidden during actionability check.`),
-        }
-      }
-      const moved =
-        Math.abs(nextBox.x - current.box.x) > 2 ||
-        Math.abs(nextBox.y - current.box.y) > 2
-      current = {
-        ...current,
-        box: nextBox,
-        center: { x: nextBox.x + nextBox.width / 2, y: nextBox.y + nextBox.height / 2 },
-      }
-      if (!moved) {
-        stable = true
-        break
-      }
-    }
-    if (!stable) {
-      return {
-        ok: false,
-        retryable: true,
-        reason: 'animating',
-        error: new Error(`Element "${targetLabel}" kept moving / animating and did not stabilize.`),
-      }
-    }
-
-    // 2. Check connected, disabled state and hit-test occlusion (handles main frame + same-origin iframes)
-    if (current.sessionId) {
-      // For cross-origin OOPIF elements, still verify connected & enabled inside child session
-      const childCheck = await this.session
-        .send<{ result?: { value?: { ok: boolean; reason?: string } } }>(
-          'Runtime.callFunctionOn',
-          {
-            objectId: current.objectId,
-            returnByValue: true,
-            functionDeclaration: `function() {
-              if (!this.isConnected) return { ok: false, reason: 'detached' };
-              if (this.disabled === true || this.getAttribute?.('aria-disabled') === 'true') return { ok: false, reason: 'disabled' };
-              return { ok: true };
-            }`,
-          },
-          { sessionId: current.sessionId },
-        )
-        .catch(() => null)
-      const cval = childCheck?.result?.value
-      if (!cval) {
-        return {
-          ok: false,
-          retryable: true,
-          reason: 'detached',
-          error: new Error(`Element "${targetLabel}" detached inside cross-origin frame.`),
-        }
-      }
-      if (!cval.ok) {
-        return {
-          ok: false,
-          retryable: true,
-          reason: cval.reason ?? 'disabled',
-          error:
-            cval.reason === 'disabled'
-              ? new Error(`Element "${targetLabel}" is disabled and cannot be clicked.`)
-              : new Error(`Element "${targetLabel}" detached inside cross-origin frame.`),
-        }
-      }
-      return { ok: true, el: current, underOwnPill: false }
-    }
-
-    const offsetX = current.frameOffset?.x ?? 0
-    const offsetY = current.frameOffset?.y ?? 0
-    for (let retry = 0; retry < 2; retry++) {
-      const check = await this.session
-        .send<{
-          result?: {
-            value?: {
-              ok: boolean
-              reason?: string
-              occluder?: string
-              isFixedOrSticky?: boolean
-              occluderBottom?: number
-              underOwnPill?: boolean
-            }
-          }
-        }>('Runtime.callFunctionOn', {
-          objectId: current.objectId,
-          arguments: [{ value: current.center.x - offsetX }, { value: current.center.y - offsetY }],
-          functionDeclaration: `function(cx, cy) {
-            if (!this.isConnected) {
-              return { ok: false, reason: 'detached' };
-            }
-            const doc = this.ownerDocument || document;
-            const win = doc.defaultView || window;
-            if (this.disabled === true || this.getAttribute?.('aria-disabled') === 'true') {
-              return { ok: false, reason: 'disabled' };
-            }
-            const style = win.getComputedStyle(this);
-            if (style.pointerEvents === 'none') {
-              return { ok: false, reason: 'pointer-events-none' };
-            }
-            function deepHit(root, x, y) {
-              let hit = root.elementFromPoint(x, y);
-              while (hit && hit.shadowRoot) {
-                const inner = hit.shadowRoot.elementFromPoint(x, y);
-                if (!inner || inner === hit) break;
-                hit = inner;
-              }
-              return hit;
-            }
-            let hit = deepHit(doc, cx, cy);
-            let hitOwnPill = false;
-            if (hit && hit.id === '__browserpilot_ui_host') {
-              hitOwnPill = true;
-              const prevDisplay = hit.style.display;
-              hit.style.display = 'none';
-              hit = deepHit(doc, cx, cy);
-              const uiHost = doc.getElementById('__browserpilot_ui_host');
-              if (uiHost) uiHost.style.display = prevDisplay;
-            }
-            if (!hit) return { ok: true, underOwnPill: hitOwnPill };
-            if (hit === this || this.contains(hit) || hit.contains(this)) return { ok: true, underOwnPill: hitOwnPill };
-            // Allow clicking associated <label> (both explicit label[for] and implicit wrapping <label>) for form controls
-            if (this.id && hit.closest && hit.closest('label[for="' + CSS.escape(this.id) + '"]')) return { ok: true, underOwnPill: hitOwnPill };
-            const ownLabel = this.closest?.('label');
-            if (ownLabel && (hit === ownLabel || ownLabel.contains(hit))) return { ok: true, underOwnPill: hitOwnPill };
-            // Walk up occluder to detect fixed/sticky header vs modal overlay
-            let cur = hit;
-            let isFixedOrSticky = false;
-            let occluderBottom = 0;
-            while (cur && cur !== doc.body && cur !== doc.documentElement) {
-              const pos = win.getComputedStyle(cur).position;
-              if (pos === 'fixed' || pos === 'sticky') {
-                isFixedOrSticky = true;
-                occluderBottom = cur.getBoundingClientRect().bottom;
-                break;
-              }
-              cur = cur.parentElement;
-            }
-            const tag = hit.tagName?.toLowerCase() || 'element';
-            const cls = typeof hit.className === 'string' && hit.className.trim()
-              ? '.' + hit.className.trim().split(/\\s+/).slice(0, 2).join('.')
-              : '';
-            const id = hit.id ? '#' + hit.id : '';
-            const txt = (hit.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 40);
-            return {
-              ok: false,
-              reason: 'occluded',
-              occluder: '<' + tag + id + cls + '>' + (txt ? ' ("' + txt + '")' : ''),
-              isFixedOrSticky,
-              occluderBottom,
-              underOwnPill: hitOwnPill,
-            };
-          }`,
-          returnByValue: true,
-        })
-        .catch(() => null)
-
-      const val = check?.result?.value
-      if (!val) {
-        return {
-          ok: false,
-          retryable: true,
-          reason: 'detached',
-          error: new Error(`Element "${targetLabel}" became stale during actionability check.`),
-        }
-      }
-      if (val.underOwnPill) underOwnPill = true
-      if (val.ok) return { ok: true, el: current, underOwnPill }
-
-      if (val.reason === 'detached') {
-        return {
-          ok: false,
-          retryable: true,
-          reason: 'detached',
-          error: new Error(`Element "${targetLabel}" detached from DOM before click.`),
-        }
-      }
-      if (val.reason === 'disabled') {
-        return {
-          ok: false,
-          retryable: true,
-          reason: 'disabled',
-          error: new Error(`Element "${targetLabel}" is disabled and cannot be clicked.`),
-        }
-      }
-      if (val.reason === 'pointer-events-none') {
-        return {
-          ok: false,
-          retryable: true,
-          reason: 'pointer-events-none',
-          error: new Error(`Element "${targetLabel}" has pointer-events: none (pass force: true to override).`),
-        }
-      }
-      if (val.reason === 'occluded' && val.isFixedOrSticky && retry === 0) {
-        // Re-center in viewport (and nudge below sticky top bars if needed)
-        await this.session
-          .send('Runtime.callFunctionOn', {
-            objectId: current.objectId,
-            arguments: [{ value: val.occluderBottom ?? 0 }],
-            functionDeclaration: `function(stickyBottom) {
-              this.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-              const r = this.getBoundingClientRect();
-              if (stickyBottom > 0 && r.top < stickyBottom + 8) {
-                const win = this.ownerDocument?.defaultView || window;
-                win.scrollBy(0, -(stickyBottom - r.top + 24));
-              }
-            }`,
-          })
-          .catch(() => {})
-        await sleep(50)
-        const recentered = await this.readElementViewportBox(current)
-        if (recentered) {
-          current = {
-            ...current,
-            box: recentered,
-            center: { x: recentered.x + recentered.width / 2, y: recentered.y + recentered.height / 2 },
-          }
-          continue
-        }
-      }
-      if (val.reason === 'occluded') {
-        return {
-          ok: false,
-          retryable: true,
-          reason: 'occluded',
-          error: new Error(
-            `Element "${targetLabel}" is occluded at (${Math.round(current.center.x)}, ${Math.round(current.center.y)}) by ${val.occluder ?? 'another element'}. Dismiss the overlay/banner first or pass force: true.`,
-          ),
-        }
-      }
-    }
-    return { ok: true, el: current, underOwnPill }
-  }
-
-  /**
-   * Playwright-grade Action Auto-Waiting Retry Loop:
-   * continuously re-resolves the target locator and verifies actionability across transient
-   * React/Vue re-renders, DOM detachments, CSS animations, loading spinners, and brief disabled states.
-   */
-  private async resolveActionableForClick(
-    target: string,
-    options: { timeoutMs?: number; force?: boolean; strict?: boolean } = {},
-  ): Promise<{ el: ResolvedElement; underOwnPill: boolean }> {
-    const resolveBudget = options.timeoutMs ?? 8_000
-    const actionBudget = options.timeoutMs ?? 1_500
-    const start = Date.now()
-    let actionDeadline: number | null = null
-    let lastError: Error | null = null
-
-    while (true) {
-      const remainingResolve = Math.max(100, resolveBudget - (Date.now() - start))
-      const el = await this.resolveElement(target, remainingResolve, { strict: options.strict })
-      if (options.force) {
-        return { el, underOwnPill: false }
-      }
-      if (actionDeadline === null) {
-        actionDeadline = Date.now() + actionBudget
-      }
-
-      const check = await this.checkClickActionableOnce(el, target)
-      if (check.ok) {
-        return { el: check.el, underOwnPill: check.underOwnPill }
-      }
-      lastError = check.error
-      if (!check.retryable || Date.now() >= actionDeadline) {
-        throw lastError
-      }
-      // Detached/stale nodes re-resolve immediately; disabled/occluded/animating poll cleanly
-      await sleep(check.reason === 'detached' ? 35 : 80)
-    }
-  }
-
-  private async readElementViewportBox(el: ResolvedElement): Promise<BoundingBox | null> {
-    try {
-      const res = await this.session.send<{
-        result?: { value?: { x: number; y: number; width: number; height: number; offsetX: number; offsetY: number; connected: boolean } }
-      }>(
-        'Runtime.callFunctionOn',
-        {
-          objectId: el.objectId,
-          functionDeclaration: `function() {
-            if (!this.isConnected) return { x: 0, y: 0, width: 0, height: 0, offsetX: 0, offsetY: 0, connected: false };
-            const doc = this.ownerDocument || document;
-            let r = this.getBoundingClientRect();
-            const tag = (this.tagName || '').toLowerCase();
-            const inputType = (this.type || '').toLowerCase();
-            if (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio') && (!r || r.width <= 2 || r.height <= 2)) {
-              const lbl = this.closest?.('label') || (this.id ? doc.querySelector('label[for="' + CSS.escape(this.id) + '"]') : null);
-              if (lbl) {
-                const lr = lbl.getBoundingClientRect();
-                if (lr && lr.width > 2 && lr.height > 2) r = lr;
-              }
-            }
-            let ox = 0, oy = 0;
-            let win = doc.defaultView;
-            while (win && win !== win.parent) {
-              try {
-                const fe = win.frameElement;
-                if (!fe) break;
-                const fr = fe.getBoundingClientRect();
-                ox += fr.left;
-                oy += fr.top;
-                win = win.parent;
-              } catch { break; }
-            }
-            return { x: r.left, y: r.top, width: r.width, height: r.height, offsetX: ox, offsetY: oy, connected: true };
-          }`,
-          returnByValue: true,
-        },
-        { sessionId: el.sessionId },
-      )
-      const b = res.result?.value
-      if (!b || !b.connected || b.width <= 0 || b.height <= 0) return null
-      const ox = el.sessionId ? (el.frameOffset?.x ?? 0) : b.offsetX || (el.frameOffset?.x ?? 0)
-      const oy = el.sessionId ? (el.frameOffset?.y ?? 0) : b.offsetY || (el.frameOffset?.y ?? 0)
-      return {
-        x: b.x + ox,
-        y: b.y + oy,
-        width: b.width,
-        height: b.height,
-      }
-    } catch {
-      return null
-    }
-  }
-
   async click(targetOrCoords: string | { x: number; y: number }, options: ClickOptions = {}): Promise<void> {
     const button = options.button ?? 'left'
     const clickCount = options.clickCount ?? 1
@@ -1024,7 +207,7 @@ export class PageController {
     let y: number
     let underOwnPill = false
     if (typeof targetOrCoords === 'string') {
-      const checked = await this.resolveActionableForClick(targetOrCoords, {
+      const checked = await resolveActionableForClick(this.actionabilityDeps, targetOrCoords, {
         timeoutMs: options.timeoutMs,
         force: options.force,
         strict: options.strict,
@@ -1080,100 +263,24 @@ export class PageController {
     await this.mouseMove(x, y)
   }
 
-  async mouseMove(x: number, y: number, options: { steps?: number } = {}): Promise<void> {
-    const steps = Math.max(1, options.steps ?? 1)
-    const startX = this.lastMousePos.x
-    const startY = this.lastMousePos.y
-    const heldButton: MouseButton | 'none' =
-      this.pressedButtonsMask & 1
-        ? 'left'
-        : this.pressedButtonsMask & 2
-          ? 'right'
-          : this.pressedButtonsMask & 4
-            ? 'middle'
-            : 'none'
-    for (let i = 1; i <= steps; i++) {
-      const t = i / steps
-      // Ease-out quad glide for natural pointer feel
-      const eased = steps > 1 ? 1 - Math.pow(1 - t, 2) : 1
-      const cx = startX + (x - startX) * eased
-      const cy = startY + (y - startY) * eased
-      await this.session.send('Input.dispatchMouseEvent', {
-        type: 'mouseMoved',
-        x: cx,
-        y: cy,
-        button: heldButton,
-        buttons: this.pressedButtonsMask,
-        modifiers: this.activeModifiersMask,
-      })
-      if (steps > 1) {
-        await this.session.transport.moveGhostCursor?.(this.tabId, cx, cy, this.pressedButtonsMask > 0).catch(() => {})
-        await sleep(8)
-      }
-    }
-    this.lastMousePos = { x, y }
-    if (steps === 1) {
-      await this.session.transport.moveGhostCursor?.(this.tabId, x, y, this.pressedButtonsMask > 0).catch(() => {})
-    }
+  mouseMove(x: number, y: number, options: { steps?: number } = {}): Promise<void> {
+    return this.input.mouseMove(x, y, options)
   }
 
-  async mouseDown(x: number, y: number, opts: { button?: MouseButton; clickCount?: number; modifiers?: number } = {}): Promise<void> {
-    const button = opts.button ?? 'left'
-    this.pressedButtonsMask |= buttonBitmask(button)
-    await this.session.send('Input.dispatchMouseEvent', {
-      type: 'mousePressed',
-      x,
-      y,
-      button,
-      buttons: this.pressedButtonsMask,
-      clickCount: opts.clickCount ?? 1,
-      modifiers: (opts.modifiers ?? 0) | this.activeModifiersMask,
-    })
-    this.lastMousePos = { x, y }
-    await this.session.transport.moveGhostCursor?.(this.tabId, x, y, true).catch(() => {})
+  mouseDown(x: number, y: number, opts: { button?: MouseButton; clickCount?: number; modifiers?: number } = {}): Promise<void> {
+    return this.input.mouseDown(x, y, opts)
   }
 
-  async mouseUp(x: number, y: number, opts: { button?: MouseButton; clickCount?: number; modifiers?: number } = {}): Promise<void> {
-    const button = opts.button ?? 'left'
-    this.pressedButtonsMask &= ~buttonBitmask(button)
-    await this.session.send('Input.dispatchMouseEvent', {
-      type: 'mouseReleased',
-      x,
-      y,
-      button,
-      buttons: this.pressedButtonsMask,
-      clickCount: opts.clickCount ?? 1,
-      modifiers: (opts.modifiers ?? 0) | this.activeModifiersMask,
-    })
-    this.lastMousePos = { x, y }
-    await this.session.transport.moveGhostCursor?.(this.tabId, x, y, false).catch(() => {})
+  mouseUp(x: number, y: number, opts: { button?: MouseButton; clickCount?: number; modifiers?: number } = {}): Promise<void> {
+    return this.input.mouseUp(x, y, opts)
   }
 
-  async mouseClick(
-    x: number,
-    y: number,
-    opts: { button?: MouseButton; clickCount?: number; modifiers?: number } = {},
-  ): Promise<void> {
-    const button = opts.button ?? 'left'
-    const clicks = opts.clickCount ?? 1
-    const dist = Math.hypot(x - this.lastMousePos.x, y - this.lastMousePos.y)
-    await this.mouseMove(x, y, { steps: dist > 40 ? 4 : 1 })
-    for (let c = 1; c <= clicks; c++) {
-      await this.mouseDown(x, y, { button, clickCount: c, modifiers: opts.modifiers })
-      await this.mouseUp(x, y, { button, clickCount: c, modifiers: opts.modifiers })
-    }
+  mouseClick(x: number, y: number, opts: { button?: MouseButton; clickCount?: number; modifiers?: number } = {}): Promise<void> {
+    return this.input.mouseClick(x, y, opts)
   }
 
-  async wheel(deltaX: number, deltaY: number, pos?: { x: number; y: number }): Promise<void> {
-    const x = pos?.x ?? this.lastMousePos.x ?? 400
-    const y = pos?.y ?? this.lastMousePos.y ?? 300
-    await this.session.send('Input.dispatchMouseEvent', {
-      type: 'mouseWheel',
-      x,
-      y,
-      deltaX,
-      deltaY,
-    })
+  wheel(deltaX: number, deltaY: number, pos?: { x: number; y: number }): Promise<void> {
+    return this.input.wheel(deltaX, deltaY, pos)
   }
 
   async drag(
@@ -1189,28 +296,26 @@ export class PageController {
     await this.mouseUp(end.x, end.y)
   }
 
-  /**
-   * Executes a continuous held-mouse gesture through multiple waypoints (for Canvas drawing,
-   * annotation widgets, map panning, or non-linear slider drags).
-   */
-  async mouseStroke(
+  mouseStroke(
     points: Array<{ x: number; y: number }>,
     options: { button?: MouseButton; stepsPerSegment?: number; delayMs?: number } = {},
   ): Promise<void> {
-    if (points.length < 2) {
-      throw new Error('mouseStroke requires at least 2 points')
-    }
-    const button = options.button ?? 'left'
-    const steps = Math.max(1, options.stepsPerSegment ?? 6)
-    const start = points[0]
-    await this.mouseMove(start.x, start.y)
-    await this.mouseDown(start.x, start.y, { button })
-    for (let i = 1; i < points.length; i++) {
-      await this.mouseMove(points[i].x, points[i].y, { steps })
-      if (options.delayMs) await sleep(options.delayMs)
-    }
-    const end = points[points.length - 1]
-    await this.mouseUp(end.x, end.y, { button })
+    return this.input.mouseStroke(points, options)
+  }
+
+  pressKey(
+    combo: string,
+    options: { modifiers?: KeyModifier[]; action?: 'press' | 'down' | 'up'; repeat?: number } = {},
+  ): Promise<void> {
+    return this.input.pressKey(combo, options)
+  }
+
+  keyDown(keyName: string, modifiers = 0): Promise<void> {
+    return this.input.keyDown(keyName, modifiers)
+  }
+
+  keyUp(keyName: string, modifiers = 0): Promise<void> {
+    return this.input.keyUp(keyName, modifiers)
   }
 
   async scroll(options: {
@@ -1259,7 +364,6 @@ export class PageController {
             container: 'window',
           };
         }
-        // SPA layout where an inner container (main/section/div) owns scroll
         let best = null;
         let bestArea = 0;
         for (const el of document.querySelectorAll('main, [role="main"], section, article, div')) {
@@ -1297,7 +401,6 @@ export class PageController {
     }
 
     const before = await probeMainScrollContainer()
-
     if (options.target) {
       const el = await this.resolveElement(options.target)
       if (dx !== 0 || dy !== 0) {
@@ -1323,11 +426,6 @@ export class PageController {
     }
   }
 
-  /**
-   * Focuses element, clears existing value, and inserts text via trusted CDP Input.insertText.
-   * Includes auto-waiting retry for detached/re-rendered/transiently disabled inputs and
-   * safe contenteditable handling (never presses Backspace on empty rich-text blocks).
-   */
   async fill(target: string, value: string, options: FillOptions = {}): Promise<void> {
     const resolveBudget = options.timeoutMs ?? 8_000
     const actionBudget = options.timeoutMs ?? 1_500
@@ -1383,94 +481,62 @@ export class PageController {
       .catch(() => {})
     await this.session.transport.highlightElement?.(this.tabId, el.box, `fill ${target}`).catch(() => {})
 
-    // Click to focus natively
     await this.mouseClick(el.center.x, el.center.y)
 
-    // Re-check node after click (React/Vue frameworks may re-render/replace input on focus)
+    const selectAllFn = `function() {
+      if (!this.isConnected) return { hadContent: false, isContentEditable: false, connected: false };
+      const doc = this.ownerDocument || document;
+      const win = doc.defaultView || window;
+      if (typeof this.focus === 'function') this.focus();
+      const isCE = Boolean(this.isContentEditable);
+      let hadContent = false;
+      if (${options.clear !== false}) {
+        if (!isCE && typeof this.value === 'string') {
+          hadContent = this.value.length > 0;
+          if (hadContent) {
+            try {
+              if (typeof this.select === 'function') this.select();
+              if (typeof this.setSelectionRange === 'function') {
+                this.setSelectionRange(0, this.value.length);
+              }
+            } catch {}
+          }
+        } else if (isCE) {
+          const rawText = (this.innerText ?? this.textContent ?? '').replace(/\\u200B/g, '');
+          hadContent = rawText.replace(/\\n+$/, '').length > 0;
+          if (hadContent) {
+            const range = doc.createRange();
+            range.selectNodeContents(this);
+            const sel = win.getSelection();
+            sel?.removeAllRanges();
+            sel?.addRange(range);
+          }
+        }
+      }
+      return { hadContent, isContentEditable: isCE, connected: true };
+    }`
+
     const selectRes = await this.session
       .send<{ result?: { value?: { hadContent: boolean; isContentEditable: boolean; connected: boolean } } }>(
         'Runtime.callFunctionOn',
-        {
-          objectId: el.objectId,
-          returnByValue: true,
-          functionDeclaration: `function() {
-            if (!this.isConnected) return { hadContent: false, isContentEditable: false, connected: false };
-            const doc = this.ownerDocument || document;
-            const win = doc.defaultView || window;
-            if (typeof this.focus === 'function') this.focus();
-            const isCE = Boolean(this.isContentEditable);
-            let hadContent = false;
-            if (${options.clear !== false}) {
-              if (!isCE && typeof this.value === 'string') {
-                hadContent = this.value.length > 0;
-                if (hadContent) {
-                  try {
-                    if (typeof this.select === 'function') this.select();
-                    if (typeof this.setSelectionRange === 'function') {
-                      this.setSelectionRange(0, this.value.length);
-                    }
-                  } catch {}
-                }
-              } else if (isCE) {
-                const rawText = (this.innerText ?? this.textContent ?? '').replace(/\\u200B/g, '');
-                hadContent = rawText.replace(/\\n+$/, '').length > 0;
-                if (hadContent) {
-                  const range = doc.createRange();
-                  range.selectNodeContents(this);
-                  const sel = win.getSelection();
-                  sel?.removeAllRanges();
-                  sel?.addRange(range);
-                }
-              }
-            }
-            return { hadContent, isContentEditable: isCE, connected: true };
-          }`,
-        },
+        { objectId: el.objectId, returnByValue: true, functionDeclaration: selectAllFn },
         { sessionId: el.sessionId },
       )
       .catch(() => null)
 
     let selState = selectRes?.result?.value
     if (!selState || !selState.connected) {
-      // Input got re-mounted on focus! Re-resolve once cleanly and re-focus
       el = await this.resolveElement(target, 2_000, { strict: options.strict })
       const retrySel = await this.session
         .send<{ result?: { value?: { hadContent: boolean; isContentEditable: boolean; connected: boolean } } }>(
           'Runtime.callFunctionOn',
-          {
-            objectId: el.objectId,
-            returnByValue: true,
-            functionDeclaration: `function() {
-              const doc = this.ownerDocument || document;
-              const win = doc.defaultView || window;
-              if (typeof this.focus === 'function') this.focus();
-              const isCE = Boolean(this.isContentEditable);
-              let hadContent = false;
-              if (${options.clear !== false}) {
-                if (!isCE && typeof this.value === 'string') {
-                  hadContent = this.value.length > 0;
-                  if (hadContent && typeof this.select === 'function') this.select();
-                } else if (isCE) {
-                  hadContent = (this.innerText ?? this.textContent ?? '').replace(/\\u200B/g, '').replace(/\\n+$/, '').length > 0;
-                  if (hadContent) {
-                    const range = doc.createRange();
-                    range.selectNodeContents(this);
-                    const sel = win.getSelection();
-                    sel?.removeAllRanges();
-                    sel?.addRange(range);
-                  }
-                }
-              }
-              return { hadContent, isContentEditable: isCE, connected: true };
-            }`,
-          },
+          { objectId: el.objectId, returnByValue: true, functionDeclaration: selectAllFn },
           { sessionId: el.sessionId },
         )
         .catch(() => null)
       selState = retrySel?.result?.value ?? { hadContent: false, isContentEditable: false, connected: true }
     }
 
-    // Only send Backspace when there is actual content selected (prevents deleting empty ProseMirror/Notion/Feishu blocks!)
     if (options.clear !== false && selState.hadContent) {
       await this.pressKey('Backspace')
     }
@@ -1479,7 +545,6 @@ export class PageController {
       await this.session.send('Input.insertText', { text: value })
     }
 
-    // Verify value actually applied on standard inputs (fallback for tricky controlled widgets or date/color/number inputs)
     await this.session
       .send(
         'Runtime.callFunctionOn',
@@ -1505,9 +570,7 @@ export class PageController {
   }
 
   async type(target: string | null, text: string, options: { delayMs?: number } = {}): Promise<void> {
-    if (target) {
-      await this.click(target)
-    }
+    if (target) await this.click(target)
     const delayMs = options.delayMs ?? 0
     if (delayMs <= 0) {
       await this.session.send('Input.insertText', { text })
@@ -1519,86 +582,6 @@ export class PageController {
     }
   }
 
-  async pressKey(
-    combo: string,
-    options: { modifiers?: KeyModifier[]; action?: 'press' | 'down' | 'up'; repeat?: number } = {},
-  ): Promise<void> {
-    const action = options.action ?? 'press'
-    const repeat = Math.max(1, Math.min(50, options.repeat ?? 1))
-
-    if (action === 'down') {
-      const def = resolveKeyDef(combo.trim())
-      const keyMod =
-        def.key === 'Alt' || def.key === 'Control' || def.key === 'Meta' || def.key === 'Shift'
-          ? modifierBitmask([def.key])
-          : 0
-      this.activeModifiersMask |= keyMod
-      const mask = modifierBitmask(options.modifiers) | this.activeModifiersMask
-      await this.keyDown(def.key, mask)
-      return
-    }
-    if (action === 'up') {
-      const def = resolveKeyDef(combo.trim())
-      const keyMod =
-        def.key === 'Alt' || def.key === 'Control' || def.key === 'Meta' || def.key === 'Shift'
-          ? modifierBitmask([def.key])
-          : 0
-      this.activeModifiersMask &= ~keyMod
-      const mask = modifierBitmask(options.modifiers) | this.activeModifiersMask
-      await this.keyUp(def.key, mask)
-      return
-    }
-
-    const parts = combo.split('+').map((s) => s.trim())
-    const keyPart = parts.pop()!
-    const mods: KeyModifier[] = [...(options.modifiers ?? [])]
-    for (const p of parts) {
-      const lower = p.toLowerCase()
-      if (lower === 'cmd' || lower === 'meta' || lower === 'command') mods.push('Meta')
-      else if (lower === 'ctrl' || lower === 'control') mods.push('Control')
-      else if (lower === 'alt' || lower === 'option') mods.push('Alt')
-      else if (lower === 'shift') mods.push('Shift')
-    }
-
-    const mask = modifierBitmask(mods)
-    const def = resolveKeyDef(keyPart)
-    const commands = resolveEditingCommands(def.key, mods)
-    const hasAccel = mods.includes('Meta') || mods.includes('Control')
-
-    const activeMods: KeyModifier[] = []
-    for (const m of mods) {
-      activeMods.push(m)
-      await this.keyDown(m, modifierBitmask(activeMods))
-    }
-    for (let r = 0; r < repeat; r++) {
-      await this.session.send('Input.dispatchKeyEvent', {
-        type: def.text && !hasAccel ? 'keyDown' : 'rawKeyDown',
-        key: def.key,
-        code: def.code,
-        windowsVirtualKeyCode: def.keyCode,
-        text: hasAccel ? undefined : def.text,
-        unmodifiedText: def.text,
-        modifiers: mask,
-        ...(commands.length ? { commands } : {}),
-      })
-      await this.session.send('Input.dispatchKeyEvent', {
-        type: 'keyUp',
-        key: def.key,
-        code: def.code,
-        windowsVirtualKeyCode: def.keyCode,
-        modifiers: mask,
-      })
-    }
-    for (let i = mods.length - 1; i >= 0; i--) {
-      activeMods.pop()
-      await this.keyUp(mods[i], modifierBitmask(activeMods))
-    }
-  }
-
-  /**
-   * Idempotently ensures a checkbox, radio, or ARIA switch is checked.
-   * Returns true if a click was performed, false if it was already checked.
-   */
   async check(target: string, options: { timeoutMs?: number; force?: boolean } = {}): Promise<boolean> {
     const el = await this.resolveElement(target, options.timeoutMs)
     const res = await this.session
@@ -1617,10 +600,6 @@ export class PageController {
     return true
   }
 
-  /**
-   * Idempotently ensures a checkbox or ARIA switch is unchecked.
-   * Returns true if a click was performed, false if it was already unchecked.
-   */
   async uncheck(target: string, options: { timeoutMs?: number; force?: boolean } = {}): Promise<boolean> {
     const el = await this.resolveElement(target, options.timeoutMs)
     const res = await this.session
@@ -1639,9 +618,6 @@ export class PageController {
     return true
   }
 
-  /**
-   * Sets a range input / slider value and fires React/Vue-compatible input & change events.
-   */
   async setRangeValue(target: string, value: number | string, timeoutMs?: number): Promise<string> {
     const el = await this.resolveElement(target, timeoutMs)
     const strVal = String(value)
@@ -1672,9 +648,6 @@ export class PageController {
     return res.result?.value ?? strVal
   }
 
-  /**
-   * Fills multiple form fields (text, select/multi-select, checkbox, radio, range, file) in a single structured call.
-   */
   async fillForm(fields: FormFieldInput[]): Promise<FormFillResult> {
     const filled: FormFillResult['filled'] = []
     for (const field of fields) {
@@ -1731,170 +704,13 @@ export class PageController {
     return { filled }
   }
 
-  /**
-   * Displays an interactive in-page Human Handoff card ("Your Turn") and pauses until
-   * the user clicks "Done, Continue AI" or "Cancel" inside the browser tab.
-   * Works identically in both Chrome Extension mode and Direct CDP mode.
-   */
-  async requestHumanHandoff(
-    message: string,
-    options: { timeoutMs?: number } = {},
-  ): Promise<HumanHandoffResult> {
-    const timeoutMs = options.timeoutMs ?? 300_000
-    const start = Date.now()
-    const bindingName = '__browserpilotHandoffDone'
-
-    await this.session.ensureBaseDomains()
-    await this.session.send('Runtime.addBinding', { name: bindingName }).catch(() => {})
-    await this.session.transport
-      .setControlBanner?.(this.tabId, { active: true, status: 'Waiting for you...', mode: 'handoff' })
-      .catch(() => {})
-
-    let resolveAction!: (action: 'resume' | 'cancel') => void
-    const decisionPromise = new Promise<'resume' | 'cancel'>((resolve) => {
-      resolveAction = resolve
-    })
-
-    const offBinding = this.session.on('Runtime.bindingCalled', (params) => {
-      if (params.name !== bindingName) return
-      const payload = String(params.payload ?? '')
-      resolveAction(payload === 'cancel' ? 'cancel' : 'resume')
-    })
-
-    const injectCard = async () => {
-      await this.evaluate(`(() => {
-        const old = document.getElementById('__browserpilot_handoff_host');
-        if (old) old.remove();
-        const host = document.createElement('div');
-        host.id = '__browserpilot_handoff_host';
-        host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;';
-        const shadow = host.attachShadow({ mode: 'closed' });
-        const style = document.createElement('style');
-        style.textContent = \`
-          .bp-edge {
-            position: fixed; inset: 0; pointer-events: none;
-            box-shadow: inset 0 0 0 3px rgba(245, 158, 11, 0.72), inset 0 0 26px rgba(245, 158, 11, 0.22);
-          }
-          .bp-card {
-            position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-            pointer-events: auto;
-            display: flex; align-items: center; gap: 14px; max-width: 560px;
-            background: rgba(15, 23, 42, 0.94); color: #f8fafc;
-            border: 1px solid rgba(251, 191, 36, 0.55);
-            backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-            border-radius: 14px; padding: 12px 16px;
-            box-shadow: 0 14px 36px rgba(2, 6, 23, 0.45);
-            font: 500 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-          }
-          .bp-dot {
-            width: 10px; height: 10px; border-radius: 999px; flex: none;
-            background: #fbbf24; box-shadow: 0 0 10px #f59e0b;
-          }
-          .bp-msg { flex: 1; color: #f1f5f9; }
-          .bp-title { font-weight: 700; font-size: 12px; color: #fcd34d; margin-bottom: 2px; }
-          .bp-actions { display: flex; gap: 8px; flex: none; }
-          button {
-            cursor: pointer; border-radius: 8px; border: 1px solid transparent;
-            padding: 7px 12px; font: 600 12px/1 -apple-system, BlinkMacSystemFont, sans-serif;
-          }
-          .bp-resume { background: linear-gradient(135deg, #2dd4bf, #06b6d4); color: #042f2e; }
-          .bp-resume:hover { filter: brightness(1.06); }
-          .bp-cancel { background: rgba(148, 163, 184, 0.16); color: #cbd5e1; border-color: rgba(148, 163, 184, 0.3); }
-          .bp-cancel:hover { background: rgba(148, 163, 184, 0.28); }
-        \`;
-        shadow.appendChild(style);
-        const edge = document.createElement('div');
-        edge.className = 'bp-edge';
-        const card = document.createElement('div');
-        card.className = 'bp-card';
-        const dot = document.createElement('div');
-        dot.className = 'bp-dot';
-        const msgWrap = document.createElement('div');
-        msgWrap.className = 'bp-msg';
-        const title = document.createElement('div');
-        title.className = 'bp-title';
-        title.textContent = 'BrowserPilot · Your Turn';
-        const body = document.createElement('div');
-        body.textContent = ${JSON.stringify(message)};
-        msgWrap.append(title, body);
-        const actions = document.createElement('div');
-        actions.className = 'bp-actions';
-        const btnResume = document.createElement('button');
-        btnResume.className = 'bp-resume';
-        btnResume.textContent = 'Done, Continue AI';
-        btnResume.onclick = () => { globalThis.${bindingName}?.('resume'); host.remove(); };
-        const btnCancel = document.createElement('button');
-        btnCancel.className = 'bp-cancel';
-        btnCancel.textContent = 'Cancel';
-        btnCancel.onclick = () => { globalThis.${bindingName}?.('cancel'); host.remove(); };
-        actions.append(btnResume, btnCancel);
-        card.append(dot, msgWrap, actions);
-        shadow.append(edge, card);
-        (document.documentElement || document.body).appendChild(host);
-      })()`).catch(() => {})
-    }
-
-    await injectCard()
-    // Re-inject card automatically if the user navigates to another page during manual handoff
-    const offLoad = this.session.on('Page.loadEventFired', () => {
-      void injectCard()
-    })
-
-    let timer: ReturnType<typeof setTimeout> | null = null
-    try {
-      const outcome = await Promise.race([
-        decisionPromise,
-        new Promise<'timeout'>((resolve) => {
-          timer = setTimeout(() => resolve('timeout'), timeoutMs)
-        }),
-      ])
-      const meta = await this.getUrlAndTitle().catch(() => ({ url: '', title: '' }))
-      return {
-        resumed: outcome === 'resume',
-        cancelled: outcome === 'cancel',
-        timedOut: outcome === 'timeout',
-        elapsedMs: Date.now() - start,
-        url: meta.url,
-        title: meta.title,
-      }
-    } finally {
-      if (timer) clearTimeout(timer)
-      offBinding()
-      offLoad()
-      await this.evaluate(`document.getElementById('__browserpilot_handoff_host')?.remove()`).catch(() => {})
-      await this.session.transport
-        .setControlBanner?.(this.tabId, { active: true, status: 'Active', mode: 'working' })
-        .catch(() => {})
-    }
-  }
-
-  async keyDown(keyName: string, modifiers = 0): Promise<void> {
-    const def = resolveKeyDef(keyName)
-    await this.session.send('Input.dispatchKeyEvent', {
-      type: def.text ? 'keyDown' : 'rawKeyDown',
-      key: def.key,
-      code: def.code,
-      windowsVirtualKeyCode: def.keyCode,
-      text: def.text,
-      modifiers,
-    })
-  }
-
-  async keyUp(keyName: string, modifiers = 0): Promise<void> {
-    const def = resolveKeyDef(keyName)
-    await this.session.send('Input.dispatchKeyEvent', {
-      type: 'keyUp',
-      key: def.key,
-      code: def.code,
-      windowsVirtualKeyCode: def.keyCode,
-      modifiers,
-    })
-  }
-
   async selectOption(target: string, valueOrLabels: string | string[]): Promise<string[]> {
     const el = await this.resolveElement(target)
     const wanted = Array.isArray(valueOrLabels) ? valueOrLabels : [valueOrLabels]
-    const res = await this.session.send<{ result?: { value?: string[] }; exceptionDetails?: { exception?: { description?: string }; text?: string } }>(
+    const res = await this.session.send<{
+      result?: { value?: string[] }
+      exceptionDetails?: { exception?: { description?: string }; text?: string }
+    }>(
       'Runtime.callFunctionOn',
       {
         objectId: el.objectId,
@@ -1926,10 +742,10 @@ export class PageController {
     return res.result?.value ?? wanted
   }
 
-  /**
-   * Intercepts native OS file chooser dialogs via CDP `Page.setInterceptFileChooserDialog`
-   * (essential for React Dropzone / Notion / Feishu buttons that dynamically create detached `<input type="file">`).
-   */
+  // ============================================================================
+  // File Chooser & Uploads
+  // ============================================================================
+
   async waitForFileChooser(options: WaitForFileChooserOptions = {}): Promise<FileChooserHandle> {
     await this.session.ensureBaseDomains()
     const timeoutMs = options.timeoutMs ?? 15_000
@@ -1943,16 +759,10 @@ export class PageController {
       await this.session.send('Page.setInterceptFileChooserDialog', { enabled: false }).catch(() => {})
     }
 
-    const chooserPromise = this.session.once(
-      'Page.fileChooserOpened',
-      undefined,
-      timeoutMs,
-    )
+    const chooserPromise = this.session.once('Page.fileChooserOpened', undefined, timeoutMs)
 
     try {
-      if (options.action) {
-        await options.action()
-      }
+      if (options.action) await options.action()
       const ev = await chooserPromise
       const frameId = String(ev.params.frameId ?? '')
       const mode = String(ev.params.mode ?? 'selectSingle')
@@ -1962,7 +772,6 @@ export class PageController {
         throw new Error('File chooser opened without a valid backendNodeId')
       }
 
-      // Resolve child session if file chooser opened inside a cross-origin OOPIF
       const childSessionId =
         ev.sessionId ??
         this.session.getChildSessions().find((c) => c.targetId === frameId)?.sessionId
@@ -1998,11 +807,6 @@ export class PageController {
     }
   }
 
-  /**
-   * Uploads one or more local files to either:
-   * - a direct `<input type="file">` element (even if hidden), OR
-   * - any trigger button / dropzone that dynamically spawns a file chooser on click!
-   */
   async uploadFiles(target: string, filePaths: string[]): Promise<void> {
     const el = await this.resolveElement(target, undefined, { allowHidden: true })
     const meta = await this.session
@@ -2027,20 +831,46 @@ export class PageController {
       const absolutePaths = filePaths.map((p) => path.resolve(p))
       await this.session.send(
         'DOM.setFileInputFiles',
-        {
-          backendNodeId: el.backendNodeId,
-          files: absolutePaths,
-        },
+        { backendNodeId: el.backendNodeId, files: absolutePaths },
         { sessionId: el.sessionId },
       )
       return
     }
 
-    // Smart fallback: target is a custom Upload button / dropzone that triggers a dynamic file chooser on click!
     await this.waitForFileChooser({
       action: () => this.click(target),
       files: filePaths,
     })
+  }
+
+  // ============================================================================
+  // Human Handoff, Capture, PDF & Evaluation
+  // ============================================================================
+
+  requestHumanHandoff(message: string, options: { timeoutMs?: number } = {}): Promise<HumanHandoffResult> {
+    return requestHumanHandoff(
+      {
+        session: this.session,
+        evaluate: <T = unknown>(expr: string) => this.evaluate<T>(expr),
+        getUrlAndTitle: () => this.getUrlAndTitle(),
+      },
+      message,
+      options,
+    )
+  }
+
+  printToPDF(options: PdfOptions = {}): Promise<{ base64: string; path?: string; sizeBytes: number }> {
+    return exportPageToPDF(
+      { session: this.session, evaluate: <T = unknown>(expr: string) => this.evaluate<T>(expr) },
+      options,
+    )
+  }
+
+  screenshot(options: ScreenshotOptions = {}) {
+    return capturePageScreenshot(
+      { session: this.session, evaluate: <T = unknown>(expr: string) => this.evaluate<T>(expr) },
+      options,
+    )
   }
 
   async evaluate<T = unknown>(expression: string, options: { frame?: string } = {}): Promise<T> {
@@ -2071,9 +901,10 @@ export class PageController {
     return res.result?.value as T
   }
 
-  /**
-   * Reads text (and optional HTML) from the browser clipboard after granting clipboardReadWrite permission.
-   */
+  // ============================================================================
+  // Clipboard, Init Scripts, Permissions, Emulation, Cookies & Storage
+  // ============================================================================
+
   async readClipboard(): Promise<{ text: string; html?: string }> {
     await this.grantPermissions(['clipboardReadWrite']).catch(() => {})
     return await this.evaluate<{ text: string; html?: string }>(`(async () => {
@@ -2083,27 +914,19 @@ export class PageController {
           let text = '';
           let html;
           for (const item of items) {
-            if (item.types.includes('text/plain')) {
-              text = await (await item.getType('text/plain')).text();
-            }
-            if (item.types.includes('text/html')) {
-              html = await (await item.getType('text/html')).text();
-            }
+            if (item.types.includes('text/plain')) text = await (await item.getType('text/plain')).text();
+            if (item.types.includes('text/html')) html = await (await item.getType('text/html')).text();
           }
           if (text || html) return html ? { text, html } : { text };
         } catch {}
       }
       if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
-        const text = await navigator.clipboard.readText();
-        return { text };
+        return { text: await navigator.clipboard.readText() };
       }
       throw new Error('Clipboard API unavailable on this origin (requires HTTPS or localhost)');
     })()`)
   }
 
-  /**
-   * Writes plain text (and optional rich HTML) to the browser clipboard so agents can paste via Cmd+V / Ctrl+V.
-   */
   async writeClipboard(text: string, html?: string): Promise<void> {
     await this.grantPermissions(['clipboardReadWrite', 'clipboardSanitizedWrite']).catch(() => {})
     await this.evaluate(`(async () => {
@@ -2125,7 +948,6 @@ export class PageController {
           return true;
         } catch {}
       }
-      // Fallback via hidden textarea + execCommand('copy')
       const ta = document.createElement('textarea');
       ta.value = plain;
       ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
@@ -2137,9 +959,6 @@ export class PageController {
     })()`)
   }
 
-  /**
-   * Registers a script executed before any page JavaScript on every future navigation (CDP addScriptToEvaluateOnNewDocument).
-   */
   async addInitScript(script: string, options: { runNow?: boolean } = {}): Promise<InitScriptEntry> {
     await this.session.ensureBaseDomains()
     const res = await this.session.send<{ identifier: string }>('Page.addScriptToEvaluateOnNewDocument', {
@@ -2151,9 +970,7 @@ export class PageController {
       createdAt: Date.now(),
     }
     this.initScripts.push(entry)
-    if (options.runNow) {
-      await this.evaluate(script).catch(() => {})
-    }
+    if (options.runNow) await this.evaluate(script).catch(() => {})
     return entry
   }
 
@@ -2168,22 +985,15 @@ export class PageController {
     return [...this.initScripts]
   }
 
-  /**
-   * Grants Chrome permissions to the current page's origin (or an explicit origin) via CDP Browser.grantPermissions.
-   */
   async grantPermissions(permissions: string[], origin?: string): Promise<void> {
-    const targetOrigin =
-      origin ??
-      (await this.evaluate<string>('location.origin').catch(() => ''))
-    const normalized = permissions.map((p) => {
-      const map: Record<string, string> = {
-        'clipboard-read': 'clipboardReadWrite',
-        'clipboard-write': 'clipboardSanitizedWrite',
-        camera: 'videoCapture',
-        microphone: 'audioCapture',
-      }
-      return map[p] ?? p
-    })
+    const targetOrigin = origin ?? (await this.evaluate<string>('location.origin').catch(() => ''))
+    const map: Record<string, string> = {
+      'clipboard-read': 'clipboardReadWrite',
+      'clipboard-write': 'clipboardSanitizedWrite',
+      camera: 'videoCapture',
+      microphone: 'audioCapture',
+    }
+    const normalized = permissions.map((p) => map[p] ?? p)
     const params: Record<string, unknown> = { permissions: normalized }
     if (targetOrigin && targetOrigin !== 'null') params.origin = targetOrigin
     if (this.session.transport.sendBrowser) {
@@ -2198,212 +1008,6 @@ export class PageController {
       await this.session.transport.sendBrowser('Browser.resetPermissions', {})
     } else {
       await this.session.send('Browser.resetPermissions', {})
-    }
-  }
-
-  /**
-   * Exports the current page to PDF via CDP Page.printToPDF.
-   */
-  async printToPDF(options: PdfOptions = {}): Promise<{ base64: string; path?: string; sizeBytes: number }> {
-    await this.session.ensureBaseDomains()
-    await this.session.transport.setOverlayVisible?.(this.tabId, false).catch(() => {})
-    try {
-      const params: Record<string, unknown> = {
-        landscape: options.landscape ?? false,
-        printBackground: options.printBackground ?? true,
-        displayHeaderFooter: options.displayHeaderFooter ?? false,
-      }
-      if (options.headerTemplate !== undefined) params.headerTemplate = options.headerTemplate
-      if (options.footerTemplate !== undefined) params.footerTemplate = options.footerTemplate
-      if (options.scale !== undefined) params.scale = options.scale
-      if (options.paperWidth !== undefined) params.paperWidth = options.paperWidth
-      if (options.paperHeight !== undefined) params.paperHeight = options.paperHeight
-      if (options.marginTop !== undefined) params.marginTop = options.marginTop
-      if (options.marginBottom !== undefined) params.marginBottom = options.marginBottom
-      if (options.marginLeft !== undefined) params.marginLeft = options.marginLeft
-      if (options.marginRight !== undefined) params.marginRight = options.marginRight
-      if (options.pageRanges !== undefined) params.pageRanges = options.pageRanges
-      if (options.preferCSSPageSize !== undefined) params.preferCSSPageSize = options.preferCSSPageSize
-
-      const res = await this.session.send<{ data: string }>('Page.printToPDF', params)
-      const buf = Buffer.from(res.data, 'base64')
-      if (options.path) {
-        const absPath = path.resolve(options.path)
-        await fs.mkdir(path.dirname(absPath), { recursive: true })
-        await fs.writeFile(absPath, buf)
-        return { base64: res.data, path: absPath, sizeBytes: buf.byteLength }
-      }
-      return { base64: res.data, sizeBytes: buf.byteLength }
-    } finally {
-      await this.session.transport.setOverlayVisible?.(this.tabId, true).catch(() => {})
-    }
-  }
-
-  async screenshot(
-    options: ScreenshotOptions = {},
-  ): Promise<{
-    base64: string
-    mimeType: string
-    path?: string
-    region?: { x: number; y: number; width: number; height: number; scale: number }
-  }> {
-    const format = options.format ?? 'png'
-    const params: Record<string, unknown> = { format }
-    if (format !== 'png' && options.quality !== undefined) {
-      params.quality = options.quality
-    }
-
-    let region: { x: number; y: number; width: number; height: number; scale: number } | undefined
-
-    // Hide BrowserPilot's own UI overlays (glow border, floating pill, highlight, ghost cursor) so screenshots stay clean
-    await this.session.transport.setOverlayVisible?.(this.tabId, false).catch(() => {})
-    await this.evaluate(`(() => {
-      const el = document.getElementById('__browserpilot_ui_host');
-      if (el) el.style.visibility = 'hidden';
-    })()`).catch(() => {})
-
-    try {
-      const metrics = await this.session.send<{
-        cssVisualViewport?: { pageX: number; pageY: number; clientWidth: number; clientHeight: number }
-        cssContentSize?: { width: number; height: number }
-        contentSize?: { width: number; height: number }
-      }>('Page.getLayoutMetrics')
-      const vp = metrics.cssVisualViewport ?? { pageX: 0, pageY: 0, clientWidth: 1280, clientHeight: 720 }
-
-      if (options.grid) {
-        const step = options.gridStep ?? (options.zoom ? 50 : 200)
-        const originX = options.zoom ? options.zoom.x : 0
-        const originY = options.zoom ? options.zoom.y : 0
-        const spanW = options.zoom ? options.zoom.width : vp.clientWidth
-        const spanH = options.zoom ? options.zoom.height : vp.clientHeight
-        await this.evaluate(`(() => {
-          document.getElementById('__browserpilot_grid_overlay')?.remove();
-          const host = document.createElement('div');
-          host.id = '__browserpilot_grid_overlay';
-          host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483646;';
-          const shadow = host.attachShadow({ mode: 'closed' });
-          const step = ${step};
-          const startX = Math.floor(${originX} / step) * step;
-          const endX = ${originX + spanW};
-          const startY = Math.floor(${originY} / step) * step;
-          const endY = ${originY + spanH};
-          for (let x = startX; x <= endX; x += step) {
-            const line = document.createElement('div');
-            line.style.cssText = 'position:fixed;top:0;bottom:0;left:' + x + 'px;width:1px;background:rgba(6,182,212,0.38);';
-            shadow.appendChild(line);
-            const lbl = document.createElement('div');
-            lbl.textContent = String(x);
-            lbl.style.cssText = 'position:fixed;top:' + (${originY} + 2) + 'px;left:' + (x + 3) + 'px;background:rgba(15,23,42,0.82);color:#67e8f9;font:700 10px/1 ui-monospace,monospace;padding:1px 3px;border-radius:3px;';
-            shadow.appendChild(lbl);
-          }
-          for (let y = startY; y <= endY; y += step) {
-            const line = document.createElement('div');
-            line.style.cssText = 'position:fixed;left:0;right:0;top:' + y + 'px;height:1px;background:rgba(6,182,212,0.38);';
-            shadow.appendChild(line);
-            const lbl = document.createElement('div');
-            lbl.textContent = String(y);
-            lbl.style.cssText = 'position:fixed;left:' + (${originX} + 2) + 'px;top:' + (y + 3) + 'px;background:rgba(15,23,42,0.82);color:#67e8f9;font:700 10px/1 ui-monospace,monospace;padding:1px 3px;border-radius:3px;';
-            shadow.appendChild(lbl);
-          }
-          (document.documentElement || document.body).appendChild(host);
-        })()`).catch(() => {})
-      }
-
-      if (options.zoom) {
-        const scale = Math.max(1, Math.min(4, options.zoom.scale ?? 2))
-        params.clip = {
-          x: vp.pageX + options.zoom.x,
-          y: vp.pageY + options.zoom.y,
-          width: options.zoom.width,
-          height: options.zoom.height,
-          scale,
-        }
-        region = {
-          x: options.zoom.x,
-          y: options.zoom.y,
-          width: options.zoom.width,
-          height: options.zoom.height,
-          scale,
-        }
-      } else if (options.clip) {
-        params.clip = { ...options.clip, scale: 1 }
-        region = { ...options.clip, scale: 1 }
-      } else if (options.fullPage) {
-        const size = metrics.cssContentSize ?? metrics.contentSize ?? { width: 1280, height: 720 }
-        params.clip = {
-          x: 0,
-          y: 0,
-          width: size.width,
-          height: Math.min(size.height, 16_384),
-          scale: 1,
-        }
-        params.captureBeyondViewport = true
-      } else if (metrics.cssVisualViewport) {
-        params.clip = {
-          x: vp.pageX,
-          y: vp.pageY,
-          width: vp.clientWidth,
-          height: vp.clientHeight,
-          scale: 1,
-        }
-      }
-
-      const res = await this.session.send<{ data: string }>('Page.captureScreenshot', params)
-      let base64 = res.data
-      const mimeType = format === 'jpeg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : 'image/png'
-
-      // Pure-browser canvas resize if maxDimension requested (zero native sharp dependency!)
-      if (options.maxDimension && options.maxDimension > 0) {
-        const resized = await this.resizeBase64InPage(base64, mimeType, options.maxDimension, options.quality)
-        if (resized) base64 = resized
-      }
-
-      if (options.path) {
-        const absPath = path.resolve(options.path)
-        await fs.mkdir(path.dirname(absPath), { recursive: true })
-        await fs.writeFile(absPath, Buffer.from(base64, 'base64'))
-        return { base64, mimeType, path: absPath, ...(region ? { region } : {}) }
-      }
-
-      return { base64, mimeType, ...(region ? { region } : {}) }
-    } finally {
-      if (options.grid) {
-        await this.evaluate(`document.getElementById('__browserpilot_grid_overlay')?.remove()`).catch(() => {})
-      }
-      await this.evaluate(`(() => {
-        const el = document.getElementById('__browserpilot_ui_host');
-        if (el) el.style.visibility = '';
-      })()`).catch(() => {})
-      await this.session.transport.setOverlayVisible?.(this.tabId, true).catch(() => {})
-    }
-  }
-
-  private async resizeBase64InPage(
-    base64: string,
-    mimeType: string,
-    maxDimension: number,
-    quality?: number,
-  ): Promise<string | null> {
-    try {
-      const dataUrl = `data:${mimeType};base64,${base64}`
-      const res = await this.evaluate<string | null>(`(async () => {
-        const img = new Image();
-        img.src = ${JSON.stringify(dataUrl)};
-        await img.decode();
-        const maxSide = Math.max(img.width, img.height);
-        if (maxSide <= ${maxDimension}) return null;
-        const ratio = ${maxDimension} / maxSide;
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(img.width * ratio);
-        canvas.height = Math.round(img.height * ratio);
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const out = canvas.toDataURL(${JSON.stringify(mimeType)}, ${quality ? quality / 100 : 0.85});
-        return out.split(',')[1] || null;
-      })()`)
-      return res
-    } catch {
-      return null
     }
   }
 
@@ -2458,7 +1062,6 @@ export class PageController {
     }
   }
 
-  // Page-scoped cookie operations (never wipes user's whole browser profile!)
   async getCookies(urls?: string[]): Promise<Array<Record<string, unknown>>> {
     const targetUrls = urls ?? [(await this.getUrlAndTitle()).url].filter((u) => u.startsWith('http'))
     const res = await this.session.send<{ cookies: Array<Record<string, unknown>> }>('Network.getCookies', {
@@ -2479,18 +1082,14 @@ export class PageController {
     expires?: number
   }): Promise<boolean> {
     const params: Record<string, unknown> = { ...cookie }
-    if (!params.url && !params.domain) {
-      params.url = (await this.getUrlAndTitle()).url
-    }
+    if (!params.url && !params.domain) params.url = (await this.getUrlAndTitle()).url
     const res = await this.session.send<{ success?: boolean }>('Network.setCookie', params)
     return res.success !== false
   }
 
   async deleteCookies(name: string, options: { url?: string; domain?: string; path?: string } = {}): Promise<void> {
     const params: Record<string, unknown> = { name, ...options }
-    if (!params.url && !params.domain) {
-      params.url = (await this.getUrlAndTitle()).url
-    }
+    if (!params.url && !params.domain) params.url = (await this.getUrlAndTitle()).url
     await this.session.send('Network.deleteCookies', params)
   }
 

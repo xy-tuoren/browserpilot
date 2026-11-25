@@ -9,6 +9,7 @@ import { DaemonClient } from './client.js'
 import { isDaemonReachable, loadOrCreateDaemonConfig, readDaemonConfig } from './config.js'
 import { BrowserPilotDaemon } from './daemon.js'
 import { startMcpServer } from './mcp.js'
+import { TOOL_DEFINITIONS } from './tools.js'
 import {
   computeChromeExtensionId,
   discoverInstalledExtensionIds,
@@ -395,7 +396,7 @@ async function main(): Promise<void> {
     console.log(`\n   Option A — Agent Skill + CLI (install only where you want):`)
     console.log(`     npx skills add xy-tuoren/browserpilot`)
     console.log(`     (or print skill instructions with: browserpilot skill)`)
-    console.log(`\n   Option B — MCP Server (43 native tools + direct screenshot images):`)
+    console.log(`\n   Option B — MCP Server (${TOOL_DEFINITIONS.length} native tools + direct screenshot images):`)
     console.log(
       JSON.stringify(
         {

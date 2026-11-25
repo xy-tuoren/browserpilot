@@ -137,6 +137,9 @@ export class TabCDPSession {
       this.enableDomain('DOM'),
       this.enableDomain('Network'),
       this.enableDomain('Log').catch(() => {}),
+      // Emulate page focus so background tabs do not stall 5s per Input.dispatchMouseEvent('mouseMoved')
+      // in Chromium's InputRouter compositor queue — without stealing the user's active tab/window focus.
+      this.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {}),
     ])
     // Enable OOPIF child frame auto-attach on this tab
     await this.send('Target.setAutoAttach', {

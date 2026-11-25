@@ -88,6 +88,9 @@ let chunkSeq = 1
 /**
  * Encodes a message into one or more Chrome Native Messaging frames, automatically
  * splitting payloads that exceed Chrome's 1MB host->extension cap into `chunk` frames.
+ * Adaptively shrinks chunk slices when multi-byte UTF-8 or double JSON-escaping would
+ * otherwise push an individual frame over Chrome's strict 1MB limit, and avoids splitting
+ * UTF-16 surrogate pairs across chunk boundaries.
  */
 export function encodeNativeMessageFrames(
   message: unknown,
@@ -103,9 +106,37 @@ export function encodeNativeMessageFrames(
   }
 
   const chunkId = `chk_${Date.now().toString(36)}_${chunkSeq++}`
+  const safeFrameByteLimit = NATIVE_MESSAGE_MAX_BYTES - 1024
+  const step = Math.max(1024, maxCharsPerChunk)
   const parts: string[] = []
-  for (let i = 0; i < json.length; i += maxCharsPerChunk) {
-    parts.push(json.slice(i, i + maxCharsPerChunk))
+  let i = 0
+  while (i < json.length) {
+    let sliceLen = Math.min(step, json.length - i)
+    while (sliceLen > 1) {
+      let end = i + sliceLen
+      // Avoid splitting a UTF-16 surrogate pair (high surrogate 0xD800-0xDBFF followed by low surrogate)
+      if (end < json.length) {
+        const code = json.charCodeAt(end - 1)
+        if (code >= 0xd800 && code <= 0xdbff && end > i + 1) {
+          end--
+        }
+      }
+      const candidate = json.slice(i, end)
+      const encodedLen = Buffer.byteLength(
+        JSON.stringify({ type: 'chunk', chunkId, index: parts.length, total: 999_999, data: candidate }),
+        'utf8',
+      )
+      if (encodedLen <= safeFrameByteLimit) {
+        parts.push(candidate)
+        i = end
+        break
+      }
+      sliceLen = Math.max(1, Math.floor(sliceLen / 2))
+    }
+    if (sliceLen === 1 && i < json.length) {
+      parts.push(json.slice(i, i + 1))
+      i += 1
+    }
   }
   return parts.map((data, index) =>
     encodeNativeMessage({
@@ -123,18 +154,35 @@ export function encodeNativeMessageFrames(
  */
 export class BridgeChunkReassembler {
   private pending = new Map<string, { total: number; parts: Array<string | undefined>; received: number; createdAt: number }>()
+  private readonly ttlMs: number
+
+  constructor(ttlMs = 60_000) {
+    this.ttlMs = ttlMs
+  }
+
+  get pendingCount(): number {
+    return this.pending.size
+  }
 
   push(chunk: BridgeChunkMessage): BridgeMessage | null {
     const now = Date.now()
     for (const [id, entry] of this.pending) {
-      if (now - entry.createdAt > 60_000) this.pending.delete(id)
+      if (now - entry.createdAt > this.ttlMs) this.pending.delete(id)
+    }
+
+    if (!Number.isInteger(chunk.total) || chunk.total <= 0 || !Number.isInteger(chunk.index) || chunk.index < 0 || chunk.index >= chunk.total) {
+      throw new Error(`Invalid bridge chunk bounds: index=${chunk.index}, total=${chunk.total}`)
     }
 
     let entry = this.pending.get(chunk.chunkId)
     if (!entry) {
       entry = { total: chunk.total, parts: new Array(chunk.total), received: 0, createdAt: now }
       this.pending.set(chunk.chunkId, entry)
+    } else if (entry.total !== chunk.total) {
+      this.pending.delete(chunk.chunkId)
+      throw new Error(`Mismatched bridge chunk total for ${chunk.chunkId}: expected ${entry.total}, got ${chunk.total}`)
     }
+
     if (entry.parts[chunk.index] === undefined) {
       entry.parts[chunk.index] = chunk.data
       entry.received++
