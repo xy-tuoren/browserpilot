@@ -35,9 +35,11 @@ export interface DomainRules {
 }
 
 export type ExtensionTheme = 'dark' | 'light'
+export type ExtensionLanguage = 'zh' | 'en'
 
 export interface ExtensionConfig {
   theme: ExtensionTheme
+  language?: ExtensionLanguage
   autoAttach: boolean
   paused: boolean
   showHighlights: boolean

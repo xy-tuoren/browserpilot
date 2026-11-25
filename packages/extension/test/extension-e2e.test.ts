@@ -258,13 +258,17 @@ describe('@browserpilot/extension real Chrome MV3 zero-click E2E', () => {
     expect(await popupTab.page.evaluate<string>('document.body.innerText')).toContain('Popup Ready')
     await manager.closeTab(popupInfo.tabId)
 
-    // 7. Theme persistence toggle (dark <-> light)
-    await transport.rpc('extension.setConfig', { theme: 'light' })
-    const lightState = (await transport.rpc('extension.getState')) as { config: { theme: string } }
+    // 7. Theme & language persistence toggle (dark <-> light, default zh <-> en)
+    const initState = (await transport.rpc('extension.getState')) as { config: { theme: string; language?: string } }
+    expect(initState.config.language).toBe('zh')
+    await transport.rpc('extension.setConfig', { theme: 'light', language: 'en' })
+    const lightState = (await transport.rpc('extension.getState')) as { config: { theme: string; language?: string } }
     expect(lightState.config.theme).toBe('light')
-    await transport.rpc('extension.setConfig', { theme: 'dark' })
-    const darkState = (await transport.rpc('extension.getState')) as { config: { theme: string } }
+    expect(lightState.config.language).toBe('en')
+    await transport.rpc('extension.setConfig', { theme: 'dark', language: 'zh' })
+    const darkState = (await transport.rpc('extension.getState')) as { config: { theme: string; language?: string } }
     expect(darkState.config.theme).toBe('dark')
+    expect(darkState.config.language).toBe('zh')
 
     // 8. Pause kill-switch blocks new attaches cleanly
     await transport.rpc('extension.setConfig', { paused: true })

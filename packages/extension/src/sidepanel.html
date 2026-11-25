@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="utf-8" />
-  <title>BrowserPilot Companion</title>
+  <title>BrowserPilot 助手</title>
   <style>
     :root {
       color-scheme: dark;
@@ -18,9 +18,9 @@
       --btn-bg: #1e293b;
       --pill-bg: #1e293b;
       --pill-text: #94a3b8;
-      --pill-on-bg: rgba(16, 185, 129, 0.18);
-      --pill-on-text: #34d399;
-      --accent: #34d399;
+      --pill-on-bg: rgba(20, 184, 166, 0.18);
+      --pill-on-text: #2dd4bf;
+      --accent: #2dd4bf;
       --ok: #34d399;
       --err: #f87171;
       --info: #38bdf8;
@@ -39,9 +39,9 @@
       --btn-bg: #ffffff;
       --pill-bg: #e2e8f0;
       --pill-text: #475569;
-      --pill-on-bg: #d1fae5;
-      --pill-on-text: #047857;
-      --accent: #059669;
+      --pill-on-bg: #ccfbf1;
+      --pill-on-text: #0f766e;
+      --accent: #0d9488;
       --ok: #059669;
       --err: #dc2626;
       --info: #0284c7;
@@ -51,7 +51,7 @@
       margin: 0;
       background: var(--bg);
       color: var(--text);
-      font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font: 13px/1.45 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", Roboto, sans-serif;
       display: flex;
       flex-direction: column;
       height: 100vh;
@@ -73,11 +73,12 @@
     }
     .title { font-weight: 650; font-size: 14px; color: var(--text-strong); }
     .pill {
-      font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      font: 600 11px/1 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
       padding: 4px 8px;
       border-radius: 999px;
       background: var(--pill-bg);
       color: var(--pill-text);
+      white-space: nowrap;
     }
     .pill.on { background: var(--pill-on-bg); color: var(--pill-on-text); }
     .toolbar {
@@ -112,16 +113,19 @@
       border: 1px solid var(--border-strong);
       background: var(--btn-bg);
       color: var(--text-strong);
-      font: 500 12px/1 inherit;
+      font: 500 12px/1.2 inherit;
       padding: 7px 10px;
-      border-radius: 6px;
+      border-radius: 7px;
+      white-space: nowrap;
     }
     button.theme-btn {
-      padding: 4px 8px;
+      padding: 3px 7px;
       font-size: 11px;
+      border-radius: 999px;
+      color: var(--muted-strong);
     }
-    button.primary { background: #0284c7; border-color: #0284c7; color: #fff; }
-    button:hover { opacity: 0.9; }
+    button.primary { background: #0d9488; border-color: #14b8a6; color: #fff; }
+    button:hover { opacity: 0.92; }
     main {
       flex: 1;
       overflow-y: auto;
@@ -134,8 +138,7 @@
       margin: 0 0 8px;
       font-size: 11px;
       font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.03em;
       color: var(--muted);
     }
     .card {
@@ -167,34 +170,35 @@
 </head>
 <body>
   <header>
-    <div class="title">BrowserPilot Companion</div>
+    <div id="sp-title" class="title">BrowserPilot 助手</div>
     <div class="header-right">
-      <button id="sp-theme" class="theme-btn" title="Switch Dark / Light Mode">Light</button>
-      <span id="sp-status" class="pill">OFFLINE</span>
+      <button id="sp-lang" class="theme-btn" title="Switch to English">EN</button>
+      <button id="sp-theme" class="theme-btn" title="切换深色 / 浅色外观">深色</button>
+      <span id="sp-status" class="pill">未连接</span>
     </div>
   </header>
 
   <div class="toolbar">
-    <button id="sp-pick" class="primary">Pick Element</button>
-    <button id="sp-pause">Pause</button>
-    <button id="sp-detach-all">Detach All</button>
+    <button id="sp-pick" class="primary">选取元素</button>
+    <button id="sp-pause">暂停</button>
+    <button id="sp-detach-all">全部断开</button>
   </div>
 
   <div class="tabs">
-    <button id="tab-activity" class="tab-btn active">Activity</button>
-    <button id="tab-errors" class="tab-btn">Errors (<span id="err-count">0</span>)</button>
-    <button id="tab-network" class="tab-btn">Failed Net (<span id="net-count">0</span>)</button>
+    <button id="tab-activity" class="tab-btn active">动态</button>
+    <button id="tab-errors" class="tab-btn"><span id="lbl-tab-errors">报错</span> (<span id="err-count">0</span>)</button>
+    <button id="tab-network" class="tab-btn"><span id="lbl-tab-network">失败请求</span> (<span id="net-count">0</span>)</button>
   </div>
 
   <main>
     <section>
-      <h2>Active Controlled Tabs</h2>
-      <div id="sp-tabs" class="muted">None</div>
+      <h2 id="tabs-heading">当前受控标签页</h2>
+      <div id="sp-tabs" class="muted">暂无受控标签页</div>
     </section>
 
     <section>
-      <h2 id="feed-heading">Live AI Activity Timeline</h2>
-      <div id="sp-feed" class="muted">Waiting for agent commands…</div>
+      <h2 id="feed-heading">AI 实时操作动态</h2>
+      <div id="sp-feed" class="muted">等待 AI 指令…</div>
     </section>
   </main>
 

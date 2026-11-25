@@ -2,6 +2,13 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
+## [1.5.2] - 2026-11-25
+
+### Changed
+- **Simplified Bilingual Extension UI — Chinese Default + One-Click English Switch (`popup`, `sidepanel`, `content-script`, `i18n.ts`)**:
+  - Added persisted `language: 'zh' | 'en'` setting (defaulting to Simplified Chinese `zh`) with one-click `EN` / `中文` switching synced across the Popup, Companion Side Panel, and in-page floating control capsule.
+  - Streamlined the Popup layout: unified all 4 core settings (`自动接管`, `操作提示`, `虚拟光标`, `标签分组`) into uniform pill toggle switches with concise 4-character labels, moved theme & language toggles into clean header pills, prevented button text wrapping, and tucked technical fields (Blocked Domains, Daemon URL, Auth Token, one-click copy Extension ID) into a collapsed-by-default **高级设置 / Advanced** disclosure.
+
 ## [1.5.1] - 2026-11-25
 
 ### Fixed

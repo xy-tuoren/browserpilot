@@ -31,6 +31,7 @@ const CONTEXT_MENU_PIN_ID = 'browserpilot-pin-element'
 
 const DEFAULT_CONFIG: ExtensionConfig = {
   theme: 'dark',
+  language: 'zh',
   autoAttach: true,
   paused: false,
   showHighlights: true,
@@ -192,6 +193,7 @@ function pushControlBanner(
       status: opts.status,
       paused: config.paused,
       theme: config.theme,
+      language: config.language ?? 'zh',
       mode: opts.mode ?? 'working',
     })
     .catch(() => {})
@@ -1143,7 +1145,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       active,
       paused: config.paused,
       theme: config.theme,
-      status: 'Active',
+      language: config.language ?? 'zh',
+      status: (config.language ?? 'zh') === 'en' ? 'Active' : '运行中',
     })
     return false
   }

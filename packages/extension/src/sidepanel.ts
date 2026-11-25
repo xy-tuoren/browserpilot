@@ -1,4 +1,5 @@
-import type { ExtensionState } from '@browserpilot/protocol'
+import type { ExtensionLanguage, ExtensionState } from '@browserpilot/protocol'
+import { MESSAGES, resolveLang } from './i18n.js'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 let state: ExtensionState | null = null
@@ -14,22 +15,39 @@ function escapeHtml(s: string): string {
 
 function render(next: ExtensionState): void {
   state = next
+  const lang = resolveLang(next.config.language)
+  const t = MESSAGES[lang]
   const isDark = next.config.theme !== 'light'
   document.documentElement.dataset.theme = isDark ? 'dark' : 'light'
-  $('sp-theme').textContent = isDark ? 'Light' : 'Dark'
+  document.documentElement.lang = lang === 'en' ? 'en' : 'zh-CN'
+  document.title = t.companionTitle
+
+  $('sp-title').textContent = t.companionTitle
+  $('sp-lang').textContent = lang === 'zh' ? 'EN' : '中文'
+  $('sp-lang').title = t.langToggleTitle
+  $('sp-theme').textContent = isDark ? t.themeDark : t.themeLight
+  $('sp-theme').title = t.themeTitle
+
+  $('sp-pick').textContent = t.pickElement
+  $('sp-detach-all').textContent = t.detachAll
+  $('tab-activity').textContent = t.tabActivity
+  $('lbl-tab-errors').textContent = t.tabErrors
+  $('lbl-tab-network').textContent = t.tabNetwork
+  $('tabs-heading').textContent = t.activeTabsHeading
 
   const statusEl = $('sp-status')
   if (next.config.paused) {
-    statusEl.textContent = 'PAUSED'
+    statusEl.textContent = t.statusPaused
     statusEl.className = 'pill'
-    $('sp-pause').textContent = 'Resume'
+    $('sp-pause').textContent = t.resume
   } else if (next.connected) {
-    statusEl.textContent = next.transport === 'native' ? 'NATIVE' : 'WS LIVE'
+    statusEl.textContent = next.transport === 'native' ? t.statusNative : t.statusWs
     statusEl.className = 'pill on'
-    $('sp-pause').textContent = 'Pause'
+    $('sp-pause').textContent = t.pause
   } else {
-    statusEl.textContent = 'OFFLINE'
+    statusEl.textContent = t.statusOffline
     statusEl.className = 'pill'
+    $('sp-pause').textContent = t.pause
   }
 
   const errs = next.recentErrors ?? []
@@ -44,12 +62,12 @@ function render(next: ExtensionState): void {
   const tabsEl = $('sp-tabs')
   tabsEl.innerHTML = ''
   if (next.attachedTabs.length === 0) {
-    tabsEl.textContent = 'No tabs attached yet.'
+    tabsEl.textContent = t.noTabsShort
   } else {
     for (const tab of next.attachedTabs) {
       const card = document.createElement('div')
       card.className = 'card'
-      card.innerHTML = `<div class="entry-head"><span>#${tab.tabId} ${escapeHtml(tab.title || 'Untitled')}</span><span class="ok">CDP</span></div><div class="detail">${escapeHtml(tab.url)}</div>`
+      card.innerHTML = `<div class="entry-head"><span>#${tab.tabId} ${escapeHtml(tab.title || t.untitled)}</span><span class="ok">CDP</span></div><div class="detail">${escapeHtml(tab.url)}</div>`
       tabsEl.appendChild(card)
     }
   }
@@ -59,10 +77,10 @@ function render(next: ExtensionState): void {
   feedEl.innerHTML = ''
 
   if (activeTab === 'activity') {
-    heading.textContent = 'Live AI Activity Timeline'
+    heading.textContent = t.activityHeading
     const entries = [...next.recentActivity].reverse()
     if (!entries.length) {
-      feedEl.textContent = 'Waiting for agent commands…'
+      feedEl.textContent = t.waitingCommands
       return
     }
     for (const item of entries) {
@@ -75,25 +93,25 @@ function render(next: ExtensionState): void {
       feedEl.appendChild(card)
     }
   } else if (activeTab === 'errors') {
-    heading.textContent = 'Captured Console Errors & Exceptions'
+    heading.textContent = t.errorsHeading
     const list = [...errs].reverse()
     if (!list.length) {
-      feedEl.textContent = 'No console errors captured.'
+      feedEl.textContent = t.noErrors
       return
     }
     for (const item of list) {
       const card = document.createElement('div')
       card.className = 'card'
       card.innerHTML =
-        `<div class="entry-head"><span class="error">Tab #${item.tabId}</span><span class="time">${fmtTime(item.timestamp)}</span></div>` +
+        `<div class="entry-head"><span class="error">${escapeHtml(t.tabPrefix)}${item.tabId}</span><span class="time">${fmtTime(item.timestamp)}</span></div>` +
         `<div class="detail">${escapeHtml(item.text)}</div>`
       feedEl.appendChild(card)
     }
   } else {
-    heading.textContent = 'Failed Network Requests (4xx / 5xx / Blocked)'
+    heading.textContent = t.networkHeading
     const list = [...nets].reverse()
     if (!list.length) {
-      feedEl.textContent = 'No failed requests captured.'
+      feedEl.textContent = t.noFailedRequests
       return
     }
     for (const item of list) {
@@ -134,6 +152,15 @@ $('tab-network').addEventListener('click', () => {
   if (state) render(state)
 })
 
+$('sp-lang').addEventListener('click', () => {
+  const curr = resolveLang(state?.config.language)
+  const nextLang: ExtensionLanguage = curr === 'zh' ? 'en' : 'zh'
+  void safeSendMessage({
+    type: 'browserpilot:update-config',
+    patch: { language: nextLang },
+  }).then(() => refresh())
+})
+
 $('sp-theme').addEventListener('click', () => {
   if (!state) return
   const nextTheme = state.config.theme === 'light' ? 'dark' : 'light'
@@ -141,7 +168,7 @@ $('sp-theme').addEventListener('click', () => {
   void safeSendMessage({
     type: 'browserpilot:update-config',
     patch: { theme: nextTheme },
-  })
+  }).then(() => refresh())
 })
 $('sp-pick').addEventListener('click', () => {
   void safeSendMessage({ type: 'browserpilot:start-picker' })
@@ -151,10 +178,10 @@ $('sp-pause').addEventListener('click', () => {
   void safeSendMessage({
     type: 'browserpilot:update-config',
     patch: { paused: !state.config.paused },
-  })
+  }).then(() => refresh())
 })
 $('sp-detach-all').addEventListener('click', () => {
-  void safeSendMessage({ type: 'browserpilot:detach-all' })
+  void safeSendMessage({ type: 'browserpilot:detach-all' }).then(() => refresh())
 })
 
 chrome.runtime.onMessage.addListener((msg) => {

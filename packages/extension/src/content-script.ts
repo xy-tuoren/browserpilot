@@ -17,6 +17,7 @@ let pillEl: HTMLDivElement | null = null
 let pillDotEl: HTMLSpanElement | null = null
 let pillStatusEl: HTMLSpanElement | null = null
 let pillPauseBtn: HTMLButtonElement | null = null
+let pillStopBtn: HTMLButtonElement | null = null
 
 let highlightEl: HTMLDivElement | null = null
 let highlightLabelEl: HTMLSpanElement | null = null
@@ -270,19 +271,19 @@ function ensureOverlay(): ShadowRoot {
   pillStatusEl.textContent = 'Active'
   pillPauseBtn = document.createElement('button')
   pillPauseBtn.className = 'bp-pill-btn'
-  pillPauseBtn.textContent = 'Pause'
+  pillPauseBtn.textContent = '暂停'
   pillPauseBtn.addEventListener('click', (e) => {
     e.stopPropagation()
     void safeSendRuntimeMessage({ type: 'browserpilot:toggle-pause' })
   })
-  const stopBtn = document.createElement('button')
-  stopBtn.className = 'bp-pill-btn stop'
-  stopBtn.textContent = 'Take Over'
-  stopBtn.addEventListener('click', (e) => {
+  pillStopBtn = document.createElement('button')
+  pillStopBtn.className = 'bp-pill-btn stop'
+  pillStopBtn.textContent = '接管'
+  pillStopBtn.addEventListener('click', (e) => {
     e.stopPropagation()
     void safeSendRuntimeMessage({ type: 'browserpilot:stop-this-tab' })
   })
-  pillEl.append(pillDotEl, brand, pillStatusEl, pillPauseBtn, stopBtn)
+  pillEl.append(pillDotEl, brand, pillStatusEl, pillPauseBtn, pillStopBtn)
   shadowRoot.appendChild(pillEl)
 
   highlightEl = document.createElement('div')
@@ -314,6 +315,7 @@ function updateControlBanner(opts: {
   status?: string
   paused?: boolean
   theme?: 'dark' | 'light'
+  language?: 'zh' | 'en'
   mode?: 'working' | 'handoff'
 }): void {
   if (!opts.active) {
@@ -322,9 +324,10 @@ function updateControlBanner(opts: {
     return
   }
   ensureOverlay()
-  if (!borderEl || !pillEl || !pillDotEl || !pillStatusEl || !pillPauseBtn) return
+  if (!borderEl || !pillEl || !pillDotEl || !pillStatusEl || !pillPauseBtn || !pillStopBtn) return
 
   const isLight = opts.theme === 'light'
+  const isEn = opts.language === 'en'
   pillEl.classList.toggle('light', isLight)
 
   if (opts.mode === 'handoff') {
@@ -335,11 +338,17 @@ function updateControlBanner(opts: {
 
   borderEl.className = opts.paused ? 'bp-border paused' : 'bp-border active'
   pillDotEl.className = opts.paused ? 'bp-pill-dot paused' : 'bp-pill-dot'
-  pillPauseBtn.textContent = opts.paused ? 'Resume' : 'Pause'
+  pillPauseBtn.textContent = opts.paused ? (isEn ? 'Resume' : '恢复') : isEn ? 'Pause' : '暂停'
+  pillStopBtn.textContent = isEn ? 'Take Over' : '接管'
+  const defaultActive = isEn ? 'Active' : '运行中'
+  const defaultPaused = isEn ? 'Paused' : '已暂停'
   if (opts.status !== undefined) {
-    pillStatusEl.textContent = opts.paused ? 'Paused' : opts.status || 'Active'
+    const normalized = !isEn && opts.status === 'Active' ? defaultActive : opts.status
+    pillStatusEl.textContent = opts.paused ? defaultPaused : normalized || defaultActive
   } else if (opts.paused) {
-    pillStatusEl.textContent = 'Paused'
+    pillStatusEl.textContent = defaultPaused
+  } else {
+    pillStatusEl.textContent = defaultActive
   }
   pillEl.classList.add('visible')
 }
@@ -514,7 +523,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 })
 
 // Re-sync in-page control banner after navigation inside an attached tab
-void safeSendRuntimeMessage<{ active?: boolean; status?: string; paused?: boolean; theme?: 'dark' | 'light' }>({
+void safeSendRuntimeMessage<{ active?: boolean; status?: string; paused?: boolean; theme?: 'dark' | 'light'; language?: 'zh' | 'en' }>({
   type: 'browserpilot:get-tab-banner',
 }).then((res) => {
   if (res && typeof res === 'object' && res.active) {
