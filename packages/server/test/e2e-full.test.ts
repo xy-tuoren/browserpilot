@@ -497,7 +497,7 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
       '-s',
       sid,
       '-e',
-      `const t = await tabs.use('127.0.0.1'); await t.page.fill('#query', 'cli-zero-click'); await t.page.click('#go-btn'); await sleep(150); console.log(await t.page.evaluate('document.getElementById("out").textContent'))`,
+      `const t = await tabs.use('127.0.0.1'); await t.page.fill('#query', 'cli-zero-click'); await t.page.click('#go-btn'); await waitForText('ok:cli-zero-click', { tab: t, timeoutMs: 5000 }); console.log(await t.page.evaluate('document.getElementById("out").textContent'))`,
     )
     expect(execOut.trim()).toContain('ok:cli-zero-click')
 

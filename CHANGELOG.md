@@ -2,6 +2,11 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
+## [1.5.1] - 2026-11-25
+
+### Fixed
+- **CI E2E Determinism (`packages/server/test/e2e-full.test.ts`)**: replaced hardcoded `sleep(150)` after `#go-btn` click with `waitForText('ok:cli-zero-click')` so slow CI runners never race the `/api/search` fetch response during npm release verification.
+
 ## [1.5.0] - 2026-11-25
 
 ### Added
