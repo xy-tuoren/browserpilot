@@ -2,6 +2,12 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **2-Frame `requestAnimationFrame` Click Stability Check (`packages/core/src/page/actionability.ts`)**:
+  - Replaced wall-clock `sleep(30)` stability sampling with two consecutive browser `requestAnimationFrame` samples (with a 150ms safety fallback), preventing false "stable" clicks on animating elements under heavy CPU load (caught by the new `macos-latest` CI matrix runner).
+
 ## [1.5.3] - 2026-11-25
 
 ### Changed

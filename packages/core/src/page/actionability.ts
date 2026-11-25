@@ -402,6 +402,36 @@ export async function readElementViewportBox(
   }
 }
 
+async function waitAnimationFrame(session: TabCDPSession, el: ResolvedElement): Promise<void> {
+  await session
+    .send(
+      'Runtime.callFunctionOn',
+      {
+        objectId: el.objectId,
+        awaitPromise: true,
+        returnByValue: true,
+        functionDeclaration: `function() {
+          const win = (this.ownerDocument && this.ownerDocument.defaultView) || window;
+          return new Promise((resolve) => {
+            let done = false;
+            const finish = () => {
+              if (!done) {
+                done = true;
+                resolve(true);
+              }
+            };
+            if (typeof win.requestAnimationFrame === 'function') {
+              win.requestAnimationFrame(() => finish());
+            }
+            setTimeout(finish, 150);
+          });
+        }`,
+      },
+      { sessionId: el.sessionId },
+    )
+    .catch(() => sleep(30))
+}
+
 async function checkClickActionableOnce(
   session: TabCDPSession,
   el: ResolvedElement,
@@ -413,9 +443,12 @@ async function checkClickActionableOnce(
   let current = el
   let underOwnPill = false
 
-  let stable = false
-  for (let attempt = 0; attempt < 5; attempt++) {
-    await sleep(30)
+  // Playwright-style stability check: require 2 consecutive browser animation frames
+  // with unchanged bounding box so CPU-loaded machines never falsely declare a sliding
+  // element stable before the renderer actually ticks an animation frame.
+  let stableFrames = 0
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await waitAnimationFrame(session, current)
     const nextBox = await readElementViewportBox(session, current)
     if (!nextBox) {
       return {
@@ -425,18 +458,24 @@ async function checkClickActionableOnce(
         error: new Error(`Element "${targetLabel}" detached or hidden during actionability check.`),
       }
     }
-    const moved = Math.abs(nextBox.x - current.box.x) > 2 || Math.abs(nextBox.y - current.box.y) > 2
+    const moved =
+      Math.abs(nextBox.x - current.box.x) > 1.5 ||
+      Math.abs(nextBox.y - current.box.y) > 1.5 ||
+      Math.abs(nextBox.width - current.box.width) > 1.5 ||
+      Math.abs(nextBox.height - current.box.height) > 1.5
     current = {
       ...current,
       box: nextBox,
       center: { x: nextBox.x + nextBox.width / 2, y: nextBox.y + nextBox.height / 2 },
     }
     if (!moved) {
-      stable = true
-      break
+      stableFrames++
+      if (stableFrames >= 2) break
+    } else {
+      stableFrames = 0
     }
   }
-  if (!stable) {
+  if (stableFrames < 2) {
     return {
       ok: false,
       retryable: true,
