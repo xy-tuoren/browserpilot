@@ -120,27 +120,45 @@ async function getExtensionState(): Promise<ExtensionState> {
   }
 }
 
+let wsConsecutiveFailures = 0
+
 function broadcastUiUpdate(): void {
-  void getExtensionState()
-    .then((state) => {
-      chrome.runtime.sendMessage({ type: 'browserpilot:state-update', state }).catch(() => {})
-    })
-    .catch(() => {})
+  const maybeSend = () => {
+    void getExtensionState()
+      .then((state) => {
+        try {
+          void chrome.runtime.sendMessage({ type: 'browserpilot:state-update', state }).catch(() => {})
+        } catch {}
+      })
+      .catch(() => {})
+  }
+
+  // Chrome 116+: skip broadcasting state updates when neither Popup nor Side Panel is open
+  if (typeof chrome.runtime.getContexts === 'function') {
+    void chrome.runtime
+      .getContexts({ contextTypes: ['POPUP', 'SIDE_PANEL'] as chrome.runtime.ContextType[] })
+      .then((contexts) => {
+        if (contexts.length > 0) maybeSend()
+      })
+      .catch(() => {})
+    return
+  }
+  maybeSend()
 }
 
 function updateBadge(): void {
   if (config.paused) {
-    void chrome.action.setBadgeText({ text: 'OFF' })
-    void chrome.action.setBadgeBackgroundColor({ color: '#f59e0b' })
+    void chrome.action.setBadgeText({ text: 'OFF' }).catch(() => {})
+    void chrome.action.setBadgeBackgroundColor({ color: '#f59e0b' }).catch(() => {})
     return
   }
   if (transportMode === 'disconnected') {
-    void chrome.action.setBadgeText({ text: '' })
+    void chrome.action.setBadgeText({ text: '' }).catch(() => {})
     return
   }
   const count = attachedTabs.size
-  void chrome.action.setBadgeText({ text: count > 0 ? String(count) : 'ON' })
-  void chrome.action.setBadgeBackgroundColor({ color: count > 0 ? '#10b981' : '#0ea5e9' })
+  void chrome.action.setBadgeText({ text: count > 0 ? String(count) : 'ON' }).catch(() => {})
+  void chrome.action.setBadgeBackgroundColor({ color: count > 0 ? '#10b981' : '#0ea5e9' }).catch(() => {})
 }
 
 // ============================================================================
@@ -282,13 +300,20 @@ function disconnectTransport(): void {
   updateBadge()
 }
 
-function handleTransportDisconnected(source: 'native' | 'websocket'): void {
+function handleTransportDisconnected(source: 'native' | 'websocket', wsOpened = true): void {
   if (source === 'native') {
     nativePort = null
-    // If Native Messaging has worked before, reconnect quickly (1s) instead of waiting 30s
-    nativeRetryAfter = nativeEverConnected ? 0 : Date.now() + 30_000
+    // If Native Messaging has worked before (or no WS token is configured), keep retrying native cleanly
+    nativeRetryAfter = nativeEverConnected || !hasWebSocketToken() ? 0 : Date.now() + 30_000
   } else {
     ws = null
+    if (!wsOpened) {
+      wsConsecutiveFailures++
+      // Prefer trying Native Messaging again before retrying a failing WS endpoint
+      nativeRetryAfter = 0
+    } else {
+      wsConsecutiveFailures = 0
+    }
   }
   if (transportMode === source) {
     transportMode = 'disconnected'
@@ -299,7 +324,17 @@ function handleTransportDisconnected(source: 'native' | 'websocket'): void {
     updateBadge()
     broadcastUiUpdate()
   }
-  scheduleConnect(source === 'native' ? (nativeEverConnected ? 1_000 : 150) : 2_000)
+  const nextDelay =
+    source === 'native'
+      ? nativeEverConnected
+        ? 1_500
+        : hasWebSocketToken()
+          ? 2_000
+          : 5_000
+      : wsOpened
+        ? 2_000
+        : Math.min(30_000, 5_000 * wsConsecutiveFailures)
+  scheduleConnect(nextDelay)
 }
 
 function scheduleConnect(delayMs: number): void {
@@ -334,23 +369,30 @@ async function connectBridge(): Promise<void> {
       port.onMessage.addListener((msg: unknown) => {
         receivedValidTraffic = true
         nativeEverConnected = true
+        wsConsecutiveFailures = 0
         void handleBridgeMessage(msg as BridgeMessage)
       })
       port.onDisconnect.addListener(() => {
         const err = chrome.runtime.lastError?.message
-        if (!receivedValidTraffic && err) {
+        if (!receivedValidTraffic) {
           nativePort = null
           if (transportMode === 'native') transportMode = 'disconnected'
+          if (heartbeatTimer) {
+            clearInterval(heartbeatTimer)
+            heartbeatTimer = null
+          }
           updateBadge()
           broadcastUiUpdate()
-          if (hasWebSocketToken()) {
-            // Native host unavailable, fall back to authenticated WebSocket
+          const nativeHostMissing = Boolean(err && /not found|forbidden|invalid/i.test(err))
+          if (nativeHostMissing && !nativeEverConnected && hasWebSocketToken()) {
+            // Native host not installed; fall back to authenticated WebSocket
             nativeRetryAfter = Date.now() + 60_000
             void connectWebSocket()
           } else {
-            // Native Messaging mode without manual WS token: retry native cleanly without 401 console errors
-            nativeRetryAfter = Date.now() + (nativeEverConnected ? 1_500 : 10_000)
-            scheduleConnect(nativeEverConnected ? 1_500 : 10_000)
+            // Native Messaging mode (or transient host exit): retry native cleanly without WS errors
+            const delay = nativeEverConnected ? 1_500 : nativeHostMissing ? 10_000 : 3_000
+            nativeRetryAfter = Date.now() + delay
+            scheduleConnect(delay)
           }
           return
         }
@@ -384,7 +426,7 @@ async function connectWebSocket(): Promise<void> {
 
   const effectiveToken = config.authToken.trim() || url.searchParams.get('token')?.trim() || ''
   if (!effectiveToken) {
-    // Avoid unauthenticated WS requests that cause Chrome 401 errors in chrome://extensions
+    // Avoid unauthenticated WS requests that cause Chrome 401/403 errors in chrome://extensions
     updateBadge()
     broadcastUiUpdate()
     scheduleConnect(nativeEverConnected ? 1_500 : 10_000)
@@ -395,9 +437,12 @@ async function connectWebSocket(): Promise<void> {
     url.searchParams.set('token', effectiveToken)
     const socket = new WebSocket(url.toString())
     ws = socket
+    let wsOpened = false
 
     socket.addEventListener('open', () => {
       if (ws !== socket) return
+      wsOpened = true
+      wsConsecutiveFailures = 0
       transportMode = 'websocket'
       sendHello('websocket')
       startHeartbeat()
@@ -417,7 +462,7 @@ async function connectWebSocket(): Promise<void> {
 
     socket.addEventListener('close', () => {
       if (ws === socket) {
-        handleTransportDisconnected('websocket')
+        handleTransportDisconnected('websocket', wsOpened)
       }
     })
 
@@ -425,7 +470,7 @@ async function connectWebSocket(): Promise<void> {
       // close event will trigger reconnect
     })
   } catch {
-    scheduleConnect(3_000)
+    scheduleConnect(5_000)
   }
 }
 
@@ -669,7 +714,12 @@ async function handleBridgeMessage(msg: BridgeMessage): Promise<void> {
   if (!msg || typeof msg !== 'object') return
 
   if (msg.type === 'chunk') {
-    const assembled = chunkReassembler.push(msg)
+    let assembled: BridgeMessage | null = null
+    try {
+      assembled = chunkReassembler.push(msg)
+    } catch {
+      return
+    }
     if (assembled) {
       await handleBridgeMessage(assembled)
     }
@@ -1011,11 +1061,17 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener((details) => {
 // Right-click "Pin Element for BrowserPilot" context menu
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: CONTEXT_MENU_PIN_ID,
-      title: 'Pin Element for BrowserPilot',
-      contexts: ['all'],
-    })
+    void chrome.runtime.lastError
+    chrome.contextMenus.create(
+      {
+        id: CONTEXT_MENU_PIN_ID,
+        title: 'Pin Element for BrowserPilot',
+        contexts: ['all'],
+      },
+      () => {
+        void chrome.runtime.lastError
+      },
+    )
   })
 })
 
@@ -1072,11 +1128,18 @@ if (chrome.downloads?.onCreated) {
 // Popup & Side Panel IPC
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || typeof msg !== 'object') return false
+  const safeRespond = (payload: unknown): void => {
+    try {
+      sendResponse(payload)
+    } catch {
+      // Sender tab/popup already closed
+    }
+  }
 
   if (msg.type === 'browserpilot:get-tab-banner') {
     const tid = _sender.tab?.id
     const active = Boolean(tid !== undefined && attachedTabs.has(tid) && config.showHighlights)
-    sendResponse({
+    safeRespond({
       active,
       paused: config.paused,
       theme: config.theme,
@@ -1085,67 +1148,90 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return false
   }
   if (msg.type === 'browserpilot:toggle-pause') {
-    void saveConfig({ paused: !config.paused }).then((cfg) => sendResponse({ ok: true, config: cfg }))
+    void saveConfig({ paused: !config.paused })
+      .then((cfg) => safeRespond({ ok: true, config: cfg }))
+      .catch(() => safeRespond({ ok: false }))
     return true
   }
   if (msg.type === 'browserpilot:stop-this-tab') {
     const tid = _sender.tab?.id
     if (tid !== undefined) {
-      void detachTab(tid).then(() => sendResponse({ ok: true }))
+      void detachTab(tid)
+        .then(() => safeRespond({ ok: true }))
+        .catch(() => safeRespond({ ok: false }))
       return true
     }
-    sendResponse({ ok: false })
+    safeRespond({ ok: false })
     return false
   }
   if (msg.type === 'browserpilot:get-state') {
-    void getExtensionState().then(sendResponse)
+    void getExtensionState()
+      .then((st) => safeRespond(st))
+      .catch(() => safeRespond(null))
     return true
   }
   if (msg.type === 'browserpilot:update-config') {
-    void saveConfig(msg.patch as Partial<ExtensionConfig>).then((cfg) => sendResponse({ ok: true, config: cfg }))
+    void saveConfig(msg.patch as Partial<ExtensionConfig>)
+      .then((cfg) => safeRespond({ ok: true, config: cfg }))
+      .catch(() => safeRespond({ ok: false }))
     return true
   }
   if (msg.type === 'browserpilot:detach-tab') {
-    void detachTab(Number(msg.tabId)).then(() => sendResponse({ ok: true }))
+    void detachTab(Number(msg.tabId))
+      .then(() => safeRespond({ ok: true }))
+      .catch(() => safeRespond({ ok: false }))
     return true
   }
   if (msg.type === 'browserpilot:detach-all') {
-    void Promise.all(Array.from(attachedTabs.keys()).map((id) => detachTab(id))).then(() => sendResponse({ ok: true }))
+    void Promise.all(Array.from(attachedTabs.keys()).map((id) => detachTab(id)))
+      .then(() => safeRespond({ ok: true }))
+      .catch(() => safeRespond({ ok: false }))
     return true
   }
   if (msg.type === 'browserpilot:reconnect') {
     nativeRetryAfter = 0
+    wsConsecutiveFailures = 0
     disconnectTransport()
-    void connectBridge().then(() => sendResponse({ ok: true }))
+    void connectBridge()
+      .then(() => safeRespond({ ok: true }))
+      .catch(() => safeRespond({ ok: false }))
     return true
   }
   if (msg.type === 'browserpilot:open-sidepanel') {
-    void chrome.windows.getCurrent().then((win) => {
-      if (win.id !== undefined && chrome.sidePanel?.open) {
-        return chrome.sidePanel.open({ windowId: win.id })
-      }
-    }).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }))
+    void chrome.windows
+      .getCurrent()
+      .then((win) => {
+        if (win.id !== undefined && chrome.sidePanel?.open) {
+          return chrome.sidePanel.open({ windowId: win.id })
+        }
+      })
+      .then(() => safeRespond({ ok: true }))
+      .catch(() => safeRespond({ ok: false }))
     return true
   }
   if (msg.type === 'browserpilot:start-picker') {
-    void chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-      if (tab?.id) {
-        return chrome.tabs.sendMessage(tab.id, { type: 'browserpilot:start-picker' })
-      }
-    }).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }))
+    void chrome.tabs
+      .query({ active: true, currentWindow: true })
+      .then(([tab]) => {
+        if (tab?.id) {
+          return chrome.tabs.sendMessage(tab.id, { type: 'browserpilot:start-picker' })
+        }
+      })
+      .then(() => safeRespond({ ok: true }))
+      .catch(() => safeRespond({ ok: false }))
     return true
   }
   if (msg.type === 'browserpilot:picked-element') {
     logActivity('element.picked', 'ok', `${msg.selector} (${msg.text ?? ''})`, _sender.tab?.id)
     sendEvent('element.picked', { tabId: _sender.tab?.id, ...msg })
-    sendResponse({ ok: true })
+    safeRespond({ ok: true })
     return false
   }
   return false
 })
 
-// MV3 Keepalive Alarm
-chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.4 })
+// MV3 Keepalive Alarm (Chrome 120+ enforces >= 0.5 min minimum period)
+void chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 }).catch(() => {})
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === KEEPALIVE_ALARM) {
     if (transportMode === 'disconnected') {
@@ -1157,7 +1243,12 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 })
 
 // Boot sequence
-void loadConfig().then(() => {
-  updateBadge()
-  void connectBridge()
-})
+void loadConfig()
+  .then(() => {
+    updateBadge()
+    void connectBridge()
+  })
+  .catch(() => {
+    updateBadge()
+    void connectBridge()
+  })

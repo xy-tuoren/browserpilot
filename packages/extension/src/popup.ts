@@ -3,6 +3,22 @@ import type { ExtensionState } from '@browserpilot/protocol'
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 
 let currentState: ExtensionState | null = null
+let currentWindowId: number | undefined
+
+void chrome.windows
+  ?.getCurrent()
+  .then((win) => {
+    currentWindowId = win?.id
+  })
+  .catch(() => {})
+
+function safeSendMessage<T = unknown>(message: unknown): Promise<T | null> {
+  try {
+    return Promise.resolve(chrome.runtime.sendMessage(message) as Promise<T>).catch(() => null)
+  } catch {
+    return Promise.resolve(null)
+  }
+}
 
 function render(state: ExtensionState): void {
   currentState = state
@@ -71,7 +87,7 @@ function render(state: ExtensionState): void {
       btn.className = 'sm'
       btn.textContent = 'Detach'
       btn.addEventListener('click', () => {
-        void chrome.runtime.sendMessage({ type: 'browserpilot:detach-tab', tabId: tab.tabId })
+        void safeSendMessage({ type: 'browserpilot:detach-tab', tabId: tab.tabId })
       })
       item.appendChild(meta)
       item.appendChild(btn)
@@ -81,12 +97,12 @@ function render(state: ExtensionState): void {
 }
 
 async function refresh(): Promise<void> {
-  const state = (await chrome.runtime.sendMessage({ type: 'browserpilot:get-state' })) as ExtensionState
+  const state = await safeSendMessage<ExtensionState>({ type: 'browserpilot:get-state' })
   if (state) render(state)
 }
 
 function updateConfig(patch: Record<string, unknown>): void {
-  void chrome.runtime.sendMessage({ type: 'browserpilot:update-config', patch }).then(() => refresh())
+  void safeSendMessage({ type: 'browserpilot:update-config', patch }).then(() => refresh())
 }
 
 $('btn-pause').addEventListener('click', () => {
@@ -94,13 +110,17 @@ $('btn-pause').addEventListener('click', () => {
   updateConfig({ paused: !currentState.config.paused })
 })
 $('btn-sidepanel').addEventListener('click', () => {
-  void chrome.runtime.sendMessage({ type: 'browserpilot:open-sidepanel' })
+  if (chrome.sidePanel?.open && currentWindowId !== undefined) {
+    void chrome.sidePanel.open({ windowId: currentWindowId }).catch(() => {})
+    return
+  }
+  void safeSendMessage({ type: 'browserpilot:open-sidepanel' })
 })
 $('btn-reconnect').addEventListener('click', () => {
-  void chrome.runtime.sendMessage({ type: 'browserpilot:reconnect' }).then(() => setTimeout(refresh, 400))
+  void safeSendMessage({ type: 'browserpilot:reconnect' }).then(() => setTimeout(refresh, 400))
 })
 $('btn-detach-all').addEventListener('click', () => {
-  void chrome.runtime.sendMessage({ type: 'browserpilot:detach-all' }).then(() => refresh())
+  void safeSendMessage({ type: 'browserpilot:detach-all' }).then(() => refresh())
 })
 
 $('opt-dark-mode').addEventListener('change', (e) => {

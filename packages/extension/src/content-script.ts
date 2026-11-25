@@ -31,6 +31,15 @@ let toastTimer: ReturnType<typeof setTimeout> | null = null
 let pickerActive = false
 let pickerHoverBox: HTMLDivElement | null = null
 
+function safeSendRuntimeMessage<T = unknown>(message: unknown): Promise<T | null> {
+  try {
+    if (!chrome?.runtime?.id) return Promise.resolve(null)
+    return Promise.resolve(chrome.runtime.sendMessage(message) as Promise<T>).catch(() => null)
+  } catch {
+    return Promise.resolve(null)
+  }
+}
+
 function ensureOverlay(): ShadowRoot {
   if (shadowRoot && hostEl?.isConnected) return shadowRoot
   hostEl?.remove()
@@ -264,14 +273,14 @@ function ensureOverlay(): ShadowRoot {
   pillPauseBtn.textContent = 'Pause'
   pillPauseBtn.addEventListener('click', (e) => {
     e.stopPropagation()
-    void chrome.runtime.sendMessage({ type: 'browserpilot:toggle-pause' }).catch(() => {})
+    void safeSendRuntimeMessage({ type: 'browserpilot:toggle-pause' })
   })
   const stopBtn = document.createElement('button')
   stopBtn.className = 'bp-pill-btn stop'
   stopBtn.textContent = 'Take Over'
   stopBtn.addEventListener('click', (e) => {
     e.stopPropagation()
-    void chrome.runtime.sendMessage({ type: 'browserpilot:stop-this-tab' }).catch(() => {})
+    void safeSendRuntimeMessage({ type: 'browserpilot:stop-this-tab' })
   })
   pillEl.append(pillDotEl, brand, pillStatusEl, pillPauseBtn, stopBtn)
   shadowRoot.appendChild(pillEl)
@@ -429,12 +438,12 @@ function onPickerClick(e: MouseEvent): void {
   const text = (target.textContent || '').trim().slice(0, 80)
   void navigator.clipboard?.writeText(selector).catch(() => {})
   showToast(`BrowserPilot picked: ${selector}`)
-  chrome.runtime.sendMessage({
+  void safeSendRuntimeMessage({
     type: 'browserpilot:picked-element',
     selector,
     tag: target.tagName.toLowerCase(),
     text,
-  }).catch(() => {})
+  })
 }
 
 function onPickerKey(e: KeyboardEvent): void {
@@ -505,11 +514,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 })
 
 // Re-sync in-page control banner after navigation inside an attached tab
-void chrome.runtime
-  .sendMessage({ type: 'browserpilot:get-tab-banner' })
-  .then((res) => {
-    if (res && typeof res === 'object' && (res as { active?: boolean }).active) {
-      updateControlBanner(res as { active: boolean; status?: string; paused?: boolean; theme?: 'dark' | 'light' })
-    }
-  })
-  .catch(() => {})
+void safeSendRuntimeMessage<{ active?: boolean; status?: string; paused?: boolean; theme?: 'dark' | 'light' }>({
+  type: 'browserpilot:get-tab-banner',
+}).then((res) => {
+  if (res && typeof res === 'object' && res.active) {
+    updateControlBanner({ ...res, active: true })
+  }
+})

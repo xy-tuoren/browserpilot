@@ -2,6 +2,17 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
+## [1.4.1] - 2026-11-25
+
+### Fixed
+- **MV3 Chrome Extension Zero-Error Hardening (`background.ts`, `content-script.ts`, `popup.ts`, `sidepanel.ts`)**:
+  - Updated `chrome.alarms.create(KEEPALIVE_ALARM)` `periodInMinutes` from `0.4` to `0.5` (30s) to satisfy Chrome 120+ MV3 minimum alarm delay without console warnings, with `.catch(() => {})` protection.
+  - Checked `chrome.runtime.lastError` in both `chrome.contextMenus.removeAll` and `chrome.contextMenus.create` callbacks inside `onInstalled`, eliminating `Unchecked runtime.lastError: duplicate id` races during extension reloads.
+  - Hardened Native Messaging disconnect handling so transient native host exits (e.g., daemon restarts) or previously connected native sessions always retry Native Messaging cleanly instead of falling back to WebSocket (preventing spurious `403` / `WebSocket connection failed` errors when a stale token is saved in `chrome.storage.local`), with backoff + native preference on WS failures.
+  - Used `chrome.runtime.getContexts({ contextTypes: ['POPUP', 'SIDE_PANEL'] })` in `broadcastUiUpdate()` to avoid firing rejected `chrome.runtime.sendMessage` broadcasts when no extension UI surface is open.
+  - Wrapped every async `chrome.runtime.onMessage` handler, `chrome.action.setBadge*`, chunk reassembly, boot `loadConfig()`, and all Popup / Side Panel / Content Script `chrome.runtime.sendMessage` calls in defensive guards to prevent unhandled rejections and post-reload `Extension context invalidated` errors.
+  - Opened the Companion Side Panel directly from the Popup click gesture handler (`chrome.sidePanel.open({ windowId })`) so Chrome's user-gesture requirement is always satisfied.
+
 ## [1.4.0] - 2026-11-24
 
 ### Added
