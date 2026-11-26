@@ -446,17 +446,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.type === 'browserpilot:codegen-stop') {
     const prevTabId = bgState.codegen.tabId
-    bgState.codegen.active = false
-    bgState.codegen.assertMode = false
-    if (prevTabId !== undefined) {
-      void chrome.tabs
-        .sendMessage(prevTabId, { type: 'browserpilot:set-codegen', active: false, assertMode: false })
-        .catch(() => {})
-    }
-    logActivity('codegen.stop', 'ok', `${compressRecordedSteps(bgState.codegen.steps).length} steps`, prevTabId)
-    broadcastUiUpdate()
-    safeRespond({ ok: true })
-    return false
+    void (async () => {
+      if (prevTabId !== undefined) {
+        await chrome.tabs
+          .sendMessage(prevTabId, { type: 'browserpilot:set-codegen', active: false, assertMode: false })
+          .catch(() => {})
+        await new Promise((r) => setTimeout(r, 25))
+      }
+      bgState.codegen.active = false
+      bgState.codegen.assertMode = false
+      logActivity('codegen.stop', 'ok', `${compressRecordedSteps(bgState.codegen.steps).length} steps`, prevTabId)
+      broadcastUiUpdate()
+      safeRespond({ ok: true })
+    })()
+    return true
   }
   if (msg.type === 'browserpilot:codegen-assert') {
     if (bgState.codegen.active && bgState.codegen.tabId !== undefined) {

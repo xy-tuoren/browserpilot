@@ -67,7 +67,7 @@ window.triggerError = function() {
 };
 
 window.burnCpu = function() {
-  const end = performance.now() + 70;
+  const end = performance.now() + 110;
   let x = 0;
   while (performance.now() < end) { x += Math.sqrt(x + 1); }
   return x;
@@ -285,6 +285,7 @@ describe('@browserpilot/core full DevTools, Recorder & Sandbox E2E', () => {
     expect(cpu.durationMs).toBeGreaterThan(0)
 
     await tab.performance.startTrace()
+    await new Promise((r) => setTimeout(r, 40))
     await tab.page.evaluate('window.burnCpu()')
     const trace = await tab.performance.stopTrace()
     expect(trace.totalEvents).toBeGreaterThan(10)

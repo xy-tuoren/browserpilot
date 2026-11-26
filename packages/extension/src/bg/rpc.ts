@@ -355,13 +355,16 @@ export async function executeBridgeMethod(method: string, params: Record<string,
       }
       if (action === 'stop') {
         const prevTab = bgState.codegen.tabId
-        bgState.codegen.active = false
-        bgState.codegen.assertMode = false
+        // Flush pending inputs and allow any in-flight recorded-step messages from the
+        // content script to arrive BEFORE flipping bgState.codegen.active to false.
         if (prevTab !== undefined) {
           await chrome.tabs
             .sendMessage(prevTab, { type: 'browserpilot:set-codegen', active: false, assertMode: false })
             .catch(() => {})
+          await new Promise((r) => setTimeout(r, 25))
         }
+        bgState.codegen.active = false
+        bgState.codegen.assertMode = false
         broadcastUiUpdate()
         return { active: false, steps: compressRecordedSteps(bgState.codegen.steps) }
       }
