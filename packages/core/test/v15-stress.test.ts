@@ -678,17 +678,15 @@ describe('@browserpilot/core v1.5 real-world complex SPA stress tests (real Chro
     })
     expect(chooser.isMultiple).toBe(true)
     await chooser.setFiles([fileA, fileB])
-    await new Promise((r) => setTimeout(r, 150))
-    expect(await tab.page.evaluate<string>('document.getElementById("upload-result").textContent')).toBe(
-      'alpha.txt=alpha-payload|beta.txt=beta-payload',
-    )
+    await expect
+      .poll(() => tab.page.evaluate<string>('document.getElementById("upload-result").textContent'), { timeout: 5000 })
+      .toBe('alpha.txt=alpha-payload|beta.txt=beta-payload')
 
     // 7. Smart automatic uploadFiles() targeting the trigger button directly (zero <input type="file"> in DOM!)
     await tab.page.uploadFiles('#dropzone-btn', [fileA])
-    await new Promise((r) => setTimeout(r, 150))
-    expect(await tab.page.evaluate<string>('document.getElementById("upload-result").textContent')).toBe(
-      'alpha.txt=alpha-payload',
-    )
+    await expect
+      .poll(() => tab.page.evaluate<string>('document.getElementById("upload-result").textContent'), { timeout: 5000 })
+      .toBe('alpha.txt=alpha-payload')
 
     // 8. Sandbox exec() integration for route(), unroute(), and waitForFileChooser()
     const execRes = await manager.exec(
@@ -703,7 +701,7 @@ describe('@browserpilot/core v1.5 real-world complex SPA stress tests (real Chro
         action: () => click('#dropzone-btn'),
         files: [${JSON.stringify(fileB)}],
       })
-      await sleep(120)
+      await waitForText('beta.txt=beta-payload', { timeoutMs: 5000 })
       const uploaded = await evaluate("document.getElementById('upload-result').textContent")
       return { echoed, uploaded }
       `,
@@ -785,9 +783,8 @@ describe('@browserpilot/core v1.5 real-world complex SPA stress tests (real Chro
     const cancelled = await tab.page.waitForFileChooser({ action: () => tab.page.click('#dropzone-btn') })
     await cancelled.cancel()
     await tab.page.uploadFiles('#dropzone-btn', [fileA])
-    await new Promise((r) => setTimeout(r, 120))
-    expect(await tab.page.evaluate<string>('document.getElementById("upload-result").textContent')).toBe(
-      'alpha.txt=alpha-payload',
-    )
+    await expect
+      .poll(() => tab.page.evaluate<string>('document.getElementById("upload-result").textContent'), { timeout: 5000 })
+      .toBe('alpha.txt=alpha-payload')
   }, 45_000)
 })
