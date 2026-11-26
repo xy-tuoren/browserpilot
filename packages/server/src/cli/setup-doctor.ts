@@ -12,6 +12,7 @@ import {
   readInstalledNativeHosts,
   syncExtensionToHome,
 } from '../native-install.js'
+import { CORE_MCP_TOOL_NAMES } from '../mcp.js'
 import { TOOL_DEFINITIONS } from '../tools.js'
 import { getExtensionDistPath, resolveServerEntryDir, type CliFlags } from './args.js'
 
@@ -134,6 +135,9 @@ export async function runDoctorCommand(flags: CliFlags): Promise<void> {
   }
   const connectedClients = health?.clients ?? []
   const versionMismatch = Boolean(health?.version && health.version !== BROWSERPILOT_VERSION)
+  const staleExtensionClients = connectedClients.filter(
+    (c) => Boolean(c.extensionVersion && c.extensionVersion !== BROWSERPILOT_VERSION),
+  )
 
   const report = {
     version: BROWSERPILOT_VERSION,
@@ -152,6 +156,7 @@ export async function runDoctorCommand(flags: CliFlags): Promise<void> {
     daemonPid: health?.pid ?? cfg?.pid ?? null,
     daemonAddress: cfg ? `${cfg.host}:${cfg.port}` : null,
     daemonVersionMismatch: versionMismatch,
+    extensionVersionMismatch: staleExtensionClients.length > 0,
     connectedBrowsers: connectedClients.length,
     clients: connectedClients,
     nativeMessagingInstalled: nativeHosts.filter((n) => n.installed).map((n) => n.browser),
@@ -196,8 +201,16 @@ export async function runDoctorCommand(flags: CliFlags): Promise<void> {
     )
   }
   for (const c of connectedClients) {
+    const extVerNote = c.extensionVersion
+      ? ` ext v${c.extensionVersion}${c.extensionVersion !== BROWSERPILOT_VERSION ? ` (⚠ stale, CLI is v${BROWSERPILOT_VERSION})` : ''}`
+      : ''
     console.log(
-      `  • ${c.browser} [${c.transport}]${c.extensionVersion ? ` ext v${c.extensionVersion}` : ''}${c.extensionId ? ` (${c.extensionId})` : ''} — attached tabs: ${c.attachedTabCount}`,
+      `  • ${c.browser} [${c.transport}]${extVerNote}${c.extensionId ? ` (${c.extensionId})` : ''} — attached tabs: ${c.attachedTabCount}`,
+    )
+  }
+  if (staleExtensionClients.length > 0) {
+    console.log(
+      `  ⚠ Loaded Chrome extension is on an older build than v${BROWSERPILOT_VERSION}. Click Reload once in chrome://extensions (future idle updates auto-reload automatically).`,
     )
   }
   console.log(
@@ -217,6 +230,9 @@ export async function runSetupCommand(flags: CliFlags): Promise<void> {
   const skipNative = Boolean(flags['no-native-host'])
 
   const synced = await syncExtensionToHome(extDist, { dryRun })
+  if (!dryRun && synced.synced && (await isDaemonReachable(cfg))) {
+    await new DaemonClient(cfg).reloadExtensions(false).catch(() => {})
+  }
   const discovered = await discoverInstalledExtensionIds()
   const bundledReal = await fs.realpath(extDist).catch(() => path.resolve(extDist))
   const bundledExtId = computeChromeExtensionId(bundledReal)
@@ -265,7 +281,9 @@ export async function runSetupCommand(flags: CliFlags): Promise<void> {
   console.log(`\n   Option A — Agent Skill + CLI (install only where you want):`)
   console.log(`     npx skills add xy-tuoren/browserpilot`)
   console.log(`     (or print skill instructions with: browserpilot skill)`)
-  console.log(`\n   Option B — MCP Server (${TOOL_DEFINITIONS.length} native tools + direct screenshot images):`)
+  console.log(
+    `\n   Option B — MCP Server (${CORE_MCP_TOOL_NAMES.size} low-token core tools + Code Mode by default; pass "--full" for all ${TOOL_DEFINITIONS.length} tools):`,
+  )
   console.log(
     JSON.stringify(
       {

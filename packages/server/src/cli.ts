@@ -45,6 +45,8 @@ async function main(): Promise<void> {
       daemonHost: typeof flags.host === 'string' ? flags.host : undefined,
       daemonPort: typeof flags.port === 'string' ? Number(flags.port) : undefined,
       daemonToken: typeof flags.token === 'string' ? flags.token : undefined,
+      full: Boolean(flags.full),
+      capabilities: typeof flags.caps === 'string' ? flags.caps : undefined,
     })
     return
   }

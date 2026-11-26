@@ -105,4 +105,13 @@ export class DaemonClient {
   async shutdown(): Promise<void> {
     await this.request('POST', '/api/shutdown').catch(() => {})
   }
+
+  async reloadExtensions(force = false): Promise<Array<{ clientId: string; reloaded: boolean; reason?: string }>> {
+    const res = await this.request<{ results: Array<{ clientId: string; reloaded: boolean; reason?: string }> }>(
+      'POST',
+      '/api/reload-extensions',
+      { force },
+    )
+    return res.results ?? []
+  }
 }

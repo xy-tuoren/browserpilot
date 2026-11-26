@@ -223,6 +223,16 @@ export class ExtensionBridgeTransport implements CDPTransport {
     return await this.rpc<{ globalVar?: string; url?: string } | null>('extension.getPinnedElement', { tabId })
   }
 
+  async reloadExtension(
+    options: { force?: boolean } = {},
+  ): Promise<{ reloaded: boolean; reason?: string; attachedTabCount?: number }> {
+    return await this.rpc<{ reloaded: boolean; reason?: string; attachedTabCount?: number }>(
+      'extension.reload',
+      { force: Boolean(options.force) },
+      5_000,
+    )
+  }
+
   async close(): Promise<void> {
     this.unsubMsg()
     this.unsubClose()

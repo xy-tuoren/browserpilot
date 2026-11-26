@@ -59,6 +59,7 @@ export async function runDirectToolShortcutCommand(
           tabId,
           sessionId,
           clientId,
+          interactiveOnly: Boolean(flags.i || flags.interactive),
           search: typeof flags.search === 'string' ? flags.search : undefined,
           scope: typeof flags.scope === 'string' ? flags.scope : undefined,
           frame: typeof flags.frame === 'string' ? flags.frame : undefined,

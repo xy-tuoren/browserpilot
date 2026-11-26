@@ -38,6 +38,64 @@ import { sleep, waitForFunction, waitForPageLoad, waitForSelector, waitForText, 
 
 const requireFromHere = createRequire(import.meta.url)
 
+const BLOCKED_EXTERNAL_BROWSER_LIBS = new Set([
+  'playwright',
+  '@playwright/test',
+  'playwright-core',
+  'puppeteer',
+  'puppeteer-core',
+])
+
+function safeSandboxRequire(id: string): unknown {
+  if (BLOCKED_EXTERNAL_BROWSER_LIBS.has(id)) {
+    throw new Error(
+      `BrowserPilot exec is 100% pure CDP ("${id}" is not used). Call built-in globals directly: tabs.open(url), tabs.current(), snapshot({ interactiveOnly: true }), click(target), fill(target, val), locator(sel), waitForSelector(sel), waitForText(str), route(pattern, fn).`,
+    )
+  }
+  return requireFromHere(id)
+}
+
+function createPlaywrightMisuseGuard(globalName: 'page' | 'context' | 'browser' | 'expect'): unknown {
+  if (globalName === 'expect') {
+    return () => {
+      throw new Error(
+        'Playwright "expect()" is not used in BrowserPilot exec. Use built-in waits/checks instead: await waitForText("..."), await waitForSelector("#el"), or await (await locator("#el")).innerText().',
+      )
+    }
+  }
+  const hints: Record<string, string> = {
+    goto: 'await tabs.open(url) (or (await tabs.current()).page.navigate(url))',
+    newPage: 'await tabs.open(url)',
+    pages: 'await tabs.list()',
+    getByRole: 'await locator(\'role=button[name="Save"]\') or await click(\'role=button[name="Save"]\')',
+    getByText: 'await locator(\'text="Save"\') or await click(\'text="Save"\')',
+    getByLabel: 'await fill(\'label=Email\', value)',
+    getByPlaceholder: 'await fill(\'placeholder=Search\', value)',
+    getByTestId: 'await click(\'testid=submit\')',
+    locator: 'await locator(selector)',
+    click: 'await click(target)',
+    fill: 'await fill(target, value)',
+    waitForSelector: 'await waitForSelector(selector)',
+    waitForURL: 'await waitForUrl(pattern)',
+    waitForLoadState: 'await waitForPageLoad()',
+    screenshot: 'await screenshot({ path })',
+    evaluate: 'await evaluate(expression)',
+  }
+  return new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        if (typeof prop === 'symbol' || prop === 'then') return undefined
+        const suggestion =
+          hints[prop] ?? 'built-in BrowserPilot globals (tabs, snapshot, click, fill, locator, waitForSelector, route)'
+        throw new Error(
+          `Playwright "${globalName}.${prop}()" is not used in BrowserPilot exec (no global "${globalName}" object). Use ${suggestion}.`,
+        )
+      },
+    },
+  )
+}
+
 function colorForGroupName(name: string): TabGroupColor {
   if (name === DEFAULT_TAB_GROUP_TITLE) return 'green'
   let hash = 0
@@ -376,13 +434,19 @@ export class SessionManager {
         warn: (...a: unknown[]) => captureLog('[warn]', ...a),
         error: (...a: unknown[]) => captureLog('[error]', ...a),
       },
-      require: requireFromHere,
+      require: safeSandboxRequire,
       setTimeout,
       clearTimeout,
       URL,
       Buffer,
       fetch,
       sleep,
+
+      // Actionable guidance traps if an LLM accidentally writes Playwright globals (`page.goto`, `context.newPage`, `expect`)
+      page: createPlaywrightMisuseGuard('page'),
+      context: createPlaywrightMisuseGuard('context'),
+      browser: createPlaywrightMisuseGuard('browser'),
+      expect: createPlaywrightMisuseGuard('expect'),
 
       // Tab lifecycle helpers
       tabs: {
@@ -418,7 +482,14 @@ export class SessionManager {
         const t = await getTab(opts?.tab)
         return t.frameLocator(iframeSelector)
       },
-      snapshot: async (opts?: { tab?: BrowserPilotTab; search?: string | RegExp; showDiffSinceLastCall?: boolean; scope?: string; frame?: string }) => {
+      snapshot: async (opts?: {
+        tab?: BrowserPilotTab
+        search?: string | RegExp
+        showDiffSinceLastCall?: boolean
+        interactiveOnly?: boolean
+        scope?: string
+        frame?: string
+      }) => {
         const t = await getTab(opts?.tab)
         return (await t.snapshots.capture(t.session, opts)).text
       },

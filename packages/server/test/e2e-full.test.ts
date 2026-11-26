@@ -303,7 +303,7 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
     const cliBin = path.resolve(import.meta.dirname, '..', 'dist', 'cli.js')
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [cliBin, 'mcp', '--cdp', directEndpoint],
+      args: [cliBin, 'mcp', '--full', '--cdp', directEndpoint],
     })
     const client = new Client({ name: 'browserpilot-test-client', version: '1.0.0' })
     await client.connect(transport)

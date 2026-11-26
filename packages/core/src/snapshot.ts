@@ -85,6 +85,26 @@ const LANDMARK_AND_STRUCTURE_ROLES = new Set([
   'iframe',
 ])
 
+const CONTAINER_LANDMARK_ROLES = new Set([
+  'banner',
+  'navigation',
+  'main',
+  'complementary',
+  'contentinfo',
+  'region',
+  'form',
+  'search',
+  'dialog',
+  'alertdialog',
+  'tablist',
+  'tabpanel',
+  'menu',
+  'menubar',
+  'toolbar',
+  'Iframe',
+  'iframe',
+])
+
 const SKIPPED_ROLES = new Set(['InlineTextBox', 'LineBreak', 'LayoutTable', 'LayoutTableRow', 'LayoutTableCell'])
 
 const LEAF_LABELED_ROLES = new Set([
@@ -124,6 +144,7 @@ function cleanText(raw: unknown, maxLen: number = 140): string {
 export interface FormatAXTreeOptions {
   sessionId?: string
   includeText?: boolean
+  interactiveOnly?: boolean
   maxDepth?: number
   startingRefIndex?: number
   scopeBackendNodeId?: number
@@ -140,7 +161,8 @@ export interface FormattedAXTree {
  * LLM-friendly hierarchical snapshot with deterministic short refs (`e1`, `e2`, ...).
  */
 export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = {}): FormattedAXTree {
-  const includeText = options.includeText ?? true
+  const interactiveOnly = options.interactiveOnly === true
+  const includeText = interactiveOnly ? false : (options.includeText ?? true)
   const maxDepth = options.maxDepth ?? 40
   let refCounter = options.startingRefIndex ?? 1
   const refs: Record<string, RefTarget> = {}
@@ -200,8 +222,10 @@ export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = 
       return
     }
 
-    // Transparent generic / structural wrappers
-    const isMeaningful = isInteractive || LANDMARK_AND_STRUCTURE_ROLES.has(role)
+    // Transparent generic / structural wrappers (in interactiveOnly mode, non-container prose/list/table wrappers flatten transparently)
+    const isMeaningful = interactiveOnly
+      ? isInteractive || CONTAINER_LANDMARK_ROLES.has(role)
+      : isInteractive || LANDMARK_AND_STRUCTURE_ROLES.has(role)
     if (!isMeaningful) {
       for (const child of children) renderNode(child, depth, parentName, parentLeafText)
       return
@@ -209,6 +233,7 @@ export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = 
 
     // Skip empty containers with no name and no rendered children
     const lineStartIndex = lines.length
+    const refsStartIndex = refCounter
     const indent = '  '.repeat(depth)
 
     let refPrefix = ''
@@ -260,6 +285,12 @@ export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = 
     const nextLeafText = fullRawName && LEAF_LABELED_ROLES.has(role) ? fullRawName : parentLeafText
     for (const child of children) {
       renderNode(child, depth + 1, name || parentName, nextLeafText)
+    }
+
+    // In interactiveOnly mode, drop any container landmark that enclosed zero interactive elements
+    if (interactiveOnly && !isInteractive && refCounter === refsStartIndex) {
+      lines.length = lineStartIndex
+      return
     }
 
     // Prune completely empty non-interactive landmark containers
@@ -348,7 +379,7 @@ function escapeRegex(s: string): string {
  * Per-tab stateful Accessibility Snapshot engine with ref registry and diff history.
  */
 export class SnapshotEngine {
-  private lastFullSnapshot = new Map<number, string>()
+  private lastFullSnapshot = new Map<string, string>()
   private refMaps = new Map<number, Record<string, RefTarget>>()
 
   async capture(session: TabCDPSession, options: SnapshotOptions = {}): Promise<SnapshotResult> {
@@ -404,6 +435,7 @@ export class SnapshotEngine {
         formatted = formatAXTree(childRes.nodes ?? [], {
           sessionId: targetFrame.sessionId,
           includeText: options.includeText,
+          interactiveOnly: options.interactiveOnly,
           maxDepth: options.maxDepth,
           startingRefIndex: 1,
         })
@@ -414,6 +446,7 @@ export class SnapshotEngine {
         if (frameRes.nodes && frameRes.nodes.length > 0) {
           formatted = formatAXTree(frameRes.nodes, {
             includeText: options.includeText,
+            interactiveOnly: options.interactiveOnly,
             maxDepth: options.maxDepth,
             startingRefIndex: 1,
           })
@@ -425,6 +458,7 @@ export class SnapshotEngine {
           const mainRes = await session.send<{ nodes: RawAXNode[] }>('Accessibility.getFullAXTree')
           formatted = formatAXTree(mainRes.nodes ?? [], {
             includeText: options.includeText,
+            interactiveOnly: options.interactiveOnly,
             maxDepth: options.maxDepth,
             scopeBackendNodeId: owner?.backendNodeId,
             startingRefIndex: 1,
@@ -471,6 +505,7 @@ export class SnapshotEngine {
     const mainRes = await session.send<{ nodes: RawAXNode[] }>('Accessibility.getFullAXTree')
     const mainFormatted = formatAXTree(mainRes.nodes ?? [], {
       includeText: options.includeText,
+      interactiveOnly: options.interactiveOnly,
       maxDepth: options.maxDepth,
       scopeBackendNodeId,
       startingRefIndex: 1,
@@ -493,6 +528,7 @@ export class SnapshotEngine {
           const formatted = formatAXTree(childRes.nodes ?? [], {
             sessionId: child.sessionId,
             includeText: options.includeText,
+            interactiveOnly: options.interactiveOnly,
             maxDepth: options.maxDepth,
             startingRefIndex: nextRef,
           })
@@ -512,12 +548,15 @@ export class SnapshotEngine {
 
     this.refMaps.set(session.tabId, allRefs)
 
-    const headerLine = `URL: ${url}${title ? ` | Title: ${title}` : ''}${scrollInfo}`
-    const fullText = `${headerLine}\n\n${allLines.join('\n') || '(empty accessibility tree)'}`
+    const modeLabel = options.interactiveOnly ? ' | Mode: interactive' : ''
+    const headerLine = `URL: ${url}${title ? ` | Title: ${title}` : ''}${scrollInfo}${modeLabel}`
+    const emptyMsg = options.interactiveOnly ? '(no interactive elements)' : '(empty accessibility tree)'
+    const fullText = `${headerLine}\n\n${allLines.join('\n') || emptyMsg}`
 
-    const prevFull = this.lastFullSnapshot.get(session.tabId)
+    const snapshotCacheKey = `${session.tabId}:${options.interactiveOnly ? 'interactive' : 'full'}`
+    const prevFull = this.lastFullSnapshot.get(snapshotCacheKey)
     if (!options.scope) {
-      this.lastFullSnapshot.set(session.tabId, fullText)
+      this.lastFullSnapshot.set(snapshotCacheKey, fullText)
     }
 
     if (options.search !== undefined) {
@@ -566,7 +605,8 @@ export class SnapshotEngine {
   }
 
   clearTab(tabId: number): void {
-    this.lastFullSnapshot.delete(tabId)
+    this.lastFullSnapshot.delete(`${tabId}:full`)
+    this.lastFullSnapshot.delete(`${tabId}:interactive`)
     this.refMaps.delete(tabId)
   }
 }

@@ -117,6 +117,19 @@ export async function executeBridgeMethod(method: string, params: Record<string,
       return await saveConfig(params as Partial<ExtensionConfig>)
     }
 
+    case 'extension.reload': {
+      const attachedCount = bgState.attachedTabs.size
+      if (attachedCount > 0 && !params.force) {
+        return { reloaded: false, reason: 'busy', attachedTabCount: attachedCount }
+      }
+      setTimeout(() => {
+        try {
+          chrome.runtime.reload()
+        } catch {}
+      }, 80)
+      return { reloaded: true }
+    }
+
     case 'extension.highlight': {
       if (!bgState.config.showHighlights) return { ok: true }
       const tabId = Number(params.tabId)

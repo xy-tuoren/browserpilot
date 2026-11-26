@@ -24,12 +24,13 @@ BrowserPilot controls the user's running Chrome browser (with existing logins, c
    Always pass `--tab <id>` (or `tabId` in MCP) when multiple tabs are open so you never act on the wrong tab.
 2. **Perceive the page before acting**:
    ```bash
+   browserpilot snapshot -i --tab <id>
    browserpilot snapshot --tab <id> --search "Sign in|Submit"
    browserpilot snapshot --tab <id> --scope "main" --full
    browserpilot labeled-screenshot ./som.png --tab <id>
    ```
-   - `snapshot` returns a compact AXTree with short refs (`e1`, `e2`...) plus viewport/scroll telemetry.
-   - Repeated `snapshot` calls return concise diffs by default; pass `--full` (`showDiffSinceLastCall: false`) to force a full snapshot.
+   - `snapshot -i` (`interactiveOnly: true`) returns **only interactive controls** (`[e1]`, `[e2]`...) and their enclosing landmarks (~70% fewer tokens — ideal for clicking buttons and filling forms on dense pages).
+   - `snapshot` (without `-i`) includes headings and static text; repeated calls return concise diffs by default (pass `--full` / `showDiffSinceLastCall: false` to force full output).
    - Use `labeled-screenshot` (Set-of-Mark overlays) when spatial layout or icon-only buttons matter.
 3. **Interact & wait with trusted CDP input**:
    ```bash
@@ -85,4 +86,4 @@ Available sandbox globals: `state`, `tabs` (`list`, `open`, `use`, `current`, `c
 
 ## 5. Detailed Reference
 
-For all 52 MCP tools, full chained/cross-iframe locator grammar, DevTools debugging/live-edit/mocking/codegen/trace workflows, and complete CLI options, read [REFERENCE.md](./REFERENCE.md).
+`browserpilot mcp` advertises the lean 19-tool low-token `core` profile (+ `browser_exec` Code Mode) by default; pass `--full` or `--caps=interaction,extraction,devtools,context,media` to expose all 52 MCP tools. For full chained/cross-iframe locator grammar, DevTools debugging/live-edit/mocking/codegen/trace workflows, and complete CLI options, read [REFERENCE.md](./REFERENCE.md).

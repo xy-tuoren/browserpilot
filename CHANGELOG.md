@@ -4,6 +4,18 @@ All notable changes to **BrowserPilot** (`browserpilot-cdp`) are documented in t
 
 > BrowserPilot follows pre-1.0 Semantic Versioning (`0.x.y`) while core APIs, extension UX, and real-world site compatibility continue to mature toward `1.0.0`.
 
+## [Unreleased]
+
+### Added
+- **Interactive-Only Compact Snapshot Mode (`snapshot -i` / `--interactive` / `interactiveOnly: true`)**:
+  - Emits only interactive controls (`[e1]`, `[e2]`...) and enclosing container landmarks that actually hold interactive descendants, cutting snapshot token usage by ~60–75% on content-heavy pages while maintaining independent full vs interactive diff baselines.
+- **Tiered Low-Token MCP Tool Profiles (`packages/server/src/mcp.ts`, `cli.ts`)**:
+  - `browserpilot mcp` now advertises a lean **19-tool `core` profile** (+ `browser_exec` Code Mode) by default, slashing upfront MCP schema context tokens by **>65%**; pass `--full` (or `BROWSERPILOT_MCP_CAPS=all`) for all 52 tools, or `--caps=interaction,extraction,devtools,context,media` to enable specific tool groups.
+- **Playwright Misuse Guidance Guards in `exec` Sandbox (`packages/core/src/session-manager.ts`)**:
+  - Intercepts accidental `page.*`, `context.*`, `browser.*`, `expect()`, and `require('playwright' | 'puppeteer')` calls inside `browserpilot exec` with one-line correction hints pointing to BrowserPilot's pure-CDP globals without interfering with local variables.
+- **Idle Unpacked Extension Auto-Reload & Stale-Memory Diagnostics (`packages/extension/src/bg/rpc.ts`, `daemon.ts`, `cli/setup-doctor.ts`)**:
+  - Added `extension.reload` bridge RPC and automatic once-per-version idle hot-reload in `BrowserPilotDaemon` when `~/.browserpilot/extension` on disk has been updated, plus live memory-vs-CLI extension version warnings in `browserpilot doctor`.
+
 ## [0.2.0] - 2026-11-26
 
 ### Changed

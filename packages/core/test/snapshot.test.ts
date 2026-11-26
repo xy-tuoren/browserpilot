@@ -28,6 +28,32 @@ describe('Snapshot & Wait helpers', () => {
     expect(result.refs.e2.backendDOMNodeId).toBe(102)
   })
 
+  it('prunes non-interactive prose, headings, and empty landmarks in interactiveOnly (-i) mode while keeping enclosing landmarks', () => {
+    const nodes: RawAXNode[] = [
+      { nodeId: '1', role: { value: 'RootWebArea' }, name: { value: 'Docs' }, childIds: ['2', '5', '8'] },
+      // Empty / prose-only complementary sidebar — must be pruned completely!
+      { nodeId: '2', role: { value: 'complementary' }, name: { value: 'TOC' }, childIds: ['3', '4'] },
+      { nodeId: '3', role: { value: 'heading' }, name: { value: 'On this page' } },
+      { nodeId: '4', role: { value: 'StaticText' }, name: { value: 'Long article paragraph...' } },
+      // Primary navigation containing an interactive link — landmark + link must be kept!
+      { nodeId: '5', role: { value: 'navigation' }, name: { value: 'Main' }, childIds: ['6', '7'] },
+      { nodeId: '6', role: { value: 'listitem' }, childIds: ['7'] },
+      { nodeId: '7', role: { value: 'link' }, name: { value: 'Pricing' }, backendDOMNodeId: 301 },
+      // Form containing a button — landmark + button must be kept!
+      { nodeId: '8', role: { value: 'form' }, name: { value: 'Login' }, childIds: ['9'] },
+      { nodeId: '9', role: { value: 'button' }, name: { value: 'Sign in' }, backendDOMNodeId: 302 },
+    ]
+
+    const compact = formatAXTree(nodes, { interactiveOnly: true })
+    expect(compact.lines).toEqual([
+      '- navigation "Main"',
+      '  - [e1] link "Pricing"',
+      '- form "Login"',
+      '  - [e2] button "Sign in"',
+    ])
+    expect(Object.keys(compact.refs)).toEqual(['e1', 'e2'])
+  })
+
   it('suppresses split StaticText highlight children already covered by parent link/button name', () => {
     const nodes: RawAXNode[] = [
       { nodeId: '1', role: { value: 'RootWebArea' }, name: { value: 'Forum' }, childIds: ['2', '6'] },

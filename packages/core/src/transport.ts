@@ -69,6 +69,7 @@ export interface CDPTransport {
     banner: { active: boolean; status?: string; paused?: boolean; mode?: 'working' | 'handoff' },
   ): Promise<void>
   getPinnedElement?(tabId: number): Promise<{ globalVar?: string; url?: string } | null>
+  reloadExtension?(options?: { force?: boolean }): Promise<{ reloaded: boolean; reason?: string; attachedTabCount?: number }>
   close(): Promise<void>
 }
 

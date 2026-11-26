@@ -99,6 +99,10 @@ export const NAVIGATION_TOOL_DEFINITIONS: ToolDefinition[] = [
         search: { type: 'string', description: 'Filter lines matching substring/regex' },
         scope: { type: 'string', description: 'CSS selector or ref to scope snapshot to a subtree' },
         frame: { type: 'string', description: 'Iframe CSS selector, frameId, name, or URL substring/regex to snapshot a single frame' },
+        interactiveOnly: {
+          type: 'boolean',
+          description: 'Return only interactive elements ([e1], [e2]...) and enclosing landmarks (~70% fewer tokens)',
+        },
         showDiffSinceLastCall: { type: 'boolean', description: 'Return concise diff since last snapshot (default true)' },
         includeText: { type: 'boolean' },
         includeIframes: { type: 'boolean' },
@@ -311,6 +315,7 @@ export async function executeNavigationTool(
         search: args.search as string | undefined,
         scope: args.scope as string | undefined,
         frame: args.frame as string | undefined,
+        interactiveOnly: args.interactiveOnly as boolean | undefined,
         showDiffSinceLastCall: args.showDiffSinceLastCall as boolean | undefined,
         includeText: args.includeText as boolean | undefined,
         includeIframes: args.includeIframes as boolean | undefined,

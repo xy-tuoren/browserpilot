@@ -1,5 +1,7 @@
 import crypto from 'node:crypto'
+import fs from 'node:fs/promises'
 import http from 'node:http'
+import path from 'node:path'
 import { WebSocketServer, type WebSocket } from 'ws'
 import {
   DirectCDPTransport,
@@ -18,6 +20,7 @@ import {
   type TabGroupColor,
 } from '@browserpilot/protocol'
 import { loadOrCreateDaemonConfig, writeDaemonRuntimeInfo, type DaemonConfigFile } from './config.js'
+import { getStableExtensionDir } from './native-install.js'
 import { executeTool, type ToolRuntimeContext } from './tools.js'
 
 interface ConnectedBackend {
@@ -47,6 +50,7 @@ export class BrowserPilotDaemon {
   private config: DaemonConfigFile | null = null
   private startedAt = 0
   private hostedTraces = new Map<string, { html: string; createdAt: number }>()
+  private autoReloadAttempted = new Set<string>()
 
   async start(options: DaemonOptions = {}): Promise<DaemonConfigFile> {
     const cfg =
@@ -168,6 +172,17 @@ export class BrowserPilotDaemon {
         )
       }
 
+      // Seamless idle hot-reload: if the connected unpacked extension in Chrome memory is on an older
+      // version than this daemon AND ~/.browserpilot/extension/manifest.json on disk is already updated,
+      // ask the extension to call chrome.runtime.reload() once while idle (zero manual chrome://extensions clicks).
+      if (hello?.extensionVersion && hello.extensionVersion !== BROWSERPILOT_VERSION) {
+        const reloadKey = `${hello.extensionId ?? 'ext'}:${hello.extensionVersion}->${BROWSERPILOT_VERSION}`
+        if (!this.autoReloadAttempted.has(reloadKey)) {
+          this.autoReloadAttempted.add(reloadKey)
+          void this.maybeAutoReloadStaleExtension(transport)
+        }
+      }
+
       ws.on('close', () => {
         manager.dispose()
         this.backends.delete(clientId)
@@ -192,6 +207,32 @@ export class BrowserPilotDaemon {
       const b = this.backends.get(clientId)
       if (b) b.info.lastSeenAt = Date.now()
     })
+  }
+
+  private async maybeAutoReloadStaleExtension(transport: ExtensionBridgeTransport): Promise<void> {
+    try {
+      const manifestRaw = await fs.readFile(path.join(getStableExtensionDir(), 'manifest.json'), 'utf8')
+      const manifest = JSON.parse(manifestRaw) as { version?: string }
+      if (manifest.version !== BROWSERPILOT_VERSION) return
+      await new Promise((r) => setTimeout(r, 200))
+      await transport.reloadExtension({ force: false })
+    } catch {
+      // Older extension builds (<0.2.1) without `extension.reload` simply ignore this cleanly
+    }
+  }
+
+  async reloadConnectedExtensions(force = false): Promise<Array<{ clientId: string; reloaded: boolean; reason?: string }>> {
+    const out: Array<{ clientId: string; reloaded: boolean; reason?: string }> = []
+    for (const [id, backend] of this.backends.entries()) {
+      if (!backend.transport.reloadExtension) continue
+      try {
+        const res = await backend.transport.reloadExtension({ force })
+        out.push({ clientId: id, reloaded: res.reloaded, reason: res.reason })
+      } catch (err) {
+        out.push({ clientId: id, reloaded: false, reason: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    return out
   }
 
   async connectDirectCDP(endpoint: string): Promise<BrowserClientInfo> {
@@ -351,6 +392,13 @@ export class BrowserPilotDaemon {
           (body.args as Record<string, unknown>) ?? {},
         )
         this.sendJson(res, 200, result)
+        return
+      }
+
+      if (method === 'POST' && url.pathname === '/api/reload-extensions') {
+        const body = await this.readJsonBody(req)
+        const results = await this.reloadConnectedExtensions(Boolean(body.force))
+        this.sendJson(res, 200, { ok: true, results })
         return
       }
 

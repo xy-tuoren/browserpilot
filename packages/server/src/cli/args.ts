@@ -91,7 +91,7 @@ Usage:
   browserpilot setup [--extension-id <id>] [--dry-run]   Sync extension, auto-install Native Messaging & print MCP config
   browserpilot doctor [--json]                           Diagnose extension, Native Messaging, Chrome, ffmpeg & daemon
   browserpilot daemon start | stop | restart | status | run  Manage local authenticated bridge daemon
-  browserpilot mcp [--cdp <url>]                         Start MCP stdio server (for Claude/Cursor/Codex/Antigravity)
+  browserpilot mcp [--full] [--caps <groups>] [--cdp <url>]  Start MCP stdio server (lean 19-tool core default; --full for all 52)
   browserpilot connect-cdp <url>                         Attach daemon directly to a --remote-debugging-port Chrome
   browserpilot browser start [--headless] [--cdp-port N] Launch Chrome/Chrome for Testing with BrowserPilot ready
 
@@ -109,7 +109,7 @@ Direct Quick Commands:
   browserpilot close <tabId>
   browserpilot navigate <url> [--tab <id>]
   browserpilot back | forward | reload [--ignore-cache] [--tab <id>]
-  browserpilot snapshot [--tab <id>] [--search <regex>] [--scope <css>] [--frame <frame>] [--full]
+  browserpilot snapshot [-i|--interactive] [--tab <id>] [--search <regex>] [--scope <css>] [--frame <frame>] [--full]
   browserpilot markdown [--search <regex>] [--full] [--tab <id>]
   browserpilot html [--selector <css>] [--search <regex>] [--full] [--tab <id>]
   browserpilot click <ref|locator> [--force] [--double] [--button left|right|middle] [--modifiers Meta,Shift] [--tab <id>]

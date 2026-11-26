@@ -8,9 +8,11 @@ import { ExtensionBridgeTransport, SessionManager, type ExtensionChannel } from 
 import type { BridgeMessage, BridgeRequest } from '@browserpilot/protocol'
 import {
   BROWSERPILOT_SKILL_DOC,
+  CORE_MCP_TOOL_NAMES,
   executeTool,
   getNativeMessagingHostDirs,
   installNativeHost,
+  resolveMcpToolDefinitions,
   TOOL_DEFINITIONS,
   validateAndNormalizeToolArgs,
   type ToolRuntimeContext,
@@ -52,6 +54,8 @@ function createMockExtensionChannel() {
             if (cdpMethod === 'Runtime.evaluate') {
               result = { result: { value: { url: 'https://example.com', title: 'Example' } } }
             }
+          } else if (req.method === 'extension.reload') {
+            result = { reloaded: true }
           }
           for (const h of msgHandlers) {
             h({ type: 'response', id: req.id, ok: true, result })
@@ -180,8 +184,45 @@ describe('v1.7 Architecture, Schema Validation, Lifecycle GC, Windows Host & Typ
     expect(remainingIds).toContain('ephemeral-64')
     expect(remainingIds.length).toBeLessThanOrEqual(50)
 
+    // 4. Playwright misuse guards inside exec sandbox return actionable BrowserPilot guidance without blocking local `const page`
+    const badGoto = await manager.exec('guard-1', `await page.goto("https://example.com")`)
+    expect(badGoto.error).toContain('Playwright "page.goto()" is not used')
+    expect(badGoto.error).toContain('tabs.open(url)')
+
+    const badRole = await manager.exec('guard-1', `await page.getByRole("button").click()`)
+    expect(badRole.error).toContain('Playwright "page.getByRole()" is not used')
+    expect(badRole.error).toContain("role=button")
+
+    const badRequire = await manager.exec('guard-1', `const pw = require("playwright")`)
+    expect(badRequire.error).toContain('100% pure CDP')
+
+    const shadowedLocal = await manager.exec('guard-1', `const page = { customVal: 99 }; return page.customVal`)
+    expect(shadowedLocal.error).toBeUndefined()
+    expect(shadowedLocal.returnValue).toBe(99)
+
+    // 5. Extension idle reload RPC works cleanly over ExtensionBridgeTransport
+    const reloadRes = await transport.reloadExtension({ force: false })
+    expect(reloadRes.reloaded).toBe(true)
+
     manager.dispose()
     await transport.close()
+  })
+
+  it('reduces upfront MCP schema payload by >65% in default core mode while supporting --caps and --full', () => {
+    const coreTools = resolveMcpToolDefinitions()
+    const fullTools = resolveMcpToolDefinitions({ full: true })
+    const customCaps = resolveMcpToolDefinitions({ capabilities: 'devtools,media' })
+
+    expect(coreTools.length).toBe(CORE_MCP_TOOL_NAMES.size)
+    expect(coreTools.length).toBe(19)
+    expect(fullTools.length).toBe(52)
+    expect(customCaps.some((t) => t.name === 'browser_debugger')).toBe(true)
+    expect(customCaps.some((t) => t.name === 'browser_trace')).toBe(true)
+    expect(customCaps.some((t) => t.name === 'browser_cookies')).toBe(false)
+
+    const coreBytes = Buffer.byteLength(JSON.stringify(coreTools), 'utf8')
+    const fullBytes = Buffer.byteLength(JSON.stringify(fullTools), 'utf8')
+    expect(coreBytes).toBeLessThan(fullBytes * 0.4)
   })
 
   it('generates Windows (win32) Native Messaging .cmd wrapper and HKCU registry host manifests cleanly', async () => {

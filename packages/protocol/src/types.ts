@@ -103,6 +103,8 @@ export interface SnapshotOptions {
   frame?: string
   /** Include non-interactive text/structure nodes (default true) */
   includeText?: boolean
+  /** Return only interactive elements ([e1], [e2]...) and their enclosing landmarks (~70% fewer tokens) */
+  interactiveOnly?: boolean
   /** Maximum depth to traverse (default 40) */
   maxDepth?: number
   /** Include iframe subtrees (default true) */
