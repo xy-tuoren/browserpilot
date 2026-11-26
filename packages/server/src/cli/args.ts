@@ -90,38 +90,42 @@ export function printHelp(): void {
 Usage:
   browserpilot setup [--extension-id <id>] [--dry-run]   Sync extension, auto-install Native Messaging & print MCP config
   browserpilot doctor [--json]                           Diagnose extension, Native Messaging, Chrome, ffmpeg & daemon
-  browserpilot daemon start | stop | restart | status | run  Manage local authenticated bridge daemon
-  browserpilot mcp [--full] [--caps <groups>] [--cdp <url>]  Start MCP stdio server (lean 19-tool core default; --full for all 52)
+  browserpilot daemon start | stop | restart | status | run | use <client|browser> | install-service | uninstall-service
+  browserpilot clients                                   List connected browsers/profiles (* = active default)
+  browserpilot mcp [--full] [--caps <groups>] [--http [--port 19889]] [--cdp <url>]  Start MCP server (stdio or Streamable HTTP)
   browserpilot connect-cdp <url>                         Attach daemon directly to a --remote-debugging-port Chrome
   browserpilot browser start [--headless] [--cdp-port N] Launch Chrome/Chrome for Testing with BrowserPilot ready
 
-Stateful Sessions, Codegen & Visual Trace:
+Stateful Sessions, Replay, Codegen & Visual Trace:
   browserpilot session new [--tab-group <name>] [--tab-group-color <color>]
   browserpilot session list | update <id> [--tab-group <name>] [--tab-group-color <color>] | reset <id> | close <id>
-  browserpilot exec -s <id> -e '<js>' | -f <script.js> [--timeout <ms>] [--trace <report.html>]
+  browserpilot exec -s <id> -e '<js>' | -f <script.js> [--restricted-sandbox] [--timeout <ms>] [--trace <report.html>]
+  browserpilot run <flow.json> [--trace [report.html]] [--open] [--tab <id>]
   browserpilot codegen [url] [--format playwright|browserpilot|skill|batch] [-o <file>] [--duration <sec>] [--tab <id>]
   browserpilot trace <start|stop|status|open> [path] [--title <str>] [--open] [--json] [--tab <id>]
 
-Direct Quick Commands:
+Direct Quick Commands (pass --browser <name> | --profile <label> | --client <id> to target a specific browser):
   browserpilot status
   browserpilot tabs | frames [--tab <id>]
   browserpilot open <url> [--tab-group <name>]
   browserpilot close <tabId>
   browserpilot navigate <url> [--tab <id>]
   browserpilot back | forward | reload [--ignore-cache] [--tab <id>]
-  browserpilot snapshot [-i|--interactive] [--tab <id>] [--search <regex>] [--scope <css>] [--frame <frame>] [--full]
-  browserpilot markdown [--search <regex>] [--full] [--tab <id>]
-  browserpilot html [--selector <css>] [--search <regex>] [--full] [--tab <id>]
-  browserpilot click <ref|locator> [--force] [--double] [--button left|right|middle] [--modifiers Meta,Shift] [--tab <id>]
-  browserpilot check | uncheck <ref|locator> [--force] [--tab <id>]
-  browserpilot fill <ref|locator> <value> [--tab <id>]
-  browserpilot fill-form '<json-fields>' [--tab <id>]
-  browserpilot select <ref|locator> <val1> [val2...] [--tab <id>]
+  browserpilot snapshot [-i|--interactive] [--wrap-untrusted] [--tab <id>] [--search <regex>] [--scope <css>] [--frame <frame>] [--full]
+  browserpilot markdown [--search <regex>] [--wrap-untrusted] [--full] [--tab <id>]
+  browserpilot html [--selector <css>] [--search <regex>] [--wrap-untrusted] [--full] [--tab <id>]
+  browserpilot click <ref|locator> [--diff] [--force] [--double] [--button left|right|middle] [--modifiers Meta,Shift] [--tab <id>]
+  browserpilot check | uncheck <ref|locator> [--diff] [--force] [--tab <id>]
+  browserpilot fill <ref|locator> <value> [--diff] [--tab <id>]
+  browserpilot fill-form '<json-fields>' [--diff] [--tab <id>]
+  browserpilot select <ref|locator> <val1> [val2...] [--diff] [--tab <id>]
   browserpilot upload <ref|locator> <file1> [file2...] [--tab <id>]
-  browserpilot key <combo> [--down|--up] [--repeat <N>] [--tab <id>]
+  browserpilot key <combo> [--diff] [--down|--up] [--repeat <N>] [--tab <id>]
   browserpilot hover <ref|locator> [--tab <id>]
-  browserpilot drag <from> <to> [--steps <N>] | --points "x1,y1;x2,y2;..." [--tab <id>]
-  browserpilot scroll [down|up|left|right] [--amount <px>] [--target <ref|sel>] [--tab <id>]
+  browserpilot drag <from> <to> [--mode auto|pointer|html5] [--steps <N>] | --points "x1,y1;x2,y2;..." [--tab <id>]
+  browserpilot tap <ref|locator> | --x <N> --y <N> [--diff] [--tab <id>]
+  browserpilot swipe <from> <to> [--steps <N>] [--duration <ms>] [--tab <id>]
+  browserpilot scroll [down|up|left|right] [--until <locator>] [--max-scrolls <N>] [--amount <px>] [--target <ref|sel>] [--diff] [--tab <id>]
   browserpilot dialog <accept|dismiss> [--prompt <text>] [--auto] [--tab <id>]
   browserpilot wait [--selector <loc>] [--state visible|hidden|attached|detached] [--text <str>] [--gone] [--url <pat>] [--response <url>] [--fn <js>] [--popup] [--frame <f>] [--ms <N>] [--timeout <ms>]
   browserpilot handoff "<message>" [--timeout <ms>] [--tab <id>]

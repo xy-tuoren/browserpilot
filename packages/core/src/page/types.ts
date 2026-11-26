@@ -47,6 +47,32 @@ export interface ScrollResult {
   container: string
 }
 
+export interface ScrollUntilOptions {
+  /** Optional scroll container target selector/ref (auto-detects main scrollable container if omitted) */
+  container?: string
+  direction?: 'up' | 'down' | 'left' | 'right'
+  amount?: number
+  maxScrolls?: number
+  delayMs?: number
+}
+
+export interface ScrollUntilResult {
+  found: boolean
+  attempts: number
+  lastScroll?: ScrollResult
+}
+
+export interface DragOptions {
+  steps?: number
+  /** 'auto' (default) detects HTML5 draggable="true" elements and dispatches DataTransfer DragEvents alongside pointer motion */
+  mode?: 'auto' | 'pointer' | 'html5'
+}
+
+export interface SwipeOptions {
+  steps?: number
+  durationMs?: number
+}
+
 export interface FormFieldInput {
   target: string
   value: string | string[] | number | boolean

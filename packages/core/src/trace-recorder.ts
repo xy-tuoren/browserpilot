@@ -4,6 +4,8 @@ import {
   BROWSERPILOT_VERSION,
   generateBrowserPilotScript,
   generatePlaywrightScript,
+  redactNetworkEntry,
+  redactSensitiveText,
   type BoundingBox,
   type RecordedActionType,
   type RecordedStep,
@@ -178,7 +180,7 @@ export class TraceRecorder implements PageTraceHook {
     const out: TraceNetworkEntry[] = []
     for (const item of fresh) {
       this.seenNetworkIds.add(item.requestId)
-      const entry: TraceNetworkEntry = { ...item }
+      const entry: TraceNetworkEntry = redactNetworkEntry({ ...item })
       const isApiLike =
         this.opts.networkBodies &&
         !item.failed &&
@@ -188,7 +190,8 @@ export class TraceRecorder implements PageTraceHook {
       if (isApiLike) {
         const body = await this.networkInspector.getResponseBody(item.requestId).catch(() => null)
         if (body && !body.base64Encoded && body.body) {
-          entry.responseBodyPreview = body.body.length > 4096 ? `${body.body.slice(0, 4096)}…` : body.body
+          const safeBody = redactSensitiveText(body.body)
+          entry.responseBodyPreview = safeBody.length > 4096 ? `${safeBody.slice(0, 4096)}…` : safeBody
         }
       }
       out.push(entry)
@@ -315,6 +318,25 @@ export class TraceRecorder implements PageTraceHook {
       const last = this.steps[this.steps.length - 1]
       last.consoleEntries.push(...this.collectStepConsole())
       last.networkEntries.push(...(await this.collectStepNetwork()))
+    }
+
+    // Backfill responseBodyPreview for any API requests that were still in-flight when their step ended
+    if (this.opts.networkBodies) {
+      for (const step of this.steps) {
+        for (const entry of step.networkEntries) {
+          if (entry.responseBodyPreview || entry.failed) continue
+          const isApiLike =
+            entry.resourceType === 'XHR' ||
+            entry.resourceType === 'Fetch' ||
+            (entry.mimeType && /json|text|xml|graphql/i.test(entry.mimeType))
+          if (!isApiLike) continue
+          const body = await this.networkInspector.getResponseBody(entry.requestId).catch(() => null)
+          if (body && !body.base64Encoded && body.body) {
+            const safeBody = redactSensitiveText(body.body)
+            entry.responseBodyPreview = safeBody.length > 4096 ? `${safeBody.slice(0, 4096)}…` : safeBody
+          }
+        }
+      }
     }
 
     const codegenSteps: RecordedStep[] = []

@@ -11,6 +11,7 @@ export interface ExtensionHelloMessage {
   browser: string
   transport: 'native' | 'websocket'
   profileEmail?: string
+  profileLabel?: string
 }
 
 export interface BridgeRequest {

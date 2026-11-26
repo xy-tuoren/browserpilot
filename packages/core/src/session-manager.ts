@@ -22,12 +22,15 @@ import {
 } from './network-inspector.js'
 import type {
   ClickOptions,
+  DragOptions,
   EmulateOptions,
   FillOptions,
   FormFieldInput,
   KeyModifier,
   MouseButton,
   PdfOptions,
+  ScrollUntilOptions,
+  SwipeOptions,
   WaitForFileChooserOptions,
 } from './page-controller.js'
 import { createDemoVideo } from './recorder.js'
@@ -46,13 +49,46 @@ const BLOCKED_EXTERNAL_BROWSER_LIBS = new Set([
   'puppeteer-core',
 ])
 
-function safeSandboxRequire(id: string): unknown {
-  if (BLOCKED_EXTERNAL_BROWSER_LIBS.has(id)) {
-    throw new Error(
-      `BrowserPilot exec is 100% pure CDP ("${id}" is not used). Call built-in globals directly: tabs.open(url), tabs.current(), snapshot({ interactiveOnly: true }), click(target), fill(target, val), locator(sel), waitForSelector(sel), waitForText(str), route(pattern, fn).`,
-    )
+const RESTRICTED_SANDBOX_BLOCKED_MODULES = new Set([
+  'child_process',
+  'fs',
+  'fs/promises',
+  'net',
+  'tls',
+  'dgram',
+  'http',
+  'https',
+  'http2',
+  'cluster',
+  'worker_threads',
+  'vm',
+  'os',
+  'module',
+  'inspector',
+  'v8',
+  'perf_hooks',
+  'dns',
+])
+
+export type ExecSandboxMode = 'standard' | 'restricted'
+
+function createSafeSandboxRequire(sandboxMode: ExecSandboxMode): (id: string) => unknown {
+  return (id: string) => {
+    if (BLOCKED_EXTERNAL_BROWSER_LIBS.has(id)) {
+      throw new Error(
+        `BrowserPilot exec is 100% pure CDP ("${id}" is not used). Call built-in globals directly: tabs.open(url), tabs.current(), snapshot({ interactiveOnly: true }), click(target), fill(target, val), locator(sel), waitForSelector(sel), waitForText(str), route(pattern, fn).`,
+      )
+    }
+    if (sandboxMode === 'restricted') {
+      const normalized = id.startsWith('node:') ? id.slice('node:'.length) : id
+      if (RESTRICTED_SANDBOX_BLOCKED_MODULES.has(normalized) || normalized.startsWith('.') || normalized.startsWith('/')) {
+        throw new Error(
+          `Blocked module "${id}" in restricted exec sandbox mode (BROWSERPILOT_SANDBOX_MODE=restricted). Use built-in BrowserPilot CDP globals instead.`,
+        )
+      }
+    }
+    return requireFromHere(id)
   }
-  return requireFromHere(id)
 }
 
 function createPlaywrightMisuseGuard(globalName: 'page' | 'context' | 'browser' | 'expect'): unknown {
@@ -391,10 +427,12 @@ export class SessionManager {
   async exec(
     sessionId: string,
     code: string,
-    options: { timeoutMs?: number; tabId?: number; tracePath?: string } = {},
+    options: { timeoutMs?: number; tabId?: number; tracePath?: string; sandboxMode?: ExecSandboxMode } = {},
   ): Promise<SessionExecResult> {
     const start = Date.now()
     const timeoutMs = options.timeoutMs ?? 30_000
+    const sandboxMode: ExecSandboxMode =
+      options.sandboxMode ?? (process.env.BROWSERPILOT_SANDBOX_MODE === 'restricted' ? 'restricted' : 'standard')
     const sess = this.getOrCreateSession(sessionId)
 
     const logs: string[] = []
@@ -434,7 +472,7 @@ export class SessionManager {
         warn: (...a: unknown[]) => captureLog('[warn]', ...a),
         error: (...a: unknown[]) => captureLog('[error]', ...a),
       },
-      require: safeSandboxRequire,
+      require: createSafeSandboxRequire(sandboxMode),
       setTimeout,
       clearTimeout,
       URL,
@@ -549,9 +587,27 @@ export class SessionManager {
         const t = await getTab(opts.tab)
         return await t.page.scroll(opts)
       },
-      drag: async (from: string | { x: number; y: number }, to: string | { x: number; y: number }, opts?: { tab?: BrowserPilotTab; steps?: number }) => {
+      scrollUntil: async (target: string, opts?: ScrollUntilOptions & { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts?.tab)
+        return await t.page.scrollUntil(target, opts)
+      },
+      drag: async (from: string | { x: number; y: number }, to: string | { x: number; y: number }, opts?: DragOptions & { tab?: BrowserPilotTab }) => {
         const t = await getTab(opts?.tab)
         await t.page.drag(from, to, opts)
+      },
+      tap: async (target: string | { x: number; y: number }, opts?: { tab?: BrowserPilotTab; timeoutMs?: number }) => {
+        const t = await getTab(opts?.tab)
+        await t.page.tap(target, opts?.timeoutMs)
+      },
+      swipe: async (from: string | { x: number; y: number }, to: string | { x: number; y: number }, opts?: SwipeOptions & { tab?: BrowserPilotTab }) => {
+        const t = await getTab(opts?.tab)
+        await t.page.swipe(from, to, opts)
+      },
+      touch: {
+        tap: async (target: string | { x: number; y: number }, opts?: { tab?: BrowserPilotTab; timeoutMs?: number }) =>
+          (await getTab(opts?.tab)).page.tap(target, opts?.timeoutMs),
+        swipe: async (from: string | { x: number; y: number }, to: string | { x: number; y: number }, opts?: SwipeOptions & { tab?: BrowserPilotTab }) =>
+          (await getTab(opts?.tab)).page.swipe(from, to, opts),
       },
       mouseStroke: async (points: Array<{ x: number; y: number }>, opts?: { tab?: BrowserPilotTab; button?: MouseButton; stepsPerSegment?: number; delayMs?: number }) => {
         const t = await getTab(opts?.tab)

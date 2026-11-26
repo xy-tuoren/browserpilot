@@ -47,6 +47,7 @@ export class BrowserPilotDaemon {
   private wss: WebSocketServer | null = null
   private backends = new Map<string, ConnectedBackend>()
   private primaryClientId: string | null = null
+  private pinnedClientId: string | null = null
   private config: DaemonConfigFile | null = null
   private startedAt = 0
   private hostedTraces = new Map<string, { html: string; createdAt: number }>()
@@ -154,12 +155,15 @@ export class BrowserPilotDaemon {
         extensionId: hello?.extensionId,
         extensionVersion: hello?.extensionVersion,
         profileEmail: hello?.profileEmail,
+        profileLabel: hello?.profileLabel,
         connectedAt: now,
         lastSeenAt: now,
         attachedTabCount: 0,
       }
       this.backends.set(clientId, { info, transport, manager })
-      this.primaryClientId = clientId
+      if (!this.pinnedClientId || !this.backends.has(this.pinnedClientId)) {
+        this.primaryClientId = clientId
+      }
 
       // Confirm end-to-end daemon handshake immediately so extension knows bridge is live
       if (ws.readyState === ws.OPEN) {
@@ -186,8 +190,11 @@ export class BrowserPilotDaemon {
       ws.on('close', () => {
         manager.dispose()
         this.backends.delete(clientId)
+        if (this.pinnedClientId === clientId) {
+          this.pinnedClientId = null
+        }
         if (this.primaryClientId === clientId) {
-          this.primaryClientId = Array.from(this.backends.keys()).pop() ?? null
+          this.primaryClientId = this.pinnedClientId ?? Array.from(this.backends.keys()).pop() ?? null
         }
       })
     }
@@ -260,16 +267,54 @@ export class BrowserPilotDaemon {
     }))
   }
 
-  getManager(clientId?: string): SessionManager {
-    const targetId = clientId ?? this.primaryClientId
-    if (!targetId) {
-      throw new Error(
-        'No browser connected to BrowserPilot daemon. Load the BrowserPilot Chrome extension or connect via --cdp <url>.',
-      )
+  private resolveBackend(selector?: string): ConnectedBackend {
+    if (!selector) {
+      const targetId = this.pinnedClientId && this.backends.has(this.pinnedClientId) ? this.pinnedClientId : this.primaryClientId
+      if (!targetId) {
+        throw new Error(
+          'No browser connected to BrowserPilot daemon. Load the BrowserPilot Chrome extension or connect via --cdp <url>.',
+        )
+      }
+      const backend = this.backends.get(targetId)
+      if (!backend) throw new Error(`Browser client "${targetId}" is not connected`)
+      return backend
     }
-    const backend = this.backends.get(targetId)
-    if (!backend) throw new Error(`Browser client "${targetId}" is not connected`)
-    return backend.manager
+
+    const exact = this.backends.get(selector)
+    if (exact) return exact
+
+    const needle = selector.trim().toLowerCase()
+    const all = Array.from(this.backends.values())
+    const byProfile = all.find((b) => b.info.profileLabel?.toLowerCase() === needle)
+    if (byProfile) return byProfile
+    const byExtId = all.find((b) => b.info.extensionId?.toLowerCase() === needle)
+    if (byExtId) return byExtId
+    const byBrowser = all.find(
+      (b) =>
+        b.info.browser.toLowerCase() === needle ||
+        b.info.browser.toLowerCase().includes(needle) ||
+        (needle === 'cdp' && b.info.transport === 'direct-cdp'),
+    )
+    if (byBrowser) return byBrowser
+
+    const available = all
+      .map((b) => `${b.info.clientId} (${b.info.browser}${b.info.profileLabel ? `/${b.info.profileLabel}` : ''})`)
+      .join(', ')
+    throw new Error(`Browser client "${selector}" not found. Connected: ${available || 'none'}`)
+  }
+
+  selectPrimaryClient(selector: string): BrowserClientInfo {
+    const backend = this.resolveBackend(selector)
+    this.pinnedClientId = backend.info.clientId
+    this.primaryClientId = backend.info.clientId
+    return {
+      ...backend.info,
+      attachedTabCount: backend.manager.getAttachedTabCount(),
+    }
+  }
+
+  getManager(clientId?: string): SessionManager {
+    return this.resolveBackend(clientId).manager
   }
 
   registerTraceHtml(html: string): string {
@@ -327,8 +372,16 @@ export class BrowserPilotDaemon {
           version: BROWSERPILOT_VERSION,
           pid: process.pid,
           uptimeMs: Date.now() - this.startedAt,
+          primaryClientId: this.pinnedClientId ?? this.primaryClientId,
           clients: this.listClients(),
         })
+        return
+      }
+
+      if (method === 'POST' && url.pathname === '/api/clients/select') {
+        const body = await this.readJsonBody(req)
+        const client = this.selectPrimaryClient(String(body.client ?? body.clientId ?? ''))
+        this.sendJson(res, 200, { ok: true, client })
         return
       }
 

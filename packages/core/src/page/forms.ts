@@ -144,6 +144,11 @@ export async function fillElement(
   }
 
   if (options.clear !== false && selState.hadContent) {
+    if (selState.isContentEditable) {
+      // Rich-text editors (ProseMirror, Slate, TipTap, Draft.js, Quill) track internal state
+      // through native editing commands rather than raw DOM mutations.
+      await deps.pressKey(process.platform === 'darwin' ? 'Cmd+a' : 'Ctrl+a')
+    }
     await deps.pressKey('Backspace')
   }
 
@@ -167,6 +172,17 @@ export async function fillElement(
             else this.value = expected;
             this.dispatchEvent(new Event('input', { bubbles: true }));
             this.dispatchEvent(new Event('change', { bubbles: true }));
+            return;
+          }
+          if (this.isContentEditable && expected.length > 0) {
+            const current = (this.innerText ?? this.textContent ?? '').replace(/\\u200B/g, '').trim();
+            if (!current.includes(expected.trim())) {
+              try {
+                const doc = this.ownerDocument || document;
+                if (typeof this.focus === 'function') this.focus();
+                doc.execCommand('insertText', false, expected);
+              } catch {}
+            }
           }
         }`,
       },

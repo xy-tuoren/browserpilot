@@ -1,5 +1,6 @@
 import { formatConsoleLogs, formatNetworkEntries, formatStylesAsText } from '@browserpilot/core'
-import type { ConsoleLevel } from '@browserpilot/protocol'
+import { redactNetworkEntry, redactSensitiveText, type ConsoleLevel } from '@browserpilot/protocol'
+import { enforceActionApproval } from './guardrails.js'
 import { textResult, type ToolDefinition, type ToolDispatchContext, type ToolExecutionResult } from './types.js'
 
 export const DEVTOOLS_TOOL_DEFINITIONS: ToolDefinition[] = [
@@ -48,6 +49,7 @@ export const DEVTOOLS_TOOL_DEFINITIONS: ToolDefinition[] = [
         count: { type: 'number' },
         sinceLastCall: { type: 'boolean' },
         requestId: { type: 'string', description: 'Fetch detailed headers, timing, initiator, and response body for this requestId' },
+        includeSensitive: { type: 'boolean', description: 'Include raw Authorization/Cookie headers and tokens (redacted by default)' },
         clear: { type: 'boolean' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
@@ -203,6 +205,7 @@ export async function executeDevToolsTool(
   switch (name) {
     case 'browser_evaluate': {
       const tab = await resolveTab()
+      await enforceActionApproval(tab, { action: 'evaluate', detail: `evaluate(${String(args.expression).slice(0, 80)})` })
       const val = await tab.page.evaluate(String(args.expression), { frame: args.frame as string | undefined })
       return textResult(typeof val === 'string' ? val : JSON.stringify(val, null, 2))
     }
@@ -229,16 +232,23 @@ export async function executeDevToolsTool(
         return textResult('Cleared network buffer')
       }
       if (typeof args.requestId === 'string') {
-        const entry = tab.network.getRequests({ count: 2000 }).find((r) => r.requestId === args.requestId)
+        const rawEntry = tab.network.getRequests({ count: 2000 }).find((r) => r.requestId === args.requestId)
+        const includeSensitive = Boolean(args.includeSensitive)
+        const entry = rawEntry && !includeSensitive ? redactNetworkEntry(rawEntry) : rawEntry
         let body: { body: string; base64Encoded: boolean } | null = null
         try {
           body = await tab.network.getResponseBody(args.requestId)
         } catch {}
+        const safeBody = body
+          ? body.base64Encoded
+            ? `<base64 ${body.body.length} chars>`
+            : (includeSensitive ? body.body : redactSensitiveText(body.body)).slice(0, 16_000)
+          : null
         return textResult(
           JSON.stringify(
             {
               entry,
-              body: body ? (body.base64Encoded ? `<base64 ${body.body.length} chars>` : body.body.slice(0, 16_000)) : null,
+              body: safeBody,
             },
             null,
             2,
@@ -403,6 +413,7 @@ export async function executeDevToolsTool(
 
     case 'browser_cdp': {
       const tab = await resolveTab()
+      await enforceActionApproval(tab, { action: 'cdp', detail: `cdp(${String(args.method)})` })
       const res = await tab.session.send(
         String(args.method),
         args.params as Record<string, unknown> | undefined,

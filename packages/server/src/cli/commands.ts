@@ -60,6 +60,7 @@ export async function runDirectToolShortcutCommand(
           sessionId,
           clientId,
           interactiveOnly: Boolean(flags.i || flags.interactive),
+          wrapUntrusted: Boolean(flags['wrap-untrusted']),
           search: typeof flags.search === 'string' ? flags.search : undefined,
           scope: typeof flags.scope === 'string' ? flags.scope : undefined,
           frame: typeof flags.frame === 'string' ? flags.frame : undefined,
@@ -72,6 +73,8 @@ export async function runDirectToolShortcutCommand(
         await client.callTool('browser_markdown', {
           tabId,
           sessionId,
+          clientId,
+          wrapUntrusted: Boolean(flags['wrap-untrusted']),
           search: typeof flags.search === 'string' ? flags.search : undefined,
           showDiffSinceLastCall: flags.full ? false : undefined,
         }),
@@ -82,6 +85,8 @@ export async function runDirectToolShortcutCommand(
         await client.callTool('browser_clean_html', {
           tabId,
           sessionId,
+          clientId,
+          wrapUntrusted: Boolean(flags['wrap-untrusted']),
           selector: typeof flags.selector === 'string' ? flags.selector : undefined,
           search: typeof flags.search === 'string' ? flags.search : undefined,
           showDiffSinceLastCall: flags.full ? false : undefined,
@@ -114,6 +119,7 @@ export async function runDirectToolShortcutCommand(
           force: Boolean(flags.force),
           strict: Boolean(flags.strict),
           timeoutMs: typeof flags.timeout === 'string' ? Number(flags.timeout) : undefined,
+          returnDiff: Boolean(flags.diff),
           tabId,
           sessionId,
           clientId,
@@ -128,6 +134,7 @@ export async function runDirectToolShortcutCommand(
           target: positional[1],
           checked: cmd === 'check',
           force: Boolean(flags.force),
+          returnDiff: Boolean(flags.diff),
           tabId,
           sessionId,
           clientId,
@@ -142,6 +149,7 @@ export async function runDirectToolShortcutCommand(
           target: positional[1],
           value: values.length === 1 ? values[0] : undefined,
           values: values.length > 1 ? values : undefined,
+          returnDiff: Boolean(flags.diff),
           tabId,
           sessionId,
           clientId,
@@ -185,7 +193,44 @@ export async function runDirectToolShortcutCommand(
         await client.callTool('browser_drag', {
           fromTarget: positional[1],
           toTarget: positional[2],
+          mode: typeof flags.mode === 'string' ? flags.mode : undefined,
           steps: typeof flags.steps === 'string' ? Number(flags.steps) : undefined,
+          returnDiff: Boolean(flags.diff),
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
+      return
+    }
+    case 'tap': {
+      printToolOutput(
+        await client.callTool('browser_touch', {
+          action: 'tap',
+          target: positional[1],
+          x: typeof flags.x === 'string' ? Number(flags.x) : undefined,
+          y: typeof flags.y === 'string' ? Number(flags.y) : undefined,
+          returnDiff: Boolean(flags.diff),
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
+      return
+    }
+    case 'swipe': {
+      printToolOutput(
+        await client.callTool('browser_touch', {
+          action: 'swipe',
+          fromTarget: positional[1],
+          toTarget: positional[2],
+          fromX: typeof flags['from-x'] === 'string' ? Number(flags['from-x']) : undefined,
+          fromY: typeof flags['from-y'] === 'string' ? Number(flags['from-y']) : undefined,
+          toX: typeof flags['to-x'] === 'string' ? Number(flags['to-x']) : undefined,
+          toY: typeof flags['to-y'] === 'string' ? Number(flags['to-y']) : undefined,
+          steps: typeof flags.steps === 'string' ? Number(flags.steps) : undefined,
+          durationMs: typeof flags.duration === 'string' ? Number(flags.duration) : undefined,
+          returnDiff: Boolean(flags.diff),
           tabId,
           sessionId,
           clientId,
@@ -308,8 +353,12 @@ export async function runDirectToolShortcutCommand(
           direction,
           amount: typeof flags.amount === 'string' ? Number(flags.amount) : undefined,
           target: typeof flags.target === 'string' ? flags.target : undefined,
+          untilTarget: typeof flags.until === 'string' ? flags.until : undefined,
+          maxScrolls: typeof flags['max-scrolls'] === 'string' ? Number(flags['max-scrolls']) : undefined,
+          returnDiff: Boolean(flags.diff),
           tabId,
           sessionId,
+          clientId,
         }),
       )
       return
@@ -338,7 +387,14 @@ export async function runDirectToolShortcutCommand(
       return
     case 'fill':
       printToolOutput(
-        await client.callTool('browser_fill', { target: positional[1], value: positional[2] ?? '', tabId, sessionId, clientId }),
+        await client.callTool('browser_fill', {
+          target: positional[1],
+          value: positional[2] ?? '',
+          returnDiff: Boolean(flags.diff),
+          tabId,
+          sessionId,
+          clientId,
+        }),
       )
       return
     case 'type':
@@ -358,6 +414,7 @@ export async function runDirectToolShortcutCommand(
           key: positional[1],
           action: flags.down ? 'down' : flags.up ? 'up' : 'press',
           repeat: typeof flags.repeat === 'string' ? Number(flags.repeat) : undefined,
+          returnDiff: Boolean(flags.diff),
           tabId,
           sessionId,
           clientId,

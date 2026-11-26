@@ -8,11 +8,17 @@ import { ExtensionBridgeTransport, SessionManager, type ExtensionChannel } from 
 import type { BridgeMessage, BridgeRequest } from '@browserpilot/protocol'
 import {
   BROWSERPILOT_SKILL_DOC,
+  buildLinuxSystemdUnit,
+  buildMacLaunchAgentPlist,
+  buildWindowsStartupScript,
   CORE_MCP_TOOL_NAMES,
   executeTool,
   getNativeMessagingHostDirs,
+  installDaemonService,
   installNativeHost,
+  parseWorkflowPayload,
   resolveMcpToolDefinitions,
+  startMcpHttpServer,
   TOOL_DEFINITIONS,
   validateAndNormalizeToolArgs,
   type ToolRuntimeContext,
@@ -215,7 +221,7 @@ describe('v1.7 Architecture, Schema Validation, Lifecycle GC, Windows Host & Typ
 
     expect(coreTools.length).toBe(CORE_MCP_TOOL_NAMES.size)
     expect(coreTools.length).toBe(19)
-    expect(fullTools.length).toBe(52)
+    expect(fullTools.length).toBe(53)
     expect(customCaps.some((t) => t.name === 'browser_debugger')).toBe(true)
     expect(customCaps.some((t) => t.name === 'browser_trace')).toBe(true)
     expect(customCaps.some((t) => t.name === 'browser_cookies')).toBe(false)
@@ -223,6 +229,86 @@ describe('v1.7 Architecture, Schema Validation, Lifecycle GC, Windows Host & Typ
     const coreBytes = Buffer.byteLength(JSON.stringify(coreTools), 'utf8')
     const fullBytes = Buffer.byteLength(JSON.stringify(fullTools), 'utf8')
     expect(coreBytes).toBeLessThan(fullBytes * 0.4)
+  })
+
+  it('serves authenticated Streamable HTTP MCP (/mcp & /health), parses replay workflows, and generates cross-platform daemon auto-start services', async () => {
+    // 1. Cross-platform auto-start service manifests (macOS launchd, Linux systemd, Windows Startup)
+    const plist = buildMacLaunchAgentPlist({ nodePath: '/usr/bin/node', cliPath: '/app/cli.js', host: '127.0.0.1', port: 19888, logPath: '/tmp/bp.log' })
+    expect(plist).toContain('com.browserpilot.daemon')
+    expect(plist).toContain('<key>RunAtLoad</key>')
+    const systemd = buildLinuxSystemdUnit({ nodePath: '/usr/bin/node', cliPath: '/app/cli.js', host: '127.0.0.1', port: 19888 })
+    expect(systemd).toContain('ExecStart="/usr/bin/node" "/app/cli.js" daemon run')
+    const winCmd = buildWindowsStartupScript({ nodePath: 'C:\\node.exe', cliPath: 'C:\\cli.js', host: '127.0.0.1', port: 19888 })
+    expect(winCmd).toContain('daemon run')
+    const drySvc = await installDaemonService({ dryRun: true, platform: 'darwin', homeDir: '/tmp/fake-home' })
+    expect(drySvc.servicePath).toContain('com.browserpilot.daemon.plist')
+
+    // 2. Workflow JSON parser accepts both array and { steps } envelope
+    const flowA = parseWorkflowPayload('[{"action":"navigate","url":"https://example.com"}]')
+    const flowB = parseWorkflowPayload('{"name":"Smoke","steps":[{"action":"click","target":"#ok"}]}')
+    expect(flowA.steps).toHaveLength(1)
+    expect(flowB.name).toBe('Smoke')
+
+    // 3. Authenticated Streamable HTTP MCP server (/health, 401 auth guard, initialize + tools/list)
+    const httpMcp = await startMcpHttpServer({
+      httpHost: '127.0.0.1',
+      httpPort: 0,
+      httpToken: 'mcp-secret-token-xyz',
+    })
+    try {
+      const health = (await (await fetch(`http://127.0.0.1:${httpMcp.port}/health`)).json()) as {
+        ok: boolean
+        transport: string
+        tools: number
+      }
+      expect(health.ok).toBe(true)
+      expect(health.transport).toBe('streamable-http')
+      expect(health.tools).toBe(19)
+
+      // Unauthorized POST /mcp must be rejected with 401
+      const unauth = await fetch(httpMcp.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+      })
+      expect(unauth.status).toBe(401)
+
+      // Authorized initialize + tools/list succeeds cleanly over Streamable HTTP!
+      const initRes = await fetch(httpMcp.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          Authorization: 'Bearer mcp-secret-token-xyz',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1.0' } },
+        }),
+      })
+      expect(initRes.status).toBe(200)
+      const sessionId = initRes.headers.get('mcp-session-id')
+      expect(sessionId).toBeTruthy()
+
+      const listRes = await fetch(httpMcp.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          Authorization: 'Bearer mcp-secret-token-xyz',
+          'mcp-session-id': sessionId!,
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+      })
+      expect(listRes.status).toBe(200)
+      const listRaw = await listRes.text()
+      expect(listRaw).toContain('browser_snapshot')
+      expect(listRaw).toContain('browser_exec')
+    } finally {
+      await httpMcp.close()
+    }
   })
 
   it('generates Windows (win32) Native Messaging .cmd wrapper and HKCU registry host manifests cleanly', async () => {
@@ -252,10 +338,11 @@ describe('v1.7 Architecture, Schema Validation, Lifecycle GC, Windows Host & Typ
     ])
     expect(verOut).toContain('packages/server/package.json')
 
-    // 2. Single-source skill doc includes all 52 tools + codegen + trace
-    expect(TOOL_DEFINITIONS.length).toBe(52)
-    expect(BROWSERPILOT_SKILL_DOC).toContain('52 MCP tools')
+    // 2. Single-source skill doc includes all 53 tools + codegen + trace + run
+    expect(TOOL_DEFINITIONS.length).toBe(53)
+    expect(BROWSERPILOT_SKILL_DOC).toContain('53 MCP tools')
     expect(BROWSERPILOT_SKILL_DOC).toContain('browserpilot codegen')
+    expect(BROWSERPILOT_SKILL_DOC).toContain('browserpilot run')
     expect(BROWSERPILOT_SKILL_DOC).toContain('browserpilot trace')
 
     // 3. Extension content-script.js is bundled as an IIFE with idempotent __browserpilotContentBooted guard

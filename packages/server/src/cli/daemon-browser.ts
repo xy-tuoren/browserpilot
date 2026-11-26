@@ -7,9 +7,10 @@ import { DaemonClient } from '../client.js'
 import { isDaemonReachable, readDaemonConfig } from '../config.js'
 import { BrowserPilotDaemon } from '../daemon.js'
 import { getExtensionDistPath, printToolOutput, type CliFlags } from './args.js'
+import { installDaemonService, uninstallDaemonService } from './service.js'
 import { findChromeBinary } from './setup-doctor.js'
 
-export async function runDaemonCommand(sub: string, flags: CliFlags): Promise<void> {
+export async function runDaemonCommand(sub: string, flags: CliFlags, arg?: string): Promise<void> {
   if (sub === 'run') {
     const daemon = new BrowserPilotDaemon()
     const cfg = await daemon.start({
@@ -67,6 +68,29 @@ export async function runDaemonCommand(sub: string, flags: CliFlags): Promise<vo
     }
     const h = await new DaemonClient(cfg).health()
     console.log(JSON.stringify({ status: 'RUNNING', host: cfg.host, port: cfg.port, ...h }, null, 2))
+    return
+  }
+  if (sub === 'use') {
+    if (!arg) throw new Error('Usage: browserpilot daemon use <clientId|browser|profileLabel>')
+    const client = await DaemonClient.connectOrStart()
+    const selected = await client.selectClient(arg)
+    console.log(
+      `Default browser target pinned to ${selected.clientId} (${selected.browser}${selected.profileLabel ? ` / ${selected.profileLabel}` : ''})`,
+    )
+    return
+  }
+  if (sub === 'install-service') {
+    const res = await installDaemonService({ dryRun: Boolean(flags['dry-run']) })
+    console.log(
+      `${res.dryRun ? '[dry-run] Would install' : 'Installed'} user auto-start daemon service (${res.label}):\n  ${res.servicePath}`,
+    )
+    return
+  }
+  if (sub === 'uninstall-service') {
+    const res = await uninstallDaemonService({ dryRun: Boolean(flags['dry-run']) })
+    console.log(
+      `${res.dryRun ? '[dry-run] Would remove' : 'Removed'} user auto-start daemon service (${res.label}):\n  ${res.servicePath}`,
+    )
     return
   }
   throw new Error(`Unknown daemon subcommand: ${sub}`)
@@ -163,7 +187,7 @@ export async function runSessionCommand(
 export async function runExecCommand(
   client: DaemonClient,
   flags: CliFlags,
-  opts: { sessionId?: string; tabId?: number },
+  opts: { sessionId?: string; tabId?: number; clientId?: string },
 ): Promise<void> {
   let code = typeof flags.e === 'string' ? flags.e : ''
   if (!code && typeof flags.f === 'string') {
@@ -174,8 +198,10 @@ export async function runExecCommand(
     code,
     sessionId: opts.sessionId ?? '1',
     tabId: opts.tabId,
+    clientId: opts.clientId,
     timeoutMs: typeof flags.timeout === 'string' ? Number(flags.timeout) : undefined,
     tracePath: typeof flags.trace === 'string' ? flags.trace : undefined,
+    sandboxMode: flags['restricted-sandbox'] ? 'restricted' : undefined,
   })
   printToolOutput(res)
 }

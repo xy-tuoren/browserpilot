@@ -15,6 +15,7 @@ import {
   probeAndScrollPage,
   readPageClipboard,
   resetBrowserPermissions,
+  scrollPageUntilTarget,
   setPageCookie,
   setPageViewport,
   setWebStorage,
@@ -31,10 +32,11 @@ import {
   waitForPageFileChooser,
   type PageFormsDeps,
 } from './page/forms.js'
-import { requestHumanHandoff } from './page/handoff.js'
+import { requestActionApproval, requestHumanHandoff, type ActionApprovalResult } from './page/handoff.js'
 import { modifierBitmask, PageInputDriver } from './page/input.js'
 import type {
   ClickOptions,
+  DragOptions,
   EmulateOptions,
   FileChooserHandle,
   FillOptions,
@@ -51,13 +53,18 @@ import type {
   ResolvedElement,
   ScreenshotOptions,
   ScrollResult,
+  ScrollUntilOptions,
+  ScrollUntilResult,
+  SwipeOptions,
   WaitForFileChooserOptions,
 } from './page/types.js'
 import type { SnapshotEngine } from './snapshot.js'
 import { waitForPageLoad, waitForSelector, type WaitSelectorState } from './wait.js'
 
+export type { ActionApprovalResult }
 export type {
   ClickOptions,
+  DragOptions,
   EmulateOptions,
   FileChooserHandle,
   FillOptions,
@@ -74,6 +81,9 @@ export type {
   ResolvedElement,
   ScreenshotOptions,
   ScrollResult,
+  ScrollUntilOptions,
+  ScrollUntilResult,
+  SwipeOptions,
   WaitForFileChooserOptions,
 } from './page/types.js'
 
@@ -423,14 +433,125 @@ export class PageController {
   async drag(
     from: string | { x: number; y: number },
     to: string | { x: number; y: number },
-    options: { steps?: number } = {},
+    options: DragOptions = {},
   ): Promise<void> {
-    const start = typeof from === 'string' ? (await this.resolveElement(from)).center : from
-    const end = typeof to === 'string' ? (await this.resolveElement(to)).center : to
+    const mode = options.mode ?? 'auto'
+    const startEl = typeof from === 'string' ? await this.resolveElement(from) : null
+    const endEl = typeof to === 'string' ? await this.resolveElement(to) : null
+    const start = startEl ? startEl.center : (from as { x: number; y: number })
+    const end = endEl ? endEl.center : (to as { x: number; y: number })
+
+    let useHtml5 = mode === 'html5'
+    if (mode === 'auto') {
+      const checkDraggable = await this.evaluate<boolean>(
+        `(() => {
+          const el = document.elementFromPoint(${Math.round(start.x)}, ${Math.round(start.y)});
+          if (!el) return false;
+          const d = el.closest?.('[draggable="true"]');
+          return Boolean(d || el.draggable === true);
+        })()`,
+      ).catch(() => false)
+      useHtml5 = Boolean(checkDraggable)
+    }
+
+    if (useHtml5) {
+      await this.mouseMove(start.x, start.y)
+      await this.evaluate(
+        `(() => {
+          const sx = ${Math.round(start.x)}, sy = ${Math.round(start.y)};
+          const ex = ${Math.round(end.x)}, ey = ${Math.round(end.y)};
+          const rawSrc = document.elementFromPoint(sx, sy);
+          const src = rawSrc?.closest?.('[draggable="true"]') || rawSrc;
+          const dst = document.elementFromPoint(ex, ey);
+          if (!src || !dst) return false;
+          const dt = new DataTransfer();
+          const fire = (target, type, x, y) => {
+            const ev = new DragEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              composed: true,
+              clientX: x,
+              clientY: y,
+              dataTransfer: dt,
+            });
+            target.dispatchEvent(ev);
+          };
+          fire(src, 'dragstart', sx, sy);
+          fire(dst, 'dragenter', ex, ey);
+          fire(dst, 'dragover', ex, ey);
+          fire(dst, 'drop', ex, ey);
+          fire(src, 'dragend', ex, ey);
+          return true;
+        })()`,
+      )
+      await this.mouseMove(end.x, end.y, { steps: Math.min(6, options.steps ?? 6) })
+      return
+    }
+
     await this.mouseMove(start.x, start.y)
     await this.mouseDown(start.x, start.y)
     await this.mouseMove(end.x, end.y, { steps: options.steps ?? 12 })
     await this.mouseUp(end.x, end.y)
+  }
+
+  async tap(targetOrCoords: string | { x: number; y: number }, timeoutMs?: number): Promise<void> {
+    const label =
+      typeof targetOrCoords === 'string'
+        ? targetOrCoords
+        : `(${Math.round(targetOrCoords.x)}, ${Math.round(targetOrCoords.y)})`
+    await this.runTraced(
+      {
+        action: 'tap',
+        title: `tap ${label}`,
+        ...(typeof targetOrCoords === 'string' ? { target: targetOrCoords } : { point: targetOrCoords }),
+      },
+      async (markReady) => {
+        if (typeof targetOrCoords === 'string') {
+          const el = await this.resolveElement(targetOrCoords, timeoutMs)
+          await markReady({ box: el.box, point: el.center })
+          await this.input.touchTap(el.center.x, el.center.y)
+        } else {
+          await markReady({ point: targetOrCoords })
+          await this.input.touchTap(targetOrCoords.x, targetOrCoords.y)
+        }
+      },
+    )
+  }
+
+  async swipe(
+    from: string | { x: number; y: number },
+    to: string | { x: number; y: number },
+    options: SwipeOptions = {},
+  ): Promise<void> {
+    const start = typeof from === 'string' ? (await this.resolveElement(from)).center : from
+    const end = typeof to === 'string' ? (await this.resolveElement(to)).center : to
+    await this.runTraced(
+      {
+        action: 'swipe',
+        title: `swipe (${Math.round(start.x)},${Math.round(start.y)}) -> (${Math.round(end.x)},${Math.round(end.y)})`,
+        point: start,
+      },
+      async () => {
+        await this.input.touchSwipe(start, end, options)
+      },
+    )
+  }
+
+  scrollUntil(target: string, options: ScrollUntilOptions = {}): Promise<ScrollUntilResult> {
+    return scrollPageUntilTarget(
+      {
+        resolveTargetNow: async (sel) => {
+          try {
+            return await this.resolveElement(sel, 220)
+          } catch {
+            return null
+          }
+        },
+        scroll: (opts) => this.scroll(opts),
+      },
+      target,
+      options,
+    )
   }
 
   mouseStroke(
@@ -564,7 +685,7 @@ export class PageController {
   // Human Handoff, Capture, PDF & Evaluation
   // ============================================================================
 
-  requestHumanHandoff(message: string, options: { timeoutMs?: number } = {}): Promise<HumanHandoffResult> {
+  requestHumanHandoff(message: string, options: { timeoutMs?: number; language?: 'zh' | 'en' } = {}): Promise<HumanHandoffResult> {
     return requestHumanHandoff(
       {
         session: this.session,
@@ -572,6 +693,23 @@ export class PageController {
         getUrlAndTitle: () => this.getUrlAndTitle(),
       },
       message,
+      options,
+    )
+  }
+
+  requestActionApproval(options: {
+    action: string
+    detail: string
+    reason?: string
+    timeoutMs?: number
+    language?: 'zh' | 'en'
+  }): Promise<ActionApprovalResult> {
+    return requestActionApproval(
+      {
+        session: this.session,
+        evaluate: <T = unknown>(expr: string) => this.evaluate<T>(expr),
+        getUrlAndTitle: () => this.getUrlAndTitle(),
+      },
       options,
     )
   }

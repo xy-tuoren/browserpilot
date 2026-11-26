@@ -11,6 +11,7 @@ import {
   runSessionCommand,
   runTraceCommand,
 } from './cli/daemon-browser.js'
+import { runReplayCommand } from './cli/replay.js'
 import { runDoctorCommand, runSetupCommand } from './cli/setup-doctor.js'
 import { startMcpServer } from './mcp.js'
 import { BROWSERPILOT_SKILL_DOC } from './skill-doc.js'
@@ -40,13 +41,18 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'mcp') {
+    const httpMode = Boolean(flags.http)
     await startMcpServer({
       cdpEndpoint: typeof flags.cdp === 'string' ? flags.cdp : undefined,
-      daemonHost: typeof flags.host === 'string' ? flags.host : undefined,
-      daemonPort: typeof flags.port === 'string' ? Number(flags.port) : undefined,
-      daemonToken: typeof flags.token === 'string' ? flags.token : undefined,
+      daemonHost: !httpMode && typeof flags.host === 'string' ? flags.host : undefined,
+      daemonPort: !httpMode && typeof flags.port === 'string' ? Number(flags.port) : undefined,
+      daemonToken: !httpMode && typeof flags.token === 'string' ? flags.token : undefined,
       full: Boolean(flags.full),
       capabilities: typeof flags.caps === 'string' ? flags.caps : undefined,
+      http: httpMode,
+      httpHost: httpMode && typeof flags.host === 'string' ? flags.host : undefined,
+      httpPort: httpMode && typeof flags.port === 'string' ? Number(flags.port) : undefined,
+      httpToken: httpMode && typeof flags.token === 'string' ? flags.token : undefined,
     })
     return
   }
@@ -57,7 +63,7 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'daemon') {
-    await runDaemonCommand(positional[1] || 'status', flags)
+    await runDaemonCommand(positional[1] || 'status', flags, positional[2])
     return
   }
 
@@ -67,10 +73,31 @@ async function main(): Promise<void> {
   }
 
   const client = await DaemonClient.connectOrStart()
-  const clientId = typeof flags.client === 'string' ? flags.client : undefined
+  const clientId =
+    typeof flags.client === 'string'
+      ? flags.client
+      : typeof flags.browser === 'string'
+        ? flags.browser
+        : typeof flags.profile === 'string'
+          ? flags.profile
+          : undefined
   const tabId = typeof flags.tab === 'string' ? Number(flags.tab) : undefined
   const sessionId =
     typeof flags.s === 'string' ? flags.s : typeof flags.session === 'string' ? flags.session : undefined
+
+  if (cmd === 'clients') {
+    const h = await client.health()
+    if (!h.clients.length) {
+      console.log('(no connected browsers)')
+      return
+    }
+    for (const c of h.clients) {
+      const mark = c.clientId === h.primaryClientId ? '*' : ' '
+      const profile = c.profileLabel ? ` [${c.profileLabel}]` : ''
+      console.log(`${mark} ${c.clientId}\t${c.browser}${profile}\t${c.transport}\tv${c.extensionVersion ?? '-'}\ttabs=${c.attachedTabCount}`)
+    }
+    return
+  }
 
   if (cmd === 'connect-cdp') {
     const endpoint = positional[1] || 'http://127.0.0.1:9222'
@@ -85,7 +112,12 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'exec') {
-    await runExecCommand(client, flags, { sessionId, tabId })
+    await runExecCommand(client, flags, { sessionId, tabId, clientId })
+    return
+  }
+
+  if (cmd === 'run') {
+    await runReplayCommand(client, positional[1], flags, { tabId, sessionId, clientId })
     return
   }
 

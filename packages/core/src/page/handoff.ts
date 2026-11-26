@@ -162,3 +162,161 @@ export async function requestHumanHandoff(
       .catch(() => {})
   }
 }
+
+export interface ActionApprovalResult {
+  approved: boolean
+  cancelled: boolean
+  timedOut: boolean
+  elapsedMs: number
+}
+
+/**
+ * Displays an in-page high-risk action confirmation card inside the browser tab and pauses
+ * until the user explicitly clicks "允许本次" ("Allow Once") or "拒绝" ("Deny").
+ */
+export async function requestActionApproval(
+  deps: HandoffDeps,
+  options: {
+    action: string
+    detail: string
+    reason?: string
+    timeoutMs?: number
+    language?: 'zh' | 'en'
+  },
+): Promise<ActionApprovalResult> {
+  const tabId = deps.session.tabId
+  const timeoutMs = options.timeoutMs ?? 120_000
+  const start = Date.now()
+  const bindingName = '__browserpilotApprovalDecision'
+
+  let lang: 'zh' | 'en' = options.language === 'en' ? 'en' : 'zh'
+  if (!options.language) {
+    const extRpc = (
+      deps.session.transport as {
+        rpc?: (method: string) => Promise<{ config?: { language?: string } } | null>
+      }
+    ).rpc
+    if (typeof extRpc === 'function') {
+      const extState = await extRpc.call(deps.session.transport, 'extension.getState').catch(() => null)
+      if (extState?.config?.language === 'en') lang = 'en'
+    }
+  }
+  const isEn = lang === 'en'
+  const cardTitle = isEn ? 'BrowserPilot · Confirm High-Risk Action' : 'BrowserPilot · 高风险操作确认'
+  const allowLabel = isEn ? 'Allow Once' : '允许本次'
+  const denyLabel = isEn ? 'Deny' : '拒绝'
+  const summaryText = options.reason ? `${options.detail}（${options.reason}）` : options.detail
+
+  await deps.session.ensureBaseDomains()
+  await deps.session.send('Runtime.addBinding', { name: bindingName }).catch(() => {})
+  await deps.session.transport
+    .setControlBanner?.(tabId, { active: true, status: 'Waiting for you...', mode: 'handoff' })
+    .catch(() => {})
+
+  let resolveDecision!: (decision: 'allow' | 'deny') => void
+  const decisionPromise = new Promise<'allow' | 'deny'>((resolve) => {
+    resolveDecision = resolve
+  })
+
+  const offBinding = deps.session.on('Runtime.bindingCalled', (params) => {
+    if (params.name !== bindingName) return
+    const payload = String(params.payload ?? '')
+    resolveDecision(payload === 'allow' ? 'allow' : 'deny')
+  })
+
+  await deps
+    .evaluate(`(() => {
+      const old = document.getElementById('__browserpilot_approval_host');
+      if (old) old.remove();
+      const host = document.createElement('div');
+      host.id = '__browserpilot_approval_host';
+      host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;';
+      const shadow = host.attachShadow({ mode: 'closed' });
+      const style = document.createElement('style');
+      style.textContent = \`
+        .bp-edge {
+          position: fixed; inset: 0; pointer-events: none;
+          box-shadow: inset 0 0 0 3px rgba(244, 63, 94, 0.72), inset 0 0 26px rgba(244, 63, 94, 0.22);
+        }
+        .bp-card {
+          position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+          pointer-events: auto;
+          display: flex; align-items: center; gap: 14px; max-width: 580px;
+          background: rgba(15, 23, 42, 0.96); color: #f8fafc;
+          border: 1px solid rgba(244, 63, 94, 0.65);
+          backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+          border-radius: 14px; padding: 12px 16px;
+          box-shadow: 0 14px 36px rgba(2, 6, 23, 0.5);
+          font: 500 13px/1.45 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+        }
+        .bp-dot {
+          width: 10px; height: 10px; border-radius: 999px; flex: none;
+          background: #fb7185; box-shadow: 0 0 10px #f43f5e;
+        }
+        .bp-msg { flex: 1; color: #f1f5f9; }
+        .bp-title { font-weight: 700; font-size: 12px; color: #fda4af; margin-bottom: 2px; }
+        .bp-actions { display: flex; gap: 8px; flex: none; }
+        button {
+          cursor: pointer; border-radius: 8px; border: 1px solid transparent;
+          padding: 7px 12px; font: 600 12px/1 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+        }
+        .bp-allow { background: linear-gradient(135deg, #2dd4bf, #06b6d4); color: #042f2e; }
+        .bp-allow:hover { filter: brightness(1.06); }
+        .bp-deny { background: rgba(244, 63, 94, 0.2); color: #fecdd3; border-color: rgba(244, 63, 94, 0.45); }
+        .bp-deny:hover { background: rgba(244, 63, 94, 0.34); }
+      \`;
+      shadow.appendChild(style);
+      const edge = document.createElement('div');
+      edge.className = 'bp-edge';
+      const card = document.createElement('div');
+      card.className = 'bp-card';
+      const dot = document.createElement('div');
+      dot.className = 'bp-dot';
+      const msgWrap = document.createElement('div');
+      msgWrap.className = 'bp-msg';
+      const title = document.createElement('div');
+      title.className = 'bp-title';
+      title.textContent = ${JSON.stringify(cardTitle)};
+      const body = document.createElement('div');
+      body.textContent = ${JSON.stringify(summaryText)};
+      msgWrap.append(title, body);
+      const actions = document.createElement('div');
+      actions.className = 'bp-actions';
+      const btnAllow = document.createElement('button');
+      btnAllow.className = 'bp-allow';
+      btnAllow.textContent = ${JSON.stringify(allowLabel)};
+      btnAllow.onclick = () => { globalThis.${bindingName}?.('allow'); host.remove(); };
+      const btnDeny = document.createElement('button');
+      btnDeny.className = 'bp-deny';
+      btnDeny.textContent = ${JSON.stringify(denyLabel)};
+      btnDeny.onclick = () => { globalThis.${bindingName}?.('deny'); host.remove(); };
+      actions.append(btnAllow, btnDeny);
+      card.append(dot, msgWrap, actions);
+      shadow.append(edge, card);
+      (document.documentElement || document.body).appendChild(host);
+    })()`)
+    .catch(() => {})
+
+  let timer: ReturnType<typeof setTimeout> | null = null
+  try {
+    const outcome = await Promise.race([
+      decisionPromise,
+      new Promise<'timeout'>((resolve) => {
+        timer = setTimeout(() => resolve('timeout'), timeoutMs)
+      }),
+    ])
+    return {
+      approved: outcome === 'allow',
+      cancelled: outcome === 'deny',
+      timedOut: outcome === 'timeout',
+      elapsedMs: Date.now() - start,
+    }
+  } finally {
+    if (timer) clearTimeout(timer)
+    offBinding()
+    await deps.evaluate(`document.getElementById('__browserpilot_approval_host')?.remove()`).catch(() => {})
+    await deps.session.transport
+      .setControlBanner?.(tabId, { active: true, status: 'Active', mode: 'working' })
+      .catch(() => {})
+  }
+}

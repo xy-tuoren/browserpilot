@@ -22,6 +22,7 @@ export interface BrowserClientInfo {
   extensionId?: string
   extensionVersion?: string
   profileEmail?: string
+  profileLabel?: string
   connectedAt: number
   lastSeenAt: number
   attachedTabCount: number
@@ -37,9 +38,13 @@ export interface DomainRules {
 export type ExtensionTheme = 'dark' | 'light'
 export type ExtensionLanguage = 'zh' | 'en'
 
+export type ApprovalMode = 'off' | 'high-risk' | 'strict'
+
 export interface ExtensionConfig {
   theme: ExtensionTheme
   language?: ExtensionLanguage
+  profileLabel?: string
+  approvalMode?: ApprovalMode
   autoAttach: boolean
   paused: boolean
   showHighlights: boolean

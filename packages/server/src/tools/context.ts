@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { createDemoVideo, renderTraceViewerHtml, type PdfOptions } from '@browserpilot/core'
+import { createDemoVideo, renderTraceViewerHtml, type ExecSandboxMode, type PdfOptions } from '@browserpilot/core'
 import type { TraceData } from '@browserpilot/protocol'
+import { enforceActionApproval } from './guardrails.js'
 import { textResult, type ToolDefinition, type ToolDispatchContext, type ToolExecutionResult } from './types.js'
 
 export const CONTEXT_TOOL_DEFINITIONS: ToolDefinition[] = [
@@ -224,6 +225,11 @@ export const CONTEXT_TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'string',
           description: 'Optional .html or .json file path to automatically record a visual Trace Viewer report for this execution (saved even on error)',
         },
+        sandboxMode: {
+          type: 'string',
+          enum: ['standard', 'restricted'],
+          description: 'Optional sandbox policy ("restricted" blocks fs/child_process/net require() calls)',
+        },
       },
       required: ['code'],
     },
@@ -333,6 +339,7 @@ export async function executeContextTool(
     case 'browser_cookies': {
       const tab = await resolveTab()
       const action = String(args.action)
+      await enforceActionApproval(tab, { action: 'cookies', detail: `cookies.${action}(${String(args.name ?? args.url ?? 'page')})` })
       if (action === 'get') {
         const cookies = await tab.page.getCookies(args.url ? [String(args.url)] : undefined)
         return textResult(JSON.stringify(cookies, null, 2))
@@ -362,6 +369,7 @@ export async function executeContextTool(
       const tab = await resolveTab()
       const kind = args.kind === 'session' ? 'session' : 'local'
       const action = String(args.action)
+      await enforceActionApproval(tab, { action: 'storage', detail: `${kind}Storage.${action}(${String(args.key ?? '')})` })
       if (action === 'get') return textResult(JSON.stringify(await tab.page.getStorage(kind), null, 2))
       if (action === 'set') {
         await tab.page.setStorage(kind, String(args.key), String(args.value ?? ''))
@@ -555,6 +563,7 @@ export async function executeContextTool(
         timeoutMs: args.timeoutMs as number | undefined,
         tabId: explicitTabId,
         tracePath: typeof args.tracePath === 'string' && args.tracePath.trim() ? args.tracePath : undefined,
+        sandboxMode: args.sandboxMode as ExecSandboxMode | undefined,
       })
       const chunks: string[] = []
       if (res.stdout) chunks.push(res.stdout)

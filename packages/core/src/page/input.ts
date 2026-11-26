@@ -98,6 +98,7 @@ export class PageInputDriver {
   lastMousePos = { x: 0, y: 0 }
   private pressedButtonsMask = 0
   private activeModifiersMask = 0
+  private touchEnabled = false
 
   constructor(session: TabCDPSession) {
     this.session = session
@@ -327,5 +328,63 @@ export class PageInputDriver {
       windowsVirtualKeyCode: def.keyCode,
       modifiers,
     })
+  }
+
+  private async ensureTouchEnabled(): Promise<void> {
+    if (this.touchEnabled) return
+    await this.session.send('Emulation.setTouchEmulationEnabled', { enabled: true }).catch(() => {})
+    this.touchEnabled = true
+  }
+
+  async touchTap(x: number, y: number): Promise<void> {
+    await this.ensureTouchEnabled()
+    const pt = { x: Math.round(x), y: Math.round(y), radiusX: 4, radiusY: 4, force: 1, id: 1 }
+    await this.session.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [pt],
+      modifiers: this.activeModifiersMask,
+    })
+    await sleep(30)
+    await this.session.send('Input.dispatchTouchEvent', {
+      type: 'touchEnd',
+      touchPoints: [],
+      modifiers: this.activeModifiersMask,
+    })
+    this.lastMousePos = { x, y }
+    await this.session.transport.moveGhostCursor?.(this.tabId, x, y, true).catch(() => {})
+  }
+
+  async touchSwipe(
+    from: { x: number; y: number },
+    to: { x: number; y: number },
+    options: { steps?: number; durationMs?: number } = {},
+  ): Promise<void> {
+    await this.ensureTouchEnabled()
+    const steps = Math.max(2, Math.min(40, options.steps ?? 10))
+    const stepDelay = Math.max(8, Math.round((options.durationMs ?? 240) / steps))
+
+    await this.session.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [{ x: Math.round(from.x), y: Math.round(from.y), radiusX: 4, radiusY: 4, force: 1, id: 1 }],
+      modifiers: this.activeModifiersMask,
+    })
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps
+      const eased = 1 - Math.pow(1 - t, 2)
+      const cx = from.x + (to.x - from.x) * eased
+      const cy = from.y + (to.y - from.y) * eased
+      await sleep(stepDelay)
+      await this.session.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [{ x: Math.round(cx), y: Math.round(cy), radiusX: 4, radiusY: 4, force: 1, id: 1 }],
+        modifiers: this.activeModifiersMask,
+      })
+    }
+    await this.session.send('Input.dispatchTouchEvent', {
+      type: 'touchEnd',
+      touchPoints: [],
+      modifiers: this.activeModifiersMask,
+    })
+    this.lastMousePos = { x: to.x, y: to.y }
   }
 }

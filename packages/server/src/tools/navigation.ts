@@ -1,5 +1,5 @@
 import { waitForPageLoad } from '@browserpilot/core'
-import type { TabGroupColor } from '@browserpilot/protocol'
+import { wrapUntrustedPageContent, type TabGroupColor } from '@browserpilot/protocol'
 import {
   formatFeedbackSuffix,
   normalizeNavigationUrl,
@@ -106,6 +106,10 @@ export const NAVIGATION_TOOL_DEFINITIONS: ToolDefinition[] = [
         showDiffSinceLastCall: { type: 'boolean', description: 'Return concise diff since last snapshot (default true)' },
         includeText: { type: 'boolean' },
         includeIframes: { type: 'boolean' },
+        wrapUntrusted: {
+          type: 'boolean',
+          description: 'Wrap webpage content in <untrusted_page_content> prompt-injection boundaries',
+        },
       },
     },
   },
@@ -171,6 +175,7 @@ export const NAVIGATION_TOOL_DEFINITIONS: ToolDefinition[] = [
         search: { type: 'string' },
         showDiffSinceLastCall: { type: 'boolean' },
         includeStyles: { type: 'boolean' },
+        wrapUntrusted: { type: 'boolean' },
       },
     },
   },
@@ -184,6 +189,7 @@ export const NAVIGATION_TOOL_DEFINITIONS: ToolDefinition[] = [
         sessionId: { type: 'string' },
         search: { type: 'string' },
         showDiffSinceLastCall: { type: 'boolean' },
+        wrapUntrusted: { type: 'boolean' },
       },
     },
   },
@@ -320,7 +326,9 @@ export async function executeNavigationTool(
         includeText: args.includeText as boolean | undefined,
         includeIframes: args.includeIframes as boolean | undefined,
       })
-      return textResult(snap.text, { totalRefs: snap.totalRefs, isDiff: snap.isDiff, tabId: tab.tabId })
+      const shouldWrap = args.wrapUntrusted === true || process.env.BROWSERPILOT_UNTRUSTED_BOUNDARY === '1'
+      const body = shouldWrap ? wrapUntrustedPageContent(snap.text, { url: snap.url, kind: 'snapshot' }) : snap.text
+      return textResult(body, { totalRefs: snap.totalRefs, isDiff: snap.isDiff, tabId: tab.tabId })
     }
 
     case 'browser_screenshot': {
@@ -375,6 +383,11 @@ export async function executeNavigationTool(
         showDiffSinceLastCall: args.showDiffSinceLastCall as boolean | undefined,
         includeStyles: args.includeStyles as boolean | undefined,
       })
+      const shouldWrap = args.wrapUntrusted === true || process.env.BROWSERPILOT_UNTRUSTED_BOUNDARY === '1'
+      if (shouldWrap) {
+        const meta = await tab.page.getUrlAndTitle().catch(() => ({ url: '' }))
+        return textResult(wrapUntrustedPageContent(html, { url: meta.url, kind: 'html' }))
+      }
       return textResult(html)
     }
 
@@ -384,6 +397,11 @@ export async function executeNavigationTool(
         search: args.search as string | undefined,
         showDiffSinceLastCall: args.showDiffSinceLastCall as boolean | undefined,
       })
+      const shouldWrap = args.wrapUntrusted === true || process.env.BROWSERPILOT_UNTRUSTED_BOUNDARY === '1'
+      if (shouldWrap) {
+        const meta = await tab.page.getUrlAndTitle().catch(() => ({ url: '' }))
+        return textResult(wrapUntrustedPageContent(md, { url: meta.url, kind: 'markdown' }))
+      }
       return textResult(md)
     }
 

@@ -39,7 +39,7 @@ BrowserPilot controls the user's running Chrome browser (with existing logins, c
    browserpilot wait --selector "#spinner" --state hidden --tab <id>
    browserpilot key Enter --tab <id>
    ```
-   - Actions: `click` (checks occlusion/stability, reports newly opened popup tabs & JS dialogs; pass `force: true` to override), `check`/`uncheck` (idempotent), `fill`, `fill-form` (text/select/multi-select/checkbox/radio/range/file), `type`, `key` (`down`/`up`/`repeat` + macOS/Chrome `Cmd+a/c/v/z` editing commands), `hover`, `scroll` (smart inner SPA container detection + position telemetry), `drag` (2-point & multi-point `--points` canvas strokes), `select`, `upload` (including custom file-chooser buttons), `wait` (`selector`+`state`, `text`+`gone`, `url`, `response`, `fn`, `popup`, `frame`), `clipboard`, `pdf`, `init-script`, `permissions`, `batch`, `handoff`.
+   - Actions: `click` (checks occlusion/stability, reports newly opened popup tabs & JS dialogs; pass `force: true` to override or `returnDiff: true` / `--diff` to append compact interactive AXTree diff immediately), `check`/`uncheck` (idempotent), `fill` (supports inputs, textareas & ProseMirror/Slate/TipTap rich-text `contenteditable` editors), `fill-form`, `type`, `key` (`down`/`up`/`repeat` + macOS/Chrome `Cmd+a/c/v/z` editing commands), `hover`, `scroll` (smart inner SPA container detection + `--until <locator>` virtual-scroll finder), `drag` (auto-detects HTML5 `draggable="true"` `DataTransfer` vs pointer drag + `--points` canvas strokes), `tap`/`swipe` (`browser_touch` mobile CDP Touch Events), `select`, `upload` (including custom file-chooser buttons), `wait` (`selector`+`state`, `text`+`gone`, `url`, `response`, `fn`, `popup`, `frame`), `clipboard`, `pdf`, `init-script`, `permissions`, `batch`, `handoff`.
    - Targets accept refs (`e5`), CSS (`#submit`), chained `>>` pipelines (`.card >> has-text=Pro >> button >> first`), Playwright `:has-text(...)` / `:visible` shorthands, `role=`, `label=`, `placeholder=`, `testid=`, `text=`, `xpath=`, cross-iframe (`iframe#pay >> button`), or `pinned`. Visible elements are prioritized automatically.
 4. **DevTools Debugging, Codegen & Visual Trace**:
    ```bash
@@ -49,13 +49,15 @@ BrowserPilot controls the user's running Chrome browser (with existing logins, c
    browserpilot react "#submit-btn" --tab <id>
    browserpilot perf metrics --tab <id>
    browserpilot codegen https://example.com --format playwright -o flow.spec.ts
+   browserpilot run ./flow.json --trace ./replay-trace.html --open
    browserpilot trace start --title "Checkout Debug" --tab <id>
    browserpilot trace stop ./trace.html --open --tab <id>
    ```
    - `browser_network_intercept` / sandbox `route()` — mock, fulfill, modify, or abort API responses via CDP `Fetch`.
    - `browser_debugger` / `browser_live_edit` — breakpoints, call frames, live JS/CSS patching.
    - `browser_action_recorder` / `browserpilot codegen` — records clicks, checks, fills, Shadow DOM/iframes, and `Alt+Shift+Click` assertions into Playwright TS, BrowserPilot JS, `browser_batch` JSON, or Agent Skill Markdown.
-   - `browser_trace` / `browserpilot trace` / `browserpilot exec --trace report.html` — self-contained interactive HTML Trace Viewer with Before/After screenshots, click reticle, DOM summary, Console logs, and Network response previews.
+   - `browserpilot run <flow.json> --trace report.html` — replays recorded JSON / `browser_batch` workflows with assertions and optional HTML Trace generation.
+   - `browser_trace` / `browserpilot trace` / `browserpilot exec --trace report.html` — self-contained interactive HTML Trace Viewer with automatic sensitive header/token redaction, Before/After screenshots, click reticle, DOM summary, Console logs, and Network response previews.
 
 ## 3. Stateful JS Sandbox (`browserpilot exec`)
 
@@ -74,16 +76,18 @@ browserpilot exec -s "$SID" --trace ./run-trace.html -e '
 '
 ```
 
-Available sandbox globals: `state`, `tabs` (`list`, `open`, `use`, `current`, `close`), `locator`, `frameLocator`, `click`, `dblclick`, `rightClick`, `hover`, `fill`, `type`, `pressKey`, `check`, `uncheck`, `selectOption`, `uploadFiles`, `waitForFileChooser`, `route`, `unroute`, `scroll`, `drag`, `mouseStroke`, `mouse`, `keyboard`, `fillForm`, `handoff`, `evaluate`, `getLocatorString`, `listFrames`, `snapshot`, `screenshot` (`grid`, `zoom`), `pdf`, `screenshotWithLabels`, `cleanHTML`, `markdown`, `inspect`, `clipboard`, `addInitScript`, `removeInitScript`, `grantPermissions`, `emulate`, `getLatestLogs`, `getNetwork`, `onRequest`, `onResponse`, `getStyles`, `getReactInfo`, `waitForPageLoad`, `waitForSelector` (`state`), `waitForText` (`gone`), `waitForUrl`, `waitForResponse`, `waitForFunction`, `waitForPopup`, `getDebugger`, `getLiveEditor`, `getRecorder`, `getPerformance`, `downloads`, `actionRecorder`, `trace`, `cdp`, `sleep`, `createDemoVideo`.
+Available sandbox globals: `state`, `tabs` (`list`, `open`, `use`, `current`, `close`), `locator`, `frameLocator`, `click`, `dblclick`, `rightClick`, `hover`, `fill`, `type`, `pressKey`, `check`, `uncheck`, `selectOption`, `uploadFiles`, `waitForFileChooser`, `route`, `unroute`, `scroll`, `scrollUntil`, `drag`, `tap`, `swipe`, `touch`, `mouseStroke`, `mouse`, `keyboard`, `fillForm`, `handoff`, `evaluate`, `getLocatorString`, `listFrames`, `snapshot`, `screenshot` (`grid`, `zoom`), `pdf`, `screenshotWithLabels`, `cleanHTML`, `markdown`, `inspect`, `clipboard`, `addInitScript`, `removeInitScript`, `grantPermissions`, `emulate`, `getLatestLogs`, `getNetwork`, `onRequest`, `onResponse`, `getStyles`, `getReactInfo`, `waitForPageLoad`, `waitForSelector` (`state`), `waitForText` (`gone`), `waitForUrl`, `waitForResponse`, `waitForFunction`, `waitForPopup`, `getDebugger`, `getLiveEditor`, `getRecorder`, `getPerformance`, `downloads`, `actionRecorder`, `trace`, `cdp`, `sleep`, `createDemoVideo`.
 
 ## 4. Safety & Pitfalls
 
-- **Confirm before irreversible actions**: ask the user before submitting payments, deletions, account/security modifications, or publishing public posts.
-- **Human Handoff for CAPTCHAs / 2FA / Manual steps**: never bypass Cloudflare Turnstile, reCAPTCHA, passkeys, or OTP prompts — use `browser_handoff` / `browserpilot handoff "<instruction>"` so an in-page "Your Turn" card appears in Chrome and resumes automatically when the user clicks "Done, Continue AI".
+- **Confirm before irreversible actions**: ask the user before submitting payments, deletions, account/security modifications, or publishing public posts (or enable `BROWSERPILOT_APPROVAL_MODE=high-risk` for automatic in-page confirmation cards).
+- **Prompt-injection & secret hygiene**: pass `--wrap-untrusted` (`BROWSERPILOT_UNTRUSTED_BOUNDARY=1`) to wrap external webpage data in `<untrusted_page_content>` tags; sensitive headers (`Authorization`, `Cookie`) and tokens are redacted automatically in Trace reports and `browser_network` details. Use `--restricted-sandbox` (`BROWSERPILOT_SANDBOX_MODE=restricted`) to block `fs`/`child_process`/`net` inside `browser_exec`.
+- **Multi-browser routing**: use `browserpilot clients`, `browserpilot daemon use <client|browser|profile>`, or pass `--browser <name>` / `--profile <label>` when multiple browsers or profiles are connected.
+- **Human Handoff for CAPTCHAs / 2FA / Manual steps**: never bypass Cloudflare Turnstile, reCAPTCHA, passkeys, or OTP prompts — use `browser_handoff` / `browserpilot handoff "<instruction>"` so an in-page card appears in Chrome and resumes automatically when the user finishes.
 - **Debugger conflict**: if Chrome reports `Another debugger is already attached`, Chrome DevTools or another extension holds that tab — ask the user to close DevTools on that tab or open a fresh tab with `browserpilot open`.
 - **Restricted URLs**: Chrome forbids attaching to `chrome://`, `chrome-extension://`, `devtools://`, and Chrome Web Store pages.
 - **Profile safety**: never attempt profile-wide cookie/cache wipes (blocked automatically by BrowserPilot); use page-scoped `browser_cookies` instead.
 
 ## 5. Detailed Reference
 
-`browserpilot mcp` advertises the lean 19-tool low-token `core` profile (+ `browser_exec` Code Mode) by default; pass `--full` or `--caps=interaction,extraction,devtools,context,media` to expose all 52 MCP tools. For full chained/cross-iframe locator grammar, DevTools debugging/live-edit/mocking/codegen/trace workflows, and complete CLI options, read [REFERENCE.md](./REFERENCE.md).
+`browserpilot mcp` advertises the lean 19-tool low-token `core` profile (+ `browser_exec` Code Mode) by default over stdio or Streamable HTTP (`--http --port 19889`); pass `--full` or `--caps=interaction,extraction,devtools,context,media` to expose all 53 MCP tools. For full chained/cross-iframe locator grammar, DevTools debugging/live-edit/mocking/codegen/trace workflows, and complete CLI options, read [REFERENCE.md](./REFERENCE.md).

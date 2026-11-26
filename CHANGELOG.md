@@ -12,6 +12,25 @@ All notable changes to **BrowserPilot** (`browserpilot-cdp`) are documented in t
   - Added automatic cleanup of orphaned `#__browserpilot_ui_host` overlays (skipping discarded Memory-Saver tabs) and on-demand `content-script.js` injection across already-open tabs after extension reload so open webpages update immediately without refreshing, stripped broken `sourceMappingURL` comments from unpacked extension bundles, and added automated `chrome.developerPrivate` Error Console assertions (`runtimeErrors === []`, `runtimeWarnings === []`, `manifestErrors === []`) to the real Chrome MV3 E2E suite.
 
 ### Added
+- **Multi-Browser / Multi-Profile Routing & Auto-Start Daemon Service (`packages/server/src/daemon.ts`, `cli/service.ts`)**:
+  - Added `browserpilot clients`, `browserpilot daemon use <clientId|browser|profile>`, and `--browser` / `--profile` CLI targeting across concurrent Chrome, Edge, Brave, Opera, Vivaldi, and Direct-CDP connections.
+  - Added opt-in cross-platform user auto-start daemon service commands (`browserpilot daemon install-service` / `uninstall-service`) for macOS LaunchAgents, Linux `systemd --user`, and Windows Startup.
+- **Windows CI (`windows-latest`) & Chrome ErrorConsole Gate (`.github/workflows/ci.yml`, `packages/extension/test/extension-e2e.test.ts`)**:
+  - Expanded GitHub Actions CI matrix to `ubuntu-latest`, `macos-latest`, and `windows-latest` with real Chrome for Testing, and enforced zero `manifestErrors`, `runtimeErrors`, and `runtimeWarnings` via `chrome.developerPrivate.getExtensionsInfo()`.
+- **Real-World SPA Interaction Hardening (`packages/core/src/page/{forms,context,input}.ts`, `page-controller.ts`, `tools/interaction.ts`)**:
+  - Hardened `fill()` for ProseMirror/Slate/TipTap/Draft.js `contenteditable` editors via native CDP `Cmd/Ctrl+A` + `Backspace` + `insertText` fallback.
+  - Added virtual-scroll finder `page.scrollUntil(target, opts)` (`browser_scroll` `untilTarget` / CLI `scroll --until`) for lazily mounted infinite lists and tables.
+  - Added auto-detected HTML5 native `draggable="true"` `DataTransfer` drag-and-drop (`mode: 'auto' | 'pointer' | 'html5'`) and mobile CDP Touch gestures (`page.tap` / `page.swipe` / `browser_touch` / CLI `tap` & `swipe`).
+- **Single-Turn Post-Action Compact Diff (`returnDiff: true` / `--diff`)**:
+  - Interaction tools (`browser_click`, `browser_fill`, `browser_fill_form`, `browser_check`, `browser_select_option`, `browser_press_key`, `browser_scroll`, `browser_drag`, `browser_touch`) can now append a compact interactive AXTree diff right in the action response, cutting LLM round-trips in half.
+- **Security Guardrails Suite (`packages/protocol/src/security.ts`, `packages/core/src/page/handoff.ts`, `packages/server/src/tools/guardrails.ts`)**:
+  - **Action-Level Risk Approval (`BROWSERPILOT_APPROVAL_MODE=high-risk|strict`)**: Detects high-risk financial/destructive actions and sensitive domains, displaying a bilingual in-page confirmation card (`允许本次` / `拒绝`) before execution.
+  - **Default Secret Redaction**: Automatically redacts `Authorization`, `Cookie`, `Set-Cookie`, `X-API-Key`, password values, Bearer tokens, and secret query parameters in Trace reports and `browser_network` detail output (`includeSensitive: true` to opt out).
+  - **Prompt-Injection Untrusted Content Boundary**: `--wrap-untrusted` (`wrapUntrusted: true` / `BROWSERPILOT_UNTRUSTED_BOUNDARY=1`) wraps page snapshots, Markdown, and HTML in `<untrusted_page_content>` boundary tags.
+  - **Optional Restricted `exec` Sandbox (`--restricted-sandbox` / `BROWSERPILOT_SANDBOX_MODE=restricted`)**: Blocks `child_process`, `fs`, `net`, `http`, and arbitrary module imports inside `browser_exec`.
+- **Streamable HTTP MCP Transport & Workflow Replay CLI (`packages/server/src/mcp.ts`, `cli/replay.ts`)**:
+  - Added Bearer-token-authenticated Streamable HTTP MCP mode (`browserpilot mcp --http --port 19889`) serving `/mcp` and `/health` via `StreamableHTTPServerTransport`.
+  - Added `browserpilot run <flow.json> [--trace report.html] [--open]` to replay recorded Codegen / `browser_batch` workflows with assertions (`assert_visible`, `assert_text`, `assert_value`) and automatic Trace Viewer reporting.
 - **Interactive-Only Compact Snapshot Mode (`snapshot -i` / `--interactive` / `interactiveOnly: true`)**:
   - Emits only interactive controls (`[e1]`, `[e2]`...) and enclosing container landmarks that actually hold interactive descendants, cutting snapshot token usage by ~60–75% on content-heavy pages while maintaining independent full vs interactive diff baselines.
 - **Tiered Low-Token MCP Tool Profiles (`packages/server/src/mcp.ts`, `cli.ts`)**:

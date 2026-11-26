@@ -1,6 +1,13 @@
 import type { TabCDPSession } from '../cdp-client.js'
 import { sleep } from '../wait.js'
-import type { EmulateOptions, InitScriptEntry, ResolvedElement, ScrollResult } from './types.js'
+import type {
+  EmulateOptions,
+  InitScriptEntry,
+  ResolvedElement,
+  ScrollResult,
+  ScrollUntilOptions,
+  ScrollUntilResult,
+} from './types.js'
 
 export async function evaluateInPage<T = unknown>(
   session: TabCDPSession,
@@ -149,6 +156,62 @@ export async function probeAndScrollPage(
     atBottom: after.maxScrollY <= 1 || after.scrollY >= after.maxScrollY - 2,
     container: after.container,
   }
+}
+
+export async function scrollPageUntilTarget(
+  deps: {
+    resolveTargetNow: (target: string) => Promise<ResolvedElement | null>
+    scroll: (opts: {
+      target?: string
+      direction?: 'up' | 'down' | 'left' | 'right'
+      amount?: number
+    }) => Promise<ScrollResult>
+  },
+  target: string,
+  options: ScrollUntilOptions = {},
+): Promise<ScrollUntilResult> {
+  const direction = options.direction ?? 'down'
+  const amount = options.amount ?? 550
+  const maxScrolls = Math.max(1, Math.min(100, options.maxScrolls ?? 20))
+  const delayMs = Math.max(20, options.delayMs ?? 150)
+
+  if (await deps.resolveTargetNow(target)) {
+    return { found: true, attempts: 0 }
+  }
+
+  let lastScroll: ScrollResult | undefined
+  let stalledCount = 0
+  for (let i = 1; i <= maxScrolls; i++) {
+    lastScroll = await deps.scroll({
+      target: options.container,
+      direction,
+      amount,
+    })
+    await sleep(delayMs)
+
+    if (await deps.resolveTargetNow(target)) {
+      return { found: true, attempts: i, lastScroll }
+    }
+
+    const hitEdge =
+      !lastScroll.scrolled ||
+      (direction === 'down' && lastScroll.atBottom) ||
+      (direction === 'up' && lastScroll.atTop)
+    if (hitEdge) {
+      stalledCount++
+      // Allow one extra settle scroll for infinite-scroll / virtualized feeds fetching the next page
+      if (stalledCount >= 2) {
+        return { found: false, attempts: i, lastScroll }
+      }
+      await sleep(Math.max(delayMs, 250))
+      if (await deps.resolveTargetNow(target)) {
+        return { found: true, attempts: i, lastScroll }
+      }
+    } else {
+      stalledCount = 0
+    }
+  }
+  return { found: false, attempts: maxScrolls, lastScroll }
 }
 
 export async function grantBrowserPermissions(

@@ -64,8 +64,20 @@ export class DaemonClient {
     return data
   }
 
-  async health(): Promise<{ ok: boolean; version: string; pid?: number; uptimeMs: number; clients: BrowserClientInfo[] }> {
+  async health(): Promise<{
+    ok: boolean
+    version: string
+    pid?: number
+    uptimeMs: number
+    primaryClientId?: string | null
+    clients: BrowserClientInfo[]
+  }> {
     return await this.request('GET', '/api/health')
+  }
+
+  async selectClient(client: string): Promise<BrowserClientInfo> {
+    const res = await this.request<{ client: BrowserClientInfo }>('POST', '/api/clients/select', { client })
+    return res.client
   }
 
   async connectDirectCDP(endpoint: string): Promise<BrowserClientInfo> {

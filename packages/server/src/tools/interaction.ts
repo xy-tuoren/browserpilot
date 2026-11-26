@@ -4,11 +4,13 @@ import {
   waitForSelector,
   waitForText,
   waitForUrl,
+  type DragOptions,
   type FormFieldInput,
   type KeyModifier,
   type MouseButton,
   type WaitSelectorState,
 } from '@browserpilot/core'
+import { appendPostActionDiff, enforceActionApproval } from './guardrails.js'
 import {
   formatFeedbackSuffix,
   textResult,
@@ -34,6 +36,7 @@ export const INTERACTION_TOOL_DEFINITIONS: ToolDefinition[] = [
         force: { type: 'boolean', description: 'Bypass pre-click occlusion & stability checks' },
         strict: { type: 'boolean', description: 'Fail with strict-mode error if locator matches multiple visible elements' },
         timeoutMs: { type: 'number', description: 'Actionability wait/retry timeout in ms' },
+        returnDiff: { type: 'boolean', description: 'Append compact interactive AXTree diff immediately after the action' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
@@ -48,6 +51,7 @@ export const INTERACTION_TOOL_DEFINITIONS: ToolDefinition[] = [
         target: { type: 'string', description: 'Ref, CSS, or rich/chained locator' },
         checked: { type: 'boolean', description: 'Desired checked state (default true)' },
         force: { type: 'boolean' },
+        returnDiff: { type: 'boolean' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
@@ -67,6 +71,7 @@ export const INTERACTION_TOOL_DEFINITIONS: ToolDefinition[] = [
         force: { type: 'boolean' },
         strict: { type: 'boolean' },
         timeoutMs: { type: 'number' },
+        returnDiff: { type: 'boolean' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
@@ -92,6 +97,7 @@ export const INTERACTION_TOOL_DEFINITIONS: ToolDefinition[] = [
             required: ['target', 'value'],
           },
         },
+        returnDiff: { type: 'boolean' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
@@ -124,6 +130,7 @@ export const INTERACTION_TOOL_DEFINITIONS: ToolDefinition[] = [
         action: { type: 'string', enum: ['press', 'down', 'up'], description: 'Key action (default press)' },
         repeat: { type: 'number', description: 'Repeat count for press (1-50, default 1)' },
         modifiers: { type: 'array', items: { type: 'string', enum: ['Alt', 'Control', 'Meta', 'Shift'] } },
+        returnDiff: { type: 'boolean' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
@@ -146,15 +153,19 @@ export const INTERACTION_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'browser_scroll',
-    description: 'Scroll an element into view or dispatch mouse wheel scrolling.',
+    description:
+      'Scroll a container or dispatch mouse wheel scrolling; set untilTarget to incrementally scroll virtualized feeds/tables until a locator appears.',
     inputSchema: {
       type: 'object',
       properties: {
         target: { type: 'string' },
+        untilTarget: { type: 'string', description: 'Scroll step-by-step until this locator/text appears in the DOM' },
+        maxScrolls: { type: 'number', description: 'Max scroll attempts when untilTarget is set (default 20)' },
         direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
         amount: { type: 'number' },
         deltaX: { type: 'number' },
         deltaY: { type: 'number' },
+        returnDiff: { type: 'boolean' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
@@ -162,7 +173,8 @@ export const INTERACTION_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'browser_drag',
-    description: 'Perform a smooth mouse drag between two targets/coordinates, or a multi-point freehand canvas stroke via points[].',
+    description:
+      'Perform a smooth pointer or HTML5 DataTransfer drag-and-drop between two targets/coordinates, or a multi-point freehand canvas stroke via points[].',
     inputSchema: {
       type: 'object',
       properties: {
@@ -172,6 +184,11 @@ export const INTERACTION_TOOL_DEFINITIONS: ToolDefinition[] = [
         fromY: { type: 'number' },
         toX: { type: 'number' },
         toY: { type: 'number' },
+        mode: {
+          type: 'string',
+          enum: ['auto', 'pointer', 'html5'],
+          description: 'Drag mode (default auto: detects draggable="true" for HTML5 DragEvents)',
+        },
         points: {
           type: 'array',
           description: 'Optional multi-point waypoint path [{x,y}, ...] for continuous held-mouse stroke drawing',
@@ -182,9 +199,35 @@ export const INTERACTION_TOOL_DEFINITIONS: ToolDefinition[] = [
           },
         },
         steps: { type: 'number' },
+        returnDiff: { type: 'boolean' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
+    },
+  },
+  {
+    name: 'browser_touch',
+    description: 'Dispatch mobile Touch Events (tap or swipe) via CDP Input.dispatchTouchEvent for touch-only H5 pages and carousels.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['tap', 'swipe'] },
+        target: { type: 'string', description: 'Element target for tap' },
+        x: { type: 'number' },
+        y: { type: 'number' },
+        fromTarget: { type: 'string' },
+        toTarget: { type: 'string' },
+        fromX: { type: 'number' },
+        fromY: { type: 'number' },
+        toX: { type: 'number' },
+        toY: { type: 'number' },
+        steps: { type: 'number' },
+        durationMs: { type: 'number' },
+        returnDiff: { type: 'boolean' },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+      required: ['action'],
     },
   },
   {
@@ -196,6 +239,7 @@ export const INTERACTION_TOOL_DEFINITIONS: ToolDefinition[] = [
         target: { type: 'string' },
         value: { type: 'string', description: 'Single option value or label' },
         values: { type: 'array', items: { type: 'string' }, description: 'Multiple option values/labels for <select multiple>' },
+        returnDiff: { type: 'boolean' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
@@ -328,6 +372,10 @@ export async function executeInteractionTool(
             ? { x: args.x, y: args.y }
             : null
       if (!target) throw new Error('Provide either target or (x, y) coordinates')
+      await enforceActionApproval(tab, {
+        action: 'click',
+        target: typeof target === 'string' ? target : `(${target.x}, ${target.y})`,
+      })
       const { feedback } = await tab.runWithFeedback(() =>
         tab.page.click(target, {
           button: args.button as MouseButton | undefined,
@@ -338,7 +386,12 @@ export async function executeInteractionTool(
           timeoutMs: typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
         }),
       )
-      return textResult(`Clicked ${typeof target === 'string' ? target : `(${target.x}, ${target.y})`}\n${formatFeedbackSuffix(feedback)}`)
+      const msg = await appendPostActionDiff(
+        tab,
+        `Clicked ${typeof target === 'string' ? target : `(${target.x}, ${target.y})`}\n${formatFeedbackSuffix(feedback)}`,
+        args.returnDiff,
+      )
+      return textResult(msg)
     }
 
     case 'browser_check': {
@@ -349,14 +402,17 @@ export async function executeInteractionTool(
           ? tab.page.check(String(args.target), { force: Boolean(args.force) })
           : tab.page.uncheck(String(args.target), { force: Boolean(args.force) }),
       )
-      return textResult(
+      const msg = await appendPostActionDiff(
+        tab,
         `${desired ? 'Checked' : 'Unchecked'} ${args.target} (${changed ? 'toggled' : 'already in desired state'})\n${formatFeedbackSuffix(feedback)}`,
-        { changed, checked: desired },
+        args.returnDiff,
       )
+      return textResult(msg, { changed, checked: desired })
     }
 
     case 'browser_fill': {
       const tab = await resolveTab()
+      await enforceActionApproval(tab, { action: 'fill', target: String(args.target) })
       const { feedback } = await tab.runWithFeedback(() =>
         tab.page.fill(String(args.target), String(args.value), {
           clear: args.clear as boolean | undefined,
@@ -365,18 +421,30 @@ export async function executeInteractionTool(
           timeoutMs: typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
         }),
       )
-      return textResult(`Filled ${args.target}\n${formatFeedbackSuffix(feedback)}`)
+      const msg = await appendPostActionDiff(
+        tab,
+        `Filled ${args.target}\n${formatFeedbackSuffix(feedback)}`,
+        args.returnDiff,
+      )
+      return textResult(msg)
     }
 
     case 'browser_fill_form': {
       const tab = await resolveTab()
       const fields = (args.fields as FormFieldInput[]) ?? []
       if (!fields.length) throw new Error('Provide non-empty fields array')
+      await enforceActionApproval(tab, {
+        action: 'fill',
+        target: fields.map((f) => f.target).join(', '),
+      })
       const { result, feedback } = await tab.runWithFeedback(() => tab.page.fillForm(fields))
       const summary = result.filled.map((f, i) => `${i + 1}. [${f.type}] ${f.target} = ${JSON.stringify(f.value)}`).join('\n')
-      return textResult(`Filled ${result.filled.length} form field(s):\n${summary}\n${formatFeedbackSuffix(feedback)}`, {
-        filled: result.filled,
-      })
+      const msg = await appendPostActionDiff(
+        tab,
+        `Filled ${result.filled.length} form field(s):\n${summary}\n${formatFeedbackSuffix(feedback)}`,
+        args.returnDiff,
+      )
+      return textResult(msg, { filled: result.filled })
     }
 
     case 'browser_type': {
@@ -397,9 +465,12 @@ export async function executeInteractionTool(
       const { feedback } = await tab.runWithFeedback(() =>
         tab.page.pressKey(String(args.key), { action, repeat, modifiers }),
       )
-      return textResult(
+      const msg = await appendPostActionDiff(
+        tab,
         `${action === 'down' ? 'Key down' : action === 'up' ? 'Key up' : 'Pressed'} ${args.key}${repeat && repeat > 1 ? ` x${repeat}` : ''}\n${formatFeedbackSuffix(feedback)}`,
+        args.returnDiff,
       )
+      return textResult(msg)
     }
 
     case 'browser_hover': {
@@ -417,6 +488,19 @@ export async function executeInteractionTool(
 
     case 'browser_scroll': {
       const tab = await resolveTab()
+      if (typeof args.untilTarget === 'string' && args.untilTarget.trim()) {
+        const untilRes = await tab.page.scrollUntil(args.untilTarget, {
+          container: args.target as string | undefined,
+          direction: args.direction as 'up' | 'down' | 'left' | 'right' | undefined,
+          amount: args.amount as number | undefined,
+          maxScrolls: typeof args.maxScrolls === 'number' ? args.maxScrolls : undefined,
+        })
+        const base = untilRes.found
+          ? `Found "${args.untilTarget}" after ${untilRes.attempts} scroll step(s)`
+          : `Target "${args.untilTarget}" not found after ${untilRes.attempts} scroll step(s)`
+        const msg = await appendPostActionDiff(tab, base, args.returnDiff)
+        return textResult(msg, { ...untilRes })
+      }
       const res = await tab.page.scroll({
         target: args.target as string | undefined,
         direction: args.direction as 'up' | 'down' | 'left' | 'right' | undefined,
@@ -424,10 +508,9 @@ export async function executeInteractionTool(
         deltaX: args.deltaX as number | undefined,
         deltaY: args.deltaY as number | undefined,
       })
-      return textResult(
-        `Scrolled ${res.container} (moved=${res.scrolled}): scrollY=${res.scrollY}/${res.maxScrollY}px (${res.percentY}%)${res.atTop ? ' [at top]' : ''}${res.atBottom ? ' [at bottom]' : ''}`,
-        { ...res },
-      )
+      const base = `Scrolled ${res.container} (moved=${res.scrolled}): scrollY=${res.scrollY}/${res.maxScrollY}px (${res.percentY}%)${res.atTop ? ' [at top]' : ''}${res.atBottom ? ' [at bottom]' : ''}`
+      const msg = await appendPostActionDiff(tab, base, args.returnDiff)
+      return textResult(msg, { ...res })
     }
 
     case 'browser_drag': {
@@ -445,8 +528,50 @@ export async function executeInteractionTool(
         typeof args.toTarget === 'string'
           ? args.toTarget
           : { x: Number(args.toX ?? 0), y: Number(args.toY ?? 0) }
-      await tab.page.drag(from, to, { steps: args.steps as number | undefined })
-      return textResult('Drag completed')
+      await tab.page.drag(from, to, {
+        steps: args.steps as number | undefined,
+        mode: args.mode as DragOptions['mode'],
+      })
+      const msg = await appendPostActionDiff(tab, 'Drag completed', args.returnDiff)
+      return textResult(msg)
+    }
+
+    case 'browser_touch': {
+      const tab = await resolveTab()
+      const action = String(args.action)
+      if (action === 'tap') {
+        const target =
+          typeof args.target === 'string'
+            ? args.target
+            : typeof args.x === 'number' && typeof args.y === 'number'
+              ? { x: args.x, y: args.y }
+              : null
+        if (!target) throw new Error('Provide either target or (x, y) for touch tap')
+        const { feedback } = await tab.runWithFeedback(() => tab.page.tap(target))
+        const msg = await appendPostActionDiff(
+          tab,
+          `Tapped ${typeof target === 'string' ? target : `(${target.x}, ${target.y})`}\n${formatFeedbackSuffix(feedback)}`,
+          args.returnDiff,
+        )
+        return textResult(msg)
+      }
+      if (action === 'swipe') {
+        const from =
+          typeof args.fromTarget === 'string'
+            ? args.fromTarget
+            : { x: Number(args.fromX ?? 0), y: Number(args.fromY ?? 0) }
+        const to =
+          typeof args.toTarget === 'string'
+            ? args.toTarget
+            : { x: Number(args.toX ?? 0), y: Number(args.toY ?? 0) }
+        await tab.page.swipe(from, to, {
+          steps: typeof args.steps === 'number' ? args.steps : undefined,
+          durationMs: typeof args.durationMs === 'number' ? args.durationMs : undefined,
+        })
+        const msg = await appendPostActionDiff(tab, 'Touch swipe completed', args.returnDiff)
+        return textResult(msg)
+      }
+      throw new Error(`Unsupported touch action: ${action}`)
     }
 
     case 'browser_select_option': {
@@ -457,7 +582,12 @@ export async function executeInteractionTool(
           ? (args.value as unknown[]).map(String)
           : String(args.value ?? '')
       const selected = await tab.page.selectOption(String(args.target), vals)
-      return textResult(`Selected option(s) ${JSON.stringify(selected)} in ${args.target}`, { selected })
+      const msg = await appendPostActionDiff(
+        tab,
+        `Selected option(s) ${JSON.stringify(selected)} in ${args.target}`,
+        args.returnDiff,
+      )
+      return textResult(msg, { selected })
     }
 
     case 'browser_upload_file': {

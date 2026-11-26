@@ -297,7 +297,7 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
     await new Promise<void>((r) => proc.once('close', () => r()))
   }, 15_000)
 
-  it('exposes all 52 tools over real MCP stdio server and executes full browser workflow + v1.6 trace/codegen tools + screenshot image blocks', async () => {
+  it('exposes all 53 tools over real MCP stdio server and executes full browser workflow + v1.6 trace/codegen tools + screenshot image blocks', async () => {
     if (!chromeOk) return
 
     const cliBin = path.resolve(import.meta.dirname, '..', 'dist', 'cli.js')
@@ -311,7 +311,8 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
     try {
       const { tools } = await client.listTools()
       expect(tools.length).toBe(TOOL_DEFINITIONS.length)
-      expect(tools.length).toBe(52)
+      expect(tools.length).toBe(53)
+      expect(tools.some((t) => t.name === 'browser_touch')).toBe(true)
       expect(tools.some((t) => t.name === 'browser_snapshot')).toBe(true)
       expect(tools.some((t) => t.name === 'browser_debugger')).toBe(true)
       expect(tools.some((t) => t.name === 'browser_exec')).toBe(true)
@@ -333,9 +334,19 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
       expect(snapText).toContain('BrowserPilot Full Stack')
 
       await client.callTool({ name: 'browser_fill', arguments: { target: '#query', value: 'mcp-power' } })
-      const clickRes = await client.callTool({ name: 'browser_click', arguments: { target: '#go-btn' } })
+      const clickRes = await client.callTool({ name: 'browser_click', arguments: { target: '#go-btn', returnDiff: true } })
       const clickText = (clickRes.content as Array<{ text?: string }>)[0]?.text ?? ''
       expect(clickText).toContain('simulated-ui-error')
+      expect(clickText).toContain('--- Page Diff ---')
+
+      // Untrusted content boundary framing works cleanly when requested
+      const wrappedSnap = await client.callTool({
+        name: 'browser_snapshot',
+        arguments: { showDiffSinceLastCall: false, interactiveOnly: true, wrapUntrusted: true },
+      })
+      const wrappedText = (wrappedSnap.content as Array<{ text?: string }>)[0]?.text ?? ''
+      expect(wrappedText).toContain('<untrusted_page_content kind="snapshot"')
+      expect(wrappedText).toContain('</untrusted_page_content>')
 
       await new Promise((r) => setTimeout(r, 150))
       const evalRes = await client.callTool({
@@ -559,5 +570,32 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
     expect(await viewerResp.text()).toContain('BrowserPilot Trace Viewer')
     const badResp = await fetch(`http://127.0.0.1:${daemonPort}/trace/00000000000000000000000000000000`)
     expect(badResp.status).toBe(404)
+
+    // Multi-browser client list & pinning + workflow replay (`browserpilot run flow.json --trace`)
+    const clientsOut = await runCli('clients')
+    expect(clientsOut).toContain('Chrome')
+    const useOut = await runCli('daemon', 'use', 'chrome')
+    expect(useOut).toContain('Default browser target pinned')
+
+    const flowFile = path.join(cliHome, 'smoke-flow.json')
+    const replayTraceFile = path.join(cliHome, 'replay-trace.html')
+    await fs.writeFile(
+      flowFile,
+      JSON.stringify({
+        name: 'CLI Replay Smoke',
+        steps: [
+          { action: 'navigate', url: baseUrl },
+          { action: 'fill', target: '#query', value: 'replay-works' },
+          { action: 'click', target: '#go-btn' },
+          { action: 'wait', text: 'ok:replay-works' },
+          { action: 'assert_text', target: '#out', value: 'ok:replay-works' },
+          { action: 'assert_value', target: '#query', value: 'replay-works' },
+        ],
+      }),
+    )
+    const runOut = await runCli('run', flowFile, '--trace', replayTraceFile)
+    expect(runOut).toContain('Workflow passed: 6/6 step(s)')
+    expect(runOut).toContain('Saved Trace report')
+    expect((await fs.stat(replayTraceFile)).size).toBeGreaterThan(5_000)
   }, 35_000)
 })

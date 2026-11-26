@@ -53,18 +53,24 @@ export function sendEvent(event: string, params?: Record<string, unknown>): void
   sendToBridge(msg)
 }
 
+function detectBrowserBrand(): string {
+  const ua = navigator.userAgent
+  if (ua.includes('Edg/')) return 'Edge'
+  if (ua.includes('OPR/') || ua.includes('Opera')) return 'Opera'
+  if (ua.includes('Vivaldi')) return 'Vivaldi'
+  if (ua.includes('Brave') || Boolean((navigator as { brave?: unknown }).brave)) return 'Brave'
+  return 'Chrome'
+}
+
 function sendHello(transport: 'native' | 'websocket'): void {
   const hello: ExtensionHelloMessage = {
     type: 'hello',
     token: bgState.config.authToken,
     extensionId: chrome.runtime.id,
     extensionVersion: BROWSERPILOT_VERSION,
-    browser: navigator.userAgent.includes('Edg/')
-      ? 'Edge'
-      : navigator.userAgent.includes('Brave')
-        ? 'Brave'
-        : 'Chrome',
+    browser: detectBrowserBrand(),
     transport,
+    ...(bgState.config.profileLabel?.trim() ? { profileLabel: bgState.config.profileLabel.trim() } : {}),
   }
   sendToBridge(hello)
 }
