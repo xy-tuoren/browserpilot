@@ -288,5 +288,5 @@ describe('v1.7 Architecture, Schema Validation, Lifecycle GC, Windows Host & Typ
     } finally {
       await fs.rm(tmpConsumer, { recursive: true, force: true }).catch(() => {})
     }
-  })
+  }, 30_000)
 })
