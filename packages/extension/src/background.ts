@@ -513,6 +513,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch(() => safeRespond({ hostname: null }))
     return true
   }
+  if (msg.type === 'browserpilot:organize-tabs') {
+    void executeBridgeMethod('tabs.organize', {
+      strategy: msg.strategy === 'topic' ? 'topic' : 'domain',
+      minGroupSize: typeof msg.minGroupSize === 'number' ? msg.minGroupSize : 2,
+    })
+      .then((res) => safeRespond({ ok: true, ...(res as Record<string, unknown>) }))
+      .catch((err) => safeRespond({ ok: false, error: err instanceof Error ? err.message : String(err) }))
+    return true
+  }
   if (msg.type === 'browserpilot:recorded-step' && msg.step) {
     const tid = _sender.tab?.id
     if (bgState.codegen.active && tid !== undefined && tid === bgState.codegen.tabId) {

@@ -21,6 +21,7 @@ import {
 } from '@browserpilot/protocol'
 import { loadOrCreateDaemonConfig, writeDaemonRuntimeInfo, type DaemonConfigFile } from './config.js'
 import { getStableExtensionDir } from './native-install.js'
+import { addSchedule, DaemonScheduler, listSchedules, removeSchedule } from './scheduler.js'
 import { executeTool, type ToolRuntimeContext } from './tools.js'
 
 interface ConnectedBackend {
@@ -52,6 +53,7 @@ export class BrowserPilotDaemon {
   private startedAt = 0
   private hostedTraces = new Map<string, { html: string; createdAt: number }>()
   private autoReloadAttempted = new Set<string>()
+  private scheduler: DaemonScheduler | null = null
 
   async start(options: DaemonOptions = {}): Promise<DaemonConfigFile> {
     const cfg =
@@ -105,6 +107,8 @@ export class BrowserPilotDaemon {
 
     if (options.persistRuntime !== false) {
       await writeDaemonRuntimeInfo(this.config)
+      this.scheduler = new DaemonScheduler(() => this.createToolContext())
+      this.scheduler.start()
     }
     return this.config
   }
@@ -466,6 +470,40 @@ export class BrowserPilotDaemon {
         return
       }
 
+      if (method === 'GET' && url.pathname === '/api/schedules') {
+        this.sendJson(res, 200, { ok: true, schedules: await listSchedules() })
+        return
+      }
+
+      if (method === 'POST' && url.pathname === '/api/schedules') {
+        const body = await this.readJsonBody(req)
+        const task = await addSchedule({
+          name: String(body.name ?? ''),
+          every: (body.every as string | number) ?? '1h',
+          flowPath: typeof body.flowPath === 'string' ? body.flowPath : undefined,
+          shortcut: typeof body.shortcut === 'string' ? body.shortcut : undefined,
+          code: typeof body.code === 'string' ? body.code : undefined,
+          headless: body.headless !== false,
+        })
+        this.sendJson(res, 200, { ok: true, task })
+        return
+      }
+
+      if (method === 'DELETE' && url.pathname === '/api/schedules') {
+        const key = url.searchParams.get('id') || url.searchParams.get('name') || ''
+        const removed = await removeSchedule(key)
+        this.sendJson(res, 200, { ok: true, removed })
+        return
+      }
+
+      if (method === 'POST' && url.pathname === '/api/schedules/run') {
+        const body = await this.readJsonBody(req)
+        const sched = this.scheduler ?? new DaemonScheduler(() => this.createToolContext())
+        const report = await sched.runNow(String(body.id ?? body.name ?? ''))
+        this.sendJson(res, 200, { ok: report.ok, report })
+        return
+      }
+
       if (method === 'POST' && url.pathname === '/api/shutdown') {
         this.sendJson(res, 200, { ok: true })
         setTimeout(() => void this.stop(), 50)
@@ -494,6 +532,8 @@ export class BrowserPilotDaemon {
   }
 
   async stop(): Promise<void> {
+    this.scheduler?.stop()
+    this.scheduler = null
     for (const b of this.backends.values()) {
       b.manager.dispose()
       await b.transport.close().catch(() => {})

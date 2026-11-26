@@ -2,6 +2,19 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createDemoVideo, renderTraceViewerHtml, type ExecSandboxMode, type PdfOptions } from '@browserpilot/core'
 import type { TraceData } from '@browserpilot/protocol'
+import { runSingleReplayStep, type ReplayFlowStep, type ReplayToolCaller } from '../cli/replay.js'
+import { addSchedule, executeScheduledTask, listSchedules, removeSchedule } from '../scheduler.js'
+import {
+  clearSiteMemories,
+  deleteShortcut,
+  deleteSiteMemory,
+  getShortcut,
+  getSiteMemory,
+  listShortcuts,
+  listSiteMemories,
+  saveShortcut,
+  setSiteMemory,
+} from '../shortcuts-memory.js'
 import { enforceActionApproval } from './guardrails.js'
 import { textResult, type ToolDefinition, type ToolDispatchContext, type ToolExecutionResult } from './types.js'
 
@@ -132,7 +145,7 @@ export const CONTEXT_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'browser_record',
     description:
-      'Record the active tab as an MP4/WebM video via CDP screencast + ffmpeg (optional page audio capture), or create a smart idle-sped-up demo video.',
+      'Record the active tab as an MP4, WebM, or animated GIF via CDP screencast + ffmpeg (optional page audio capture), or create a smart idle-sped-up demo video/GIF.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -145,6 +158,83 @@ export const CONTEXT_TOOL_DEFINITIONS: ToolDefinition[] = [
         durationMs: { type: 'number' },
         actionTimestamps: { type: 'array', items: { type: 'number' }, description: 'Timestamps from stop() so only idle gaps are sped up while interactions stay 1x' },
         paddingMs: { type: 'number' },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'browser_gif',
+    description:
+      'Record step-by-step browser interactions into a crisp shareable animated GIF with optional click indicators, bilingual action caption pills, and step progress bar (works with ffmpeg OR built-in zero-dependency GIF89a encoder).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['start', 'frame', 'stop', 'clear', 'status', 'export'] },
+        label: { type: 'string', description: 'Caption label when action=frame' },
+        outputPath: { type: 'string', description: 'Output .gif file path when action=export' },
+        width: { type: 'number', description: 'Output GIF width in px (default 800)' },
+        delayMs: { type: 'number', description: 'Frame delay in ms (default 900)' },
+        showClickIndicators: { type: 'boolean', description: 'Overlay click rings at interaction points (default true)' },
+        showActionLabels: { type: 'boolean', description: 'Overlay action caption pill on each frame (default true)' },
+        showProgressBar: { type: 'boolean', description: 'Overlay step progress bar (default true)' },
+        loop: { type: 'number', description: 'Loop count (0 = infinite, default 0)' },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'browser_shortcuts',
+    description:
+      'List, save, inspect, execute, or delete reusable named workflow shortcuts (/name) stored locally in ~/.browserpilot/shortcuts/.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'save', 'get', 'run', 'delete'] },
+        name: { type: 'string', description: 'Shortcut name (e.g. "daily-login" or "/daily-login")' },
+        description: { type: 'string' },
+        steps: { type: 'array', items: { type: 'object' }, description: 'Workflow steps array to save' },
+        code: { type: 'string', description: 'Optional exec JavaScript snippet to save' },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'browser_schedule',
+    description:
+      'Create, list, remove, or immediately trigger recurring scheduled browser tasks persisted in ~/.browserpilot/schedules.json and run automatically by the BrowserPilot daemon.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'add', 'remove', 'run_now'] },
+        name: { type: 'string', description: 'Task name (or id for remove / run_now)' },
+        id: { type: 'string', description: 'Task ID for remove / run_now' },
+        every: { type: 'string', description: 'Recurring interval (e.g. "15m", "1h", "24h")' },
+        flowPath: { type: 'string', description: 'Path to a workflow flow.json file' },
+        shortcut: { type: 'string', description: 'Name of a saved BrowserPilot shortcut to run' },
+        code: { type: 'string', description: 'Inline BrowserPilot exec JS code to run' },
+        headless: { type: 'boolean', description: 'Run in isolated headless Chrome (default true)' },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'browser_memory',
+    description:
+      'Local-first per-domain Browser Memory (~/.browserpilot/memory.json): store, retrieve, list, or delete site-specific notes, verified selectors, and user preferences with zero cloud upload.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['get', 'set', 'list', 'delete', 'clear'] },
+        domain: { type: 'string', description: 'Hostname or URL (defaults to current tab hostname if omitted)' },
+        key: { type: 'string', description: 'Memory key (e.g. "login_selector", "preferred_currency")' },
+        value: { type: 'string', description: 'Memory value to store when action=set' },
+        note: { type: 'string', description: 'Optional context note when action=set' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
@@ -413,6 +503,196 @@ export async function executeContextTool(
         return textResult(`Created demo video -> ${out}`)
       }
       throw new Error(`Unknown record action: ${action}`)
+    }
+
+    case 'browser_gif': {
+      const tab = await resolveTab()
+      const action = String(args.action)
+      if (action === 'start') {
+        const res = await tab.gif.start({ clearExisting: true, captureInitial: true })
+        return textResult(`GIF recording started (${res.frameCount} initial frame captured)`, res)
+      }
+      if (action === 'frame') {
+        const frame = await tab.gif.captureFrame(typeof args.label === 'string' ? args.label : 'Step')
+        if (!frame) throw new Error('Failed to capture GIF frame')
+        return textResult(`Captured GIF frame #${frame.index}: ${frame.label}`, { index: frame.index, label: frame.label })
+      }
+      if (action === 'stop') {
+        const res = tab.gif.stop()
+        return textResult(`GIF recording paused (${res.frameCount} frame(s) buffered)`, res)
+      }
+      if (action === 'clear') {
+        tab.gif.clear()
+        return textResult('Cleared GIF recording buffer')
+      }
+      if (action === 'status') {
+        const st = tab.gif.getStatus()
+        return textResult(JSON.stringify(st, null, 2), st)
+      }
+      if (action === 'export') {
+        const out = await tab.gif.export({
+          outputPath: typeof args.outputPath === 'string' ? args.outputPath : undefined,
+          width: typeof args.width === 'number' ? args.width : undefined,
+          delayMs: typeof args.delayMs === 'number' ? args.delayMs : undefined,
+          showClickIndicators: args.showClickIndicators as boolean | undefined,
+          showActionLabels: args.showActionLabels as boolean | undefined,
+          showProgressBar: args.showProgressBar as boolean | undefined,
+          loop: typeof args.loop === 'number' ? args.loop : undefined,
+        })
+        return textResult(
+          `Exported animated GIF -> ${out.path} (${out.frameCount} frame(s), ${out.width}x${out.height}, ${(out.sizeBytes / 1024).toFixed(1)} KB, encoder=${out.encoder})`,
+          { ...out },
+        )
+      }
+      throw new Error(`Unknown browser_gif action: ${action}`)
+    }
+
+    case 'browser_shortcuts': {
+      const action = String(args.action)
+      if (action === 'list') {
+        const items = await listShortcuts()
+        if (!items.length) return textResult('(no saved shortcuts)', { shortcuts: [] })
+        const lines = items.map(
+          (s) => `/${s.name} — ${s.description || (s.steps ? `${s.steps.length} step(s)` : 'JS script')}`,
+        )
+        return textResult(lines.join('\n'), { shortcuts: items })
+      }
+      if (action === 'get') {
+        const sc = await getShortcut(String(args.name ?? ''))
+        if (!sc) throw new Error(`Shortcut "${args.name}" not found`)
+        return textResult(JSON.stringify(sc, null, 2), { shortcut: sc })
+      }
+      if (action === 'save') {
+        const saved = await saveShortcut({
+          name: String(args.name ?? ''),
+          description: typeof args.description === 'string' ? args.description : undefined,
+          steps: Array.isArray(args.steps) ? (args.steps as ReplayFlowStep[]) : undefined,
+          code: typeof args.code === 'string' ? args.code : undefined,
+        })
+        return textResult(`Saved shortcut /${saved.name}`, { shortcut: saved })
+      }
+      if (action === 'delete') {
+        const removed = await deleteShortcut(String(args.name ?? ''))
+        return textResult(removed ? `Deleted shortcut /${args.name}` : `Shortcut "${args.name}" not found`, { deleted: removed })
+      }
+      if (action === 'run') {
+        const sc = await getShortcut(String(args.name ?? ''))
+        if (!sc) throw new Error(`Shortcut "${args.name}" not found`)
+        if (sc.code && (!sc.steps || !sc.steps.length)) {
+          const res = await manager.exec(sessionId ?? 'default', sc.code, { tabId: explicitTabId })
+          const out = [res.stdout, res.returnValue !== undefined ? JSON.stringify(res.returnValue) : '']
+            .filter(Boolean)
+            .join('\n')
+          if (res.error) {
+            return { content: [{ type: 'text', text: `Shortcut /${sc.name} error: ${res.error}` }], isError: true }
+          }
+          return textResult(`Executed shortcut /${sc.name}\n${out || '(ok)'}`)
+        }
+        const steps = sc.steps ?? []
+        const { executeTool } = await import('../tools.js')
+        const localCtx = {
+          getManager: () => manager,
+          listClients: () => [],
+          registerTraceHtml: ctx.registerTraceHtml,
+        }
+        const caller: ReplayToolCaller = { callTool: (toolName, toolArgs) => executeTool(localCtx, toolName, toolArgs) }
+        for (const step of steps) {
+          await runSingleReplayStep(caller, step, { tabId: explicitTabId, sessionId })
+        }
+        return textResult(`Executed shortcut /${sc.name}: ${steps.length}/${steps.length} step(s) passed`, {
+          name: sc.name,
+          steps: steps.length,
+        })
+      }
+      throw new Error(`Unknown browser_shortcuts action: ${action}`)
+    }
+
+    case 'browser_schedule': {
+      const action = String(args.action)
+      if (action === 'list') {
+        const list = await listSchedules()
+        if (!list.length) return textResult('(no scheduled tasks)', { schedules: [] })
+        const lines = list.map(
+          (t) =>
+            `[${t.id}] ${t.name} (every ${t.every}, ${t.headless ? 'headless' : 'active-browser'}, runs=${t.runCount}${t.lastStatus ? `, last=${t.lastStatus}` : ''})`,
+        )
+        return textResult(lines.join('\n'), { schedules: list })
+      }
+      if (action === 'add') {
+        const task = await addSchedule({
+          name: String(args.name ?? ''),
+          every: String(args.every ?? '1h'),
+          flowPath: typeof args.flowPath === 'string' ? args.flowPath : undefined,
+          shortcut: typeof args.shortcut === 'string' ? args.shortcut : undefined,
+          code: typeof args.code === 'string' ? args.code : undefined,
+          headless: args.headless !== false,
+        })
+        return textResult(`Scheduled task "${task.name}" [${task.id}] every ${task.every}`, { task })
+      }
+      if (action === 'remove') {
+        const key = String(args.id ?? args.name ?? '')
+        const ok = await removeSchedule(key)
+        return textResult(ok ? `Removed scheduled task "${key}"` : `Scheduled task "${key}" not found`, { removed: ok })
+      }
+      if (action === 'run_now') {
+        const key = String(args.id ?? args.name ?? '').trim().toLowerCase()
+        const list = await listSchedules()
+        const task = list.find((t) => t.id.toLowerCase() === key || t.name.toLowerCase() === key)
+        if (!task) throw new Error(`Scheduled task "${key}" not found`)
+        const report = await executeScheduledTask(task, () => ({
+          getManager: () => manager,
+          listClients: () => [],
+          registerTraceHtml: ctx.registerTraceHtml,
+        }))
+        if (!report.ok) {
+          return { content: [{ type: 'text', text: `Scheduled task "${report.name}" failed: ${report.error}` }], isError: true }
+        }
+        return textResult(
+          `Scheduled task "${report.name}" succeeded in ${report.durationMs}ms${report.output ? `\n${report.output}` : ''}`,
+          { ...report },
+        )
+      }
+      throw new Error(`Unknown browser_schedule action: ${action}`)
+    }
+
+    case 'browser_memory': {
+      const action = String(args.action)
+      if (action === 'list') {
+        const store = await listSiteMemories()
+        const domains = Object.keys(store)
+        if (!domains.length) return textResult('(no site memories stored)', { memory: store })
+        const lines = domains.map((d) => `${d}: ${Object.keys(store[d]).join(', ')}`)
+        return textResult(lines.join('\n'), { memory: store })
+      }
+      if (action === 'clear') {
+        await clearSiteMemories()
+        return textResult('Cleared all local site memories')
+      }
+      let domain = typeof args.domain === 'string' ? args.domain.trim() : ''
+      if (!domain) {
+        const tab = await resolveTab()
+        const meta = await tab.page.getUrlAndTitle().catch(() => ({ url: '', title: '' }))
+        domain = meta.url
+      }
+      if (!domain) throw new Error('Provide domain or open an http(s) tab first')
+      if (action === 'get') {
+        const entries = await getSiteMemory(domain)
+        return textResult(JSON.stringify(entries, null, 2), { domain, entries })
+      }
+      if (action === 'set') {
+        const saved = await setSiteMemory(
+          domain,
+          String(args.key ?? ''),
+          String(args.value ?? ''),
+          typeof args.note === 'string' ? args.note : undefined,
+        )
+        return textResult(`Saved memory [${saved.domain}] ${saved.key} = ${saved.item.value}`, saved)
+      }
+      if (action === 'delete') {
+        const removed = await deleteSiteMemory(domain, typeof args.key === 'string' ? args.key : undefined)
+        return textResult(removed ? `Deleted memory for ${domain}` : `No memory found for ${domain}`, { deleted: removed })
+      }
+      throw new Error(`Unknown browser_memory action: ${action}`)
     }
 
     case 'browser_downloads': {

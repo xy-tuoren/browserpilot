@@ -59,6 +59,7 @@ export const CORE_MCP_TOOL_NAMES = new Set<string>([
   'browser_close_tab',
   'browser_navigate',
   'browser_snapshot',
+  'browser_find',
   'browser_screenshot',
   'browser_labeled_screenshot',
   'browser_click',
@@ -86,6 +87,7 @@ const CAPABILITY_GROUP_TOOLS: Record<Exclude<McpCapabilityGroup, 'core' | 'all'>
     'browser_batch',
   ]),
   extraction: new Set([
+    'browser_tabs_context',
     'browser_frames',
     'browser_clean_html',
     'browser_markdown',
@@ -111,8 +113,11 @@ const CAPABILITY_GROUP_TOOLS: Record<Exclude<McpCapabilityGroup, 'core' | 'all'>
     'browser_emulate',
     'browser_cookies',
     'browser_storage',
+    'browser_shortcuts',
+    'browser_schedule',
+    'browser_memory',
   ]),
-  media: new Set(['browser_record', 'browser_downloads', 'browser_action_recorder', 'browser_trace']),
+  media: new Set(['browser_record', 'browser_gif', 'browser_downloads', 'browser_action_recorder', 'browser_trace']),
 }
 
 /**

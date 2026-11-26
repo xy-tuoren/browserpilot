@@ -134,13 +134,13 @@ export class PageInputDriver {
         modifiers: this.activeModifiersMask,
       })
       if (steps > 1) {
-        await this.session.transport.moveGhostCursor?.(this.tabId, cx, cy, this.pressedButtonsMask > 0).catch(() => {})
-        await sleep(8)
+        void this.session.transport.moveGhostCursor?.(this.tabId, cx, cy, this.pressedButtonsMask > 0).catch(() => {})
+        await sleep(6)
       }
     }
     this.lastMousePos = { x, y }
     if (steps === 1) {
-      await this.session.transport.moveGhostCursor?.(this.tabId, x, y, this.pressedButtonsMask > 0).catch(() => {})
+      void this.session.transport.moveGhostCursor?.(this.tabId, x, y, this.pressedButtonsMask > 0).catch(() => {})
     }
   }
 
@@ -161,7 +161,7 @@ export class PageInputDriver {
       modifiers: (opts.modifiers ?? 0) | this.activeModifiersMask,
     })
     this.lastMousePos = { x, y }
-    await this.session.transport.moveGhostCursor?.(this.tabId, x, y, true).catch(() => {})
+    void this.session.transport.moveGhostCursor?.(this.tabId, x, y, true).catch(() => {})
   }
 
   async mouseUp(
@@ -181,7 +181,7 @@ export class PageInputDriver {
       modifiers: (opts.modifiers ?? 0) | this.activeModifiersMask,
     })
     this.lastMousePos = { x, y }
-    await this.session.transport.moveGhostCursor?.(this.tabId, x, y, false).catch(() => {})
+    void this.session.transport.moveGhostCursor?.(this.tabId, x, y, false).catch(() => {})
   }
 
   async mouseClick(
@@ -191,8 +191,7 @@ export class PageInputDriver {
   ): Promise<void> {
     const button = opts.button ?? 'left'
     const clicks = opts.clickCount ?? 1
-    const dist = Math.hypot(x - this.lastMousePos.x, y - this.lastMousePos.y)
-    await this.mouseMove(x, y, { steps: dist > 40 ? 4 : 1 })
+    await this.mouseMove(x, y, { steps: 1 })
     for (let c = 1; c <= clicks; c++) {
       await this.mouseDown(x, y, { button, clickCount: c, modifiers: opts.modifiers })
       await this.mouseUp(x, y, { button, clickCount: c, modifiers: opts.modifiers })
@@ -351,7 +350,7 @@ export class PageInputDriver {
       modifiers: this.activeModifiersMask,
     })
     this.lastMousePos = { x, y }
-    await this.session.transport.moveGhostCursor?.(this.tabId, x, y, true).catch(() => {})
+    void this.session.transport.moveGhostCursor?.(this.tabId, x, y, true).catch(() => {})
   }
 
   async touchSwipe(

@@ -1,5 +1,17 @@
 import type { BrowserPilotTab } from '@browserpilot/core'
-import { classifyActionRisk, type ApprovalMode } from '@browserpilot/protocol'
+import { classifyActionRisk, type ApprovalMode, type ExtensionConfig } from '@browserpilot/protocol'
+import { addTrustedDomain, isUrlTrustedForApproval } from '../shortcuts-memory.js'
+
+async function readExtensionConfig(tab: BrowserPilotTab): Promise<ExtensionConfig | null> {
+  const extRpc = (
+    tab.session.transport as {
+      rpc?: (method: string, params?: Record<string, unknown>) => Promise<{ config?: ExtensionConfig } | null>
+    }
+  ).rpc
+  if (typeof extRpc !== 'function') return null
+  const st = await extRpc.call(tab.session.transport, 'extension.getState').catch(() => null)
+  return st?.config ?? null
+}
 
 export async function resolveApprovalMode(
   tab: BrowserPilotTab,
@@ -12,16 +24,9 @@ export async function resolveApprovalMode(
   if (envRaw === 'high-risk' || envRaw === 'strict' || envRaw === 'off') {
     return envRaw
   }
-  const extRpc = (
-    tab.session.transport as {
-      rpc?: (method: string) => Promise<{ config?: { approvalMode?: ApprovalMode } } | null>
-    }
-  ).rpc
-  if (typeof extRpc === 'function') {
-    const st = await extRpc.call(tab.session.transport, 'extension.getState').catch(() => null)
-    const m = st?.config?.approvalMode
-    if (m === 'high-risk' || m === 'strict') return m
-  }
+  const cfg = await readExtensionConfig(tab)
+  const m = cfg?.approvalMode
+  if (m === 'high-risk' || m === 'strict') return m
   return 'off'
 }
 
@@ -37,7 +42,16 @@ export async function enforceActionApproval(
   const mode = await resolveApprovalMode(tab, input.explicitMode)
   if (mode === 'off') return
 
-  const meta = await tab.page.getUrlAndTitle().catch(() => ({ url: '', title: '' }))
+  const [meta, extCfg] = await Promise.all([
+    tab.page.getUrlAndTitle().catch(() => ({ url: '', title: '' })),
+    readExtensionConfig(tab),
+  ])
+
+  // Honor per-site "Trust This Site" memory (synced between ~/.browserpilot/trusted-domains.json and extension config)
+  if (await isUrlTrustedForApproval(meta.url, extCfg?.domainRules?.trustedDomains ?? [])) {
+    return
+  }
+
   let targetText: string | undefined
   if (input.target) {
     const refEntry = tab.snapshots.getRef(tab.tabId, input.target)
@@ -80,6 +94,28 @@ export async function enforceActionApproval(
         ? `High-risk action "${detail}" timed out waiting for user confirmation.`
         : `High-risk action "${detail}" was denied by user.`,
     )
+  }
+
+  if (res.trustSite && (res.hostname || meta.url)) {
+    const host = res.hostname || meta.url
+    const updatedLocal = await addTrustedDomain(host).catch(() => [])
+    // Sync trusted domain into Chrome Extension config so it appears & can be revoked in Side Panel Security tab
+    const extRpc = (
+      tab.session.transport as {
+        rpc?: (method: string, params?: Record<string, unknown>) => Promise<unknown>
+      }
+    ).rpc
+    if (typeof extRpc === 'function' && extCfg) {
+      const mergedTrusted = Array.from(new Set([...(extCfg.domainRules?.trustedDomains ?? []), ...updatedLocal]))
+      await extRpc
+        .call(tab.session.transport, 'extension.setConfig', {
+          domainRules: {
+            ...extCfg.domainRules,
+            trustedDomains: mergedTrusted,
+          },
+        })
+        .catch(() => {})
+    }
   }
 }
 

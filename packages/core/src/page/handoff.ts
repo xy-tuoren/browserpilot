@@ -165,6 +165,9 @@ export async function requestHumanHandoff(
 
 export interface ActionApprovalResult {
   approved: boolean
+  /** True when the user clicked "Trust This Site" / "信任本站" */
+  trustSite?: boolean
+  hostname?: string
   cancelled: boolean
   timedOut: boolean
   elapsedMs: number
@@ -172,7 +175,8 @@ export interface ActionApprovalResult {
 
 /**
  * Displays an in-page high-risk action confirmation card inside the browser tab and pauses
- * until the user explicitly clicks "允许本次" ("Allow Once") or "拒绝" ("Deny").
+ * until the user explicitly clicks "允许本次" ("Allow Once"), "信任本站" ("Trust This Site"),
+ * or "拒绝" ("Deny").
  */
 export async function requestActionApproval(
   deps: HandoffDeps,
@@ -201,9 +205,16 @@ export async function requestActionApproval(
       if (extState?.config?.language === 'en') lang = 'en'
     }
   }
+  const meta = await deps.getUrlAndTitle().catch(() => ({ url: '', title: '' }))
+  let hostname = ''
+  try {
+    hostname = new URL(meta.url).hostname.toLowerCase()
+  } catch {}
+
   const isEn = lang === 'en'
   const cardTitle = isEn ? 'BrowserPilot · Confirm High-Risk Action' : 'BrowserPilot · 高风险操作确认'
   const allowLabel = isEn ? 'Allow Once' : '允许本次'
+  const trustLabel = isEn ? 'Trust This Site' : '信任本站'
   const denyLabel = isEn ? 'Deny' : '拒绝'
   const summaryText = options.reason ? `${options.detail}（${options.reason}）` : options.detail
 
@@ -213,15 +224,17 @@ export async function requestActionApproval(
     .setControlBanner?.(tabId, { active: true, status: 'Waiting for you...', mode: 'handoff' })
     .catch(() => {})
 
-  let resolveDecision!: (decision: 'allow' | 'deny') => void
-  const decisionPromise = new Promise<'allow' | 'deny'>((resolve) => {
+  let resolveDecision!: (decision: 'allow' | 'trust' | 'deny') => void
+  const decisionPromise = new Promise<'allow' | 'trust' | 'deny'>((resolve) => {
     resolveDecision = resolve
   })
 
   const offBinding = deps.session.on('Runtime.bindingCalled', (params) => {
     if (params.name !== bindingName) return
     const payload = String(params.payload ?? '')
-    resolveDecision(payload === 'allow' ? 'allow' : 'deny')
+    if (payload === 'trust') resolveDecision('trust')
+    else if (payload === 'allow') resolveDecision('allow')
+    else resolveDecision('deny')
   })
 
   await deps
@@ -241,7 +254,7 @@ export async function requestActionApproval(
         .bp-card {
           position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
           pointer-events: auto;
-          display: flex; align-items: center; gap: 14px; max-width: 580px;
+          display: flex; align-items: center; gap: 14px; max-width: 680px;
           background: rgba(15, 23, 42, 0.96); color: #f8fafc;
           border: 1px solid rgba(244, 63, 94, 0.65);
           backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
@@ -258,10 +271,13 @@ export async function requestActionApproval(
         .bp-actions { display: flex; gap: 8px; flex: none; }
         button {
           cursor: pointer; border-radius: 8px; border: 1px solid transparent;
-          padding: 7px 12px; font: 600 12px/1 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+          padding: 7px 11px; font: 600 12px/1 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+          white-space: nowrap;
         }
         .bp-allow { background: linear-gradient(135deg, #2dd4bf, #06b6d4); color: #042f2e; }
         .bp-allow:hover { filter: brightness(1.06); }
+        .bp-trust { background: rgba(56, 189, 248, 0.18); color: #7dd3fc; border-color: rgba(56, 189, 248, 0.45); }
+        .bp-trust:hover { background: rgba(56, 189, 248, 0.3); }
         .bp-deny { background: rgba(244, 63, 94, 0.2); color: #fecdd3; border-color: rgba(244, 63, 94, 0.45); }
         .bp-deny:hover { background: rgba(244, 63, 94, 0.34); }
       \`;
@@ -286,11 +302,15 @@ export async function requestActionApproval(
       btnAllow.className = 'bp-allow';
       btnAllow.textContent = ${JSON.stringify(allowLabel)};
       btnAllow.onclick = () => { globalThis.${bindingName}?.('allow'); host.remove(); };
+      const btnTrust = document.createElement('button');
+      btnTrust.className = 'bp-trust';
+      btnTrust.textContent = ${JSON.stringify(trustLabel)};
+      btnTrust.onclick = () => { globalThis.${bindingName}?.('trust'); host.remove(); };
       const btnDeny = document.createElement('button');
       btnDeny.className = 'bp-deny';
       btnDeny.textContent = ${JSON.stringify(denyLabel)};
       btnDeny.onclick = () => { globalThis.${bindingName}?.('deny'); host.remove(); };
-      actions.append(btnAllow, btnDeny);
+      actions.append(btnAllow, btnTrust, btnDeny);
       card.append(dot, msgWrap, actions);
       shadow.append(edge, card);
       (document.documentElement || document.body).appendChild(host);
@@ -306,7 +326,9 @@ export async function requestActionApproval(
       }),
     ])
     return {
-      approved: outcome === 'allow',
+      approved: outcome === 'allow' || outcome === 'trust',
+      trustSite: outcome === 'trust',
+      ...(hostname ? { hostname } : {}),
       cancelled: outcome === 'deny',
       timedOut: outcome === 'timeout',
       elapsedMs: Date.now() - start,

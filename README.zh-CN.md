@@ -14,28 +14,29 @@
 
 ## 为什么选择 BrowserPilot？
 
-| 能力 | Playwriter | Chrome DevTools MCP (`--autoConnect`) | Claude in Chrome | **BrowserPilot** |
-| :--- | :---: | :---: | :---: | :---: |
-| 复用真实已登录 Chrome（Cookie / 登录态 / 扩展） | 是 | 是 | 是 | **是** |
-| 零点击接管已打开的标签页 | 否（需逐页点图标） | 否（每次连接弹「允许」框） | 部分 | **是（真正零点击）** |
-| 零 Playwright / Puppeteer 运行时依赖 | 否 | 否（Puppeteer） | 是 | **是（100% 纯 CDP）** |
-| 低 Token 分级 MCP（默认 19 核心工具 / `--full` 53 工具）+ Streamable HTTP | 部分（单工具执行） | 否（全量暴露） | 否 | **是（直降 60.6% Schema Token + HTTP）** |
-| 精简交互快照（`snapshot -i`）+ 动作后单轮增量返回（`returnDiff`） | 否 | 否 | 部分 | **是（约省 70% Token）** |
-| 有状态 JS 多步沙盒（`exec -s 1 -e`）+ 可选安全受限模式 | 是 | 否 | 否 | **是** |
-| 侧边栏录制（Codegen）→ `browserpilot run` 回放 → 单文件 HTML Trace 查看器 | 否 | 否 | 否 | **完整闭环（原生内置）** |
-| 复杂真站适配（ProseMirror/Slate 富文本、虚拟滚动 `scrollUntil`、HTML5 拖拽、移动端 Touch 手势） | 部分 | 部分 | 部分 | **全部内置** |
-| 安全护栏（高危操作页内确认、敏感头/密码自动脱敏、网页 Prompt Injection 边界隔离） | 否 | 否 | 部分 | **全部内置** |
-| Direct CDP 直连模式 & macOS / Linux / Windows 三端 CI 验证 | 是 | 是 | 否 | **是** |
+| 能力 | Playwriter | Chrome DevTools MCP | Claude in Chrome | ChatGPT 浏览器扩展 | **BrowserPilot** |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| 复用真实已登录 Chrome（Cookie / 登录态 / 扩展） | 是 | 是 | 是 | 是 | **是** |
+| 零点击接管已打开的标签页 | 否 | 否 | 部分 | 是 | **是（真正零点击）** |
+| 零 Playwright / Puppeteer 运行时依赖 | 否 | 否 | 是 | 是 | **是（100% 纯 CDP）** |
+| 低 Token 分级 MCP（默认 20 核心工具 / `--full` 59 工具）+ Streamable HTTP | 部分 | 否 | 闭源 | 闭源 | **是（直降 64% Schema Token + HTTP）** |
+| 中英文自然语言模糊找元素（`browser_find`）+ 视口交互快照（`-i --viewport`） | 否 | 否 | 部分 | 否 | **是（跨 Shadow/OOPIF，省 98.7% Token）** |
+| 多标签页并发聚合阅读（`read_all`）+ Chrome 标签组自动按域名/主题整理 | 否 | 否 | 部分 | 是 | **是（并发抓取 + 侧边栏一键整理）** |
+| 原生交互步进 GIF 录制（`browser_gif`）+ Codegen 录制 → 回放 → HTML Trace | 否 | 否 | 仅 GIF | 否 | **是（无 ffmpeg 也能导出 GIF + 完整闭环）** |
+| 快捷工作流（`/shortcut`）+ 后台定时任务调度（`schedule`）+ 本地站点记忆（`memory`） | 否 | 否 | 快捷/定时 | 站点记忆 | **全部内置（100% 本地隐私存储）** |
+| 逐站点权限记忆（`允许本次` / `信任本站` / `拒绝`）+ 脱敏与 Prompt Injection 护栏 | 否 | 否 | 部分 | 是 | **全部内置（侧边栏可视化撤销）** |
+| 完整 DevTools（断点调试/热修/Mock/React Fiber/性能）+ 三端 CI 验证 | 部分 | 是 | 部分 | 否 | **是（macOS/Linux/Windows CI）** |
 
-### 实测效率与体积数据（可通过 `node scripts/agent-eval.mjs` 一键复现）
+### 实测效率、延迟与体积数据（可通过 `node scripts/agent-eval.mjs` 一键复现）
 
-| 指标 | 优化前 / 全量基线 | BrowserPilot 默认配置 | 降幅 |
+| 指标 | 优化前 / 全量基线 | BrowserPilot 默认优化版 | 改善 |
 | :--- | :---: | :---: | :---: |
-| MCP 启动加载的工具 Schema（`tools/list`） | 53 工具（`--full`）：`30.1 KB`（约 7,711 tokens） | 19 核心工具（含 `browser_exec`）：`11.9 KB`（约 3,038 tokens） | **-60.6% Token** |
+| MCP 启动加载的工具 Schema（`tools/list`） | 59 工具（`--full`）：`35.9 KB`（约 9,194 tokens） | 20 核心工具（含 `browser_find` + `browser_exec`）：`12.6 KB`（约 3,231 tokens） | **-64.9% Token** |
+| 核心交互延迟（真实 Chromium 实测） | `click`：`73.6ms`、`fill`：`40.5ms` | 单 RPC 融合 2-rAF 可点击性检查：`click`：`54.1ms`、`fill`：`28.5ms` | **提速 26.5% / 29.6%** |
 | 11,000+ DOM 节点企业级大表快照 | 全量 AXTree：`20,517` tokens | `snapshot -i --viewport`：`257` tokens（`scope` 仅 `53` tokens） | **-98.7% Token** |
 | 真实公网站点实测（`GitHub` / `Wikipedia` / `MDN`） | 全量：`10.8k` / `22.4k` / `6.0k` tokens | `snapshot -i --viewport`：`1.4k` / `1.7k` / `1.3k` tokens | **实测省 78%–92% Token** |
 | 点击/填表后的状态确认轮次 | `click` + 单独 `snapshot`（2 轮对话） | `click --diff` / `returnDiff: true`（单轮返回状态+控件变化） | **-50% 往返轮次** |
-| npm 安装包解压体积（`browserpilot-cdp`） | `3.2 MB` | `~930 KB`（ESM 拆包 + 完整 `.d.ts` TypeScript SDK） | **-71% 体积** |
+| npm 安装包解压体积（`browserpilot-cdp`） | `3.2 MB` | `~950 KB`（ESM 拆包 + 完整 `.d.ts` TypeScript SDK） | **-70% 体积** |
 
 ---
 
@@ -95,7 +96,7 @@ browserpilot setup
   ```
   或将 `skills/browserpilot/SKILL.md`（或 `browserpilot skill` 的输出）放到指定项目的 `.claude/skills/browserpilot/`、`.agents/skills/browserpilot/` 目录即可。
 
-- **方式 B — MCP Server stdio 模式（默认 19 个低 Token 核心工具 + `browser_exec`；加 `"--full"` 展开全部 53 工具，或 `"--caps=devtools,media"` 按需启用分组）：**
+- **方式 B — MCP Server stdio 模式（默认 20 个低 Token 核心工具含 `browser_find` + `browser_exec`；加 `"--full"` 展开全部 59 工具，或 `"--caps=devtools,media"` 按需启用分组）：**
   ```json
   {
     "mcpServers": {

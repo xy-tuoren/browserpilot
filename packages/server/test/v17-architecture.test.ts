@@ -220,10 +220,11 @@ describe('v1.7 Architecture, Schema Validation, Lifecycle GC, Windows Host & Typ
     const customCaps = resolveMcpToolDefinitions({ capabilities: 'devtools,media' })
 
     expect(coreTools.length).toBe(CORE_MCP_TOOL_NAMES.size)
-    expect(coreTools.length).toBe(19)
-    expect(fullTools.length).toBe(53)
+    expect(coreTools.length).toBe(20)
+    expect(fullTools.length).toBe(59)
     expect(customCaps.some((t) => t.name === 'browser_debugger')).toBe(true)
     expect(customCaps.some((t) => t.name === 'browser_trace')).toBe(true)
+    expect(customCaps.some((t) => t.name === 'browser_gif')).toBe(true)
     expect(customCaps.some((t) => t.name === 'browser_cookies')).toBe(false)
 
     const coreBytes = Buffer.byteLength(JSON.stringify(coreTools), 'utf8')
@@ -263,7 +264,7 @@ describe('v1.7 Architecture, Schema Validation, Lifecycle GC, Windows Host & Typ
       }
       expect(health.ok).toBe(true)
       expect(health.transport).toBe('streamable-http')
-      expect(health.tools).toBe(19)
+      expect(health.tools).toBe(20)
 
       // Unauthorized POST /mcp must be rejected with 401
       const unauth = await fetch(httpMcp.url, {
@@ -338,9 +339,9 @@ describe('v1.7 Architecture, Schema Validation, Lifecycle GC, Windows Host & Typ
     ])
     expect(verOut).toContain('packages/server/package.json')
 
-    // 2. Single-source skill doc includes all 53 tools + codegen + trace + run
-    expect(TOOL_DEFINITIONS.length).toBe(53)
-    expect(BROWSERPILOT_SKILL_DOC).toContain('53 MCP tools')
+    // 2. Single-source skill doc includes all 59 tools + codegen + trace + run + find + gif
+    expect(TOOL_DEFINITIONS.length).toBe(59)
+    expect(BROWSERPILOT_SKILL_DOC).toContain('59 MCP tools')
     expect(BROWSERPILOT_SKILL_DOC).toContain('browserpilot codegen')
     expect(BROWSERPILOT_SKILL_DOC).toContain('browserpilot run')
     expect(BROWSERPILOT_SKILL_DOC).toContain('browserpilot trace')

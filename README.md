@@ -14,28 +14,29 @@
 
 ## Why BrowserPilot?
 
-| Capability | Playwriter | Chrome DevTools MCP (`--autoConnect`) | Claude in Chrome | **BrowserPilot** |
-| :--- | :---: | :---: | :---: | :---: |
-| Uses your real logged-in Chrome (cookies, logins, extensions) | Yes | Yes | Yes | **Yes** |
-| Zero clicks to attach to already-open tabs | No (click icon per tab) | No ("Allow" popup per connection) | Partial | **Yes (Zero-Click)** |
-| Zero Playwright / Puppeteer runtime dependency | No | No (Puppeteer) | Yes | **Yes (100% Pure CDP)** |
-| Low-Token Tiered MCP (`core` 19 tools vs `--full` 53 tools) + Streamable HTTP | Partial (1-tool execute) | No (all tools upfront) | No | **Yes (-60.6% schema tokens + HTTP)** |
-| Interactive-Only Snapshot (`snapshot -i`) & Single-Turn Action Diff (`returnDiff`) | No | No | Partial | **Yes (~70% fewer tokens)** |
-| Stateful JS Sandbox (`session new` / `exec -s 1 -e`) + Optional Restricted Mode | Yes | No | No | **Yes** |
-| Companion Side Panel + Live Codegen + `browserpilot run` Replay + HTML Trace Viewer | Partial | No | Partial | **Yes (Full Record → Replay → Trace loop)** |
-| Real-World SPA Hardening (ProseMirror/Slate Rich Text, Virtual-Scroll `scrollUntil`, HTML5 DnD, Mobile Touch) | Partial | Partial | Partial | **Yes (All Built-in)** |
-| Built-in Security Guardrails (High-Risk Action Approval, Secret Redaction, Untrusted Content Boundary) | No | No | Partial | **Yes** |
-| Direct CDP Mode (`--remote-debugging-port` for CI/Headless) & Windows/macOS/Linux CI | Yes | Yes | No | **Yes** |
+| Capability | Playwriter | Chrome DevTools MCP | Claude in Chrome | ChatGPT Browser Ext | **BrowserPilot** |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| Uses your real logged-in Chrome (cookies, logins, extensions) | Yes | Yes | Yes | Yes | **Yes** |
+| Zero clicks to attach to already-open tabs | No | No | Partial | Yes | **Yes (Zero-Click)** |
+| Zero Playwright / Puppeteer runtime dependency | No | No | Yes | Yes | **Yes (100% Pure CDP)** |
+| Low-Token Tiered MCP (`core` 20 tools vs `--full` 59 tools) + Streamable HTTP | Partial | No | Closed | Closed | **Yes (-64% schema tokens + HTTP)** |
+| Natural-Language Fuzzy Find (`browser_find`) + Interactive/Viewport Snapshot (`-i --viewport`) | No | No | Partial | No | **Yes (EN/ZH + Shadow/OOPIF + -98.7% tokens)** |
+| Multi-Tab Parallel Context Synthesis & Auto Tab Group Organization | No | No | Partial | Yes | **Yes (`read_all` + `organize`)** |
+| Native Animated GIF Creator (`browser_gif`) + Live Codegen + Replay + HTML Trace | No | No | GIF only | No | **Yes (Zero-Dep GIF + Full Loop)** |
+| Saved `/shortcut` Workflows, Daemon Recurring Scheduler & Local-First Site Memory | No | No | Shortcuts/Sched | Memories | **Yes (All 3, 100% Local)** |
+| Granular Per-Site Trust Approval (`Allow Once` / `Trust This Site` / `Deny`) + Guardrails | No | No | Partial | Yes | **Yes (Closed-Shadow UI + Side Panel)** |
+| Full DevTools (JS Debugger, Live Edit, Network Mock, React Fiber, Perf) + 3-OS CI | Partial | Yes | Partial | No | **Yes (macOS/Linux/Windows CI)** |
 
-### Measured Context & Package Efficiency (Reproducible via `node scripts/agent-eval.mjs`)
+### Measured Context, Latency & Package Efficiency (Reproducible via `node scripts/agent-eval.mjs`)
 
 | Metric | Baseline | BrowserPilot Optimized | Delta |
 | :--- | :---: | :---: | :---: |
-| MCP upfront tool schema payload (`tools/list`) | 53 tools (`--full`): `30.1 KB` (~7,711 tokens) | 19-tool `core` default (+ `browser_exec`): `11.9 KB` (~3,038 tokens) | **-60.6% tokens** |
+| MCP upfront tool schema payload (`tools/list`) | 59 tools (`--full`): `35.9 KB` (~9,194 tokens) | 20-tool `core` default (+ `browser_find` + `browser_exec`): `12.6 KB` (~3,231 tokens) | **-64.9% tokens** |
+| Hot-path interaction latency (real Chromium) | `click`: `73.6ms`, `fill`: `40.5ms` | Fused single-RPC 2-rAF actionability: `click`: `54.1ms`, `fill`: `28.5ms` | **-26.5% / -29.6%** |
 | 11,000-node enterprise admin table snapshot | Full AXTree: `20,517` tokens | `snapshot -i --viewport`: `257` tokens (`scope`: `53` tokens) | **-98.7% tokens** |
 | Real public pages (`GitHub` / `Wikipedia` / `MDN`) | Full AXTree: `10.8k` / `22.4k` / `6.0k` tokens | `snapshot -i --viewport`: `1.4k` / `1.7k` / `1.3k` tokens | **-78% to -92% tokens** |
 | Post-action page observation round-trips | `click` + separate `snapshot` (2 LLM turns) | `click --diff` / `returnDiff: true` (1 LLM turn, captures status + UI diff) | **-50% turns** |
-| Published npm tarball (`browserpilot-cdp`) | `3.2 MB` unpacked | `~930 KB` unpacked (ESM code-split + full `.d.ts` SDK) | **-71% size** |
+| Published npm tarball (`browserpilot-cdp`) | `3.2 MB` unpacked | `~950 KB` unpacked (ESM code-split + full `.d.ts` SDK) | **-70% size** |
 
 ---
 
@@ -94,7 +95,7 @@ browserpilot setup
   ```
   Or copy `skills/browserpilot/SKILL.md` (or `browserpilot skill`) into a project's `.claude/skills/browserpilot/` or `.agents/skills/browserpilot/`.
 
-- **Option B — MCP Server over stdio (Default 19-tool low-token `core` profile + `browser_exec`; add `"--full"` for all 53 tools or `"--caps=devtools,media"` for specific groups):**
+- **Option B — MCP Server over stdio (Default 20-tool low-token `core` profile + `browser_find` + `browser_exec`; add `"--full"` for all 59 tools or `"--caps=devtools,media"` for specific groups):**
   ```json
   {
     "mcpServers": {

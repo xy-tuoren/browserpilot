@@ -218,6 +218,134 @@ export class SessionManager {
     return await this.transport.listTabs()
   }
 
+  /**
+   * Parallel multi-tab context synthesis: reads title, URL, headings, and compact content
+   * (summary, Readability Markdown, or interactive viewport snapshot) across multiple open tabs
+   * concurrently in a single call.
+   */
+  async readTabsContext(options: {
+    tabIds?: number[]
+    tabGroup?: string
+    urlContains?: string
+    mode?: 'summary' | 'markdown' | 'snapshot'
+    maxTabs?: number
+    maxCharsPerTab?: number
+  } = {}): Promise<{
+    tabs: Array<{
+      tabId: number
+      title: string
+      url: string
+      active: boolean
+      groupTitle?: string
+      content: string
+      error?: string
+    }>
+    formatted: string
+  }> {
+    const mode = options.mode ?? 'summary'
+    const maxTabs = Math.max(1, Math.min(20, options.maxTabs ?? 8))
+    const maxCharsPerTab = Math.max(300, Math.min(20_000, options.maxCharsPerTab ?? (mode === 'summary' ? 1800 : 3500)))
+    const allTabs = await this.listTabs()
+    const explicitSet = options.tabIds?.length ? new Set(options.tabIds) : null
+    const groupNeedle = options.tabGroup?.trim().toLowerCase()
+    const urlNeedle = options.urlContains?.trim().toLowerCase()
+
+    const selected = allTabs
+      .filter((t) => {
+        if (isRestrictedUrl(t.url)) return false
+        if (explicitSet && !explicitSet.has(t.tabId)) return false
+        if (groupNeedle && (t.groupTitle || '').toLowerCase() !== groupNeedle) return false
+        if (
+          urlNeedle &&
+          !t.url.toLowerCase().includes(urlNeedle) &&
+          !t.title.toLowerCase().includes(urlNeedle)
+        ) {
+          return false
+        }
+        return true
+      })
+      .slice(0, maxTabs)
+
+    type TabContextItem = {
+      tabId: number
+      title: string
+      url: string
+      active: boolean
+      groupTitle?: string
+      content: string
+      error?: string
+    }
+
+    const results: TabContextItem[] = await Promise.all(
+      selected.map(async (info): Promise<TabContextItem> => {
+        try {
+          const tab = await this.getOrAttachTab(info.tabId)
+          let content = ''
+          if (mode === 'markdown') {
+            content = await tab.extractor.getPageMarkdown(tab.session, { showDiffSinceLastCall: false })
+          } else if (mode === 'snapshot') {
+            const snap = await tab.snapshots.capture(tab.session, {
+              interactiveOnly: true,
+              viewportOnly: true,
+              showDiffSinceLastCall: false,
+              maxChars: maxCharsPerTab,
+            })
+            content = snap.text
+          } else {
+            const summary = await tab.page.evaluate<{
+              title: string
+              url: string
+              headings: string[]
+              snippet: string
+            }>(`(() => {
+              const headings = Array.from(document.querySelectorAll('h1, h2, h3'))
+                .map((h) => (h.textContent || '').replace(/\\s+/g, ' ').trim())
+                .filter(Boolean)
+                .slice(0, 8);
+              const main = document.querySelector('main, article, [role="main"]') || document.body;
+              const snippet = (main?.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, ${maxCharsPerTab});
+              return { title: document.title, url: location.href, headings, snippet };
+            })()`)
+            const parts: string[] = []
+            if (summary.headings?.length) parts.push(`Headings: ${summary.headings.join(' | ')}`)
+            if (summary.snippet) parts.push(summary.snippet)
+            content = parts.join('\n')
+          }
+          if (content.length > maxCharsPerTab) {
+            content = `${content.slice(0, maxCharsPerTab - 1)}…`
+          }
+          return {
+            tabId: info.tabId,
+            title: info.title,
+            url: info.url,
+            active: info.active,
+            ...(info.groupTitle ? { groupTitle: info.groupTitle } : {}),
+            content,
+          }
+        } catch (err) {
+          return {
+            tabId: info.tabId,
+            title: info.title,
+            url: info.url,
+            active: info.active,
+            ...(info.groupTitle ? { groupTitle: info.groupTitle } : {}),
+            content: '',
+            error: err instanceof Error ? err.message : String(err),
+          }
+        }
+      }),
+    )
+
+    const formatted = results
+      .map((r) => {
+        const hdr = `### Tab [${r.tabId}]${r.active ? ' *' : ''}${r.groupTitle ? ` [${r.groupTitle}]` : ''} ${r.title || '(untitled)'}\nURL: ${r.url}`
+        return r.error ? `${hdr}\nError: ${r.error}` : `${hdr}\n${r.content || '(empty page)'}`
+      })
+      .join('\n\n')
+
+    return { tabs: results, formatted: formatted || '(no matching open tabs)' }
+  }
+
   async openTab(options?: {
     url?: string
     active?: boolean
@@ -509,6 +637,26 @@ export class SessionManager {
         },
         current: () => getTab(),
         close: (tabId?: number) => this.closeTab(tabId ?? sess.activeTabId ?? -1),
+        readAll: (opts?: {
+          tabIds?: number[]
+          tabGroup?: string
+          urlContains?: string
+          mode?: 'summary' | 'markdown' | 'snapshot'
+          maxTabs?: number
+          maxCharsPerTab?: number
+        }) => this.readTabsContext(opts),
+        group: (opts: { tabIds: number[]; title?: string; color?: TabGroupColor; collapsed?: boolean }) => {
+          if (!this.transport.groupTabs) throw new Error('Tab grouping requires the Chrome extension transport')
+          return this.transport.groupTabs(opts)
+        },
+        ungroup: (tabIds: number[]) => {
+          if (!this.transport.ungroupTabs) throw new Error('Tab ungrouping requires the Chrome extension transport')
+          return this.transport.ungroupTabs(tabIds)
+        },
+        organize: (opts?: { tabIds?: number[]; strategy?: 'domain' | 'topic'; minGroupSize?: number; collapseOthers?: boolean }) => {
+          if (!this.transport.organizeTabs) throw new Error('Tab organization requires the Chrome extension transport')
+          return this.transport.organizeTabs(opts)
+        },
       },
 
       // High-level helpers mirroring & expanding Playwriter's sandbox API
@@ -525,11 +673,35 @@ export class SessionManager {
         search?: string | RegExp
         showDiffSinceLastCall?: boolean
         interactiveOnly?: boolean
+        viewportOnly?: boolean
+        maxChars?: number
         scope?: string
         frame?: string
       }) => {
         const t = await getTab(opts?.tab)
         return (await t.snapshots.capture(t.session, opts)).text
+      },
+      find: async (query: string, opts?: { tab?: BrowserPilotTab; limit?: number; viewportOnly?: boolean; includeIframes?: boolean }) => {
+        const t = await getTab(opts?.tab)
+        return await t.page.find(query, opts)
+      },
+      gif: {
+        start: async (opts?: { tab?: BrowserPilotTab; clearExisting?: boolean; maxFrames?: number; captureInitial?: boolean }) =>
+          (await getTab(opts?.tab)).gif.start(opts),
+        frame: async (label?: string, opts?: { tab?: BrowserPilotTab; point?: { x: number; y: number } }) =>
+          (await getTab(opts?.tab)).gif.captureFrame(label, opts?.point),
+        stop: async (tab?: BrowserPilotTab) => (await getTab(tab)).gif.stop(),
+        clear: async (tab?: BrowserPilotTab) => (await getTab(tab)).gif.clear(),
+        export: async (opts?: {
+          tab?: BrowserPilotTab
+          outputPath?: string
+          width?: number
+          delayMs?: number
+          showClickIndicators?: boolean
+          showActionLabels?: boolean
+          showProgressBar?: boolean
+          loop?: number
+        }) => (await getTab(opts?.tab)).gif.export(opts),
       },
       listFrames: async (opts?: { tab?: BrowserPilotTab }) => {
         const t = await getTab(opts?.tab)

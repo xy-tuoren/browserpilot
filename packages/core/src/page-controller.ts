@@ -3,6 +3,7 @@ import type { TabCDPSession } from './cdp-client.js'
 import { Locator, STABLE_LOCATOR_FUNCTION } from './locator.js'
 import { resolveActionableForClick, resolveElement } from './page/actionability.js'
 import { capturePageScreenshot, exportPageToPDF } from './page/capture.js'
+import { findElementsByQuery, type FindElementMatch, type FindElementsOptions } from './page/find.js'
 import {
   clearWebStorage,
   deletePageCookies,
@@ -61,7 +62,7 @@ import type {
 import type { SnapshotEngine } from './snapshot.js'
 import { waitForPageLoad, waitForSelector, type WaitSelectorState } from './wait.js'
 
-export type { ActionApprovalResult }
+export type { ActionApprovalResult, FindElementMatch, FindElementsOptions }
 export type {
   ClickOptions,
   DragOptions,
@@ -97,6 +98,7 @@ export class PageController {
   private readonly input: PageInputDriver
   private readonly initScripts: PageInitScriptRegistry
   private traceHook?: PageTraceHook
+  private gifCaptureHook?: { isRecording: () => boolean; captureFrame: (label: string, point?: { x: number; y: number }) => Promise<unknown> }
   private traceDepth = 0
 
   constructor(session: TabCDPSession, snapshotEngine: SnapshotEngine) {
@@ -110,16 +112,38 @@ export class PageController {
     this.traceHook = hook
   }
 
+  setGifHook(
+    hook?: { isRecording: () => boolean; captureFrame: (label: string, point?: { x: number; y: number }) => Promise<unknown> },
+  ): void {
+    this.gifCaptureHook = hook
+  }
+
   private async runTraced<T>(
     input: PageActionTraceInput,
     fn: (markReady: (meta?: PageActionReadyMeta) => Promise<void>) => Promise<T>,
   ): Promise<T> {
-    if (this.traceDepth > 0 || !this.traceHook?.isActive()) {
+    const needTrace = this.traceDepth === 0 && Boolean(this.traceHook?.isActive())
+    const needGif = this.traceDepth === 0 && Boolean(this.gifCaptureHook?.isRecording())
+    if (!needTrace && !needGif) {
       return await fn(async () => {})
     }
     this.traceDepth++
+    let capturedPoint = input.point
+    const wrappedFn = async (traceMarkReady: (meta?: PageActionReadyMeta) => Promise<void>) => {
+      const res = await fn(async (meta) => {
+        if (meta?.point) capturedPoint = meta.point
+        await traceMarkReady(meta)
+      })
+      if (needGif) {
+        await this.gifCaptureHook?.captureFrame(input.title, capturedPoint).catch(() => {})
+      }
+      return res
+    }
     try {
-      return await this.traceHook.runStep(input, fn)
+      if (needTrace && this.traceHook) {
+        return await this.traceHook.runStep(input, wrappedFn)
+      }
+      return await wrappedFn(async () => {})
     } finally {
       this.traceDepth--
     }
@@ -276,6 +300,10 @@ export class PageController {
     return await resolveElement(this.actionabilityDeps, target, timeoutMs, options)
   }
 
+  async find(query: string, options: FindElementsOptions = {}): Promise<FindElementMatch[]> {
+    return await findElementsByQuery(this.actionabilityDeps, query, options)
+  }
+
   async readElementProperty<T = unknown>(target: string, functionDeclaration: string, timeoutMs = 8_000): Promise<T> {
     const el = await this.resolveElement(target, timeoutMs, { allowHidden: true })
     const res = await this.session.send<{ result?: { value?: T } }>(
@@ -325,15 +353,15 @@ export class PageController {
           x = el.center.x
           y = el.center.y
           await markReady({ box: el.box, point: el.center })
-          await this.session.transport
+          void this.session.transport
             .setControlBanner?.(this.tabId, { active: true, status: `Clicking ${targetOrCoords}`, mode: 'working' })
             .catch(() => {})
-          await this.session.transport.highlightElement?.(this.tabId, el.box, `click ${targetOrCoords}`).catch(() => {})
+          void this.session.transport.highlightElement?.(this.tabId, el.box, `click ${targetOrCoords}`).catch(() => {})
         } else {
           x = targetOrCoords.x
           y = targetOrCoords.y
           await markReady({ point: { x, y } })
-          await this.session.transport
+          void this.session.transport
             .setControlBanner?.(this.tabId, {
               active: true,
               status: `Clicking (${Math.round(x)}, ${Math.round(y)})`,
@@ -387,7 +415,7 @@ export class PageController {
           x = el.center.x
           y = el.center.y
           await markReady({ box: el.box, point: el.center })
-          await this.session.transport.highlightElement?.(this.tabId, el.box, `hover ${targetOrCoords}`).catch(() => {})
+          void this.session.transport.highlightElement?.(this.tabId, el.box, `hover ${targetOrCoords}`).catch(() => {})
         } else {
           x = targetOrCoords.x
           y = targetOrCoords.y

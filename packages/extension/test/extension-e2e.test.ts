@@ -411,14 +411,27 @@ describe('@browserpilot/extension real Chrome MV3 zero-click E2E', () => {
     await transport.rpc('extension.setConfig', {
       approvalMode: 'high-risk',
       profileLabel: 'Work',
-      domainRules: { blockedDomains: ['blocked.example.com'], allowedDomains: [] },
+      domainRules: { blockedDomains: ['blocked.example.com'], allowedDomains: [], trustedDomains: ['127.0.0.1'] },
     })
     const secState = (await transport.rpc('extension.getState')) as {
-      config: { approvalMode?: string; profileLabel?: string; domainRules: { blockedDomains: string[] } }
+      config: {
+        approvalMode?: string
+        profileLabel?: string
+        domainRules: { blockedDomains: string[]; trustedDomains?: string[] }
+      }
     }
     expect(secState.config.approvalMode).toBe('high-risk')
     expect(secState.config.profileLabel).toBe('Work')
     expect(secState.config.domainRules.blockedDomains).toContain('blocked.example.com')
+    expect(secState.config.domainRules.trustedDomains).toContain('127.0.0.1')
+
+    // 10b. Chrome Tab Group management: tabs.group / tabs.ungroup / tabs.organize by domain
+    const extraTab = (await transport.rpc('tabs.create', { url: `${baseUrl}/existing`, active: false })) as { tabId: number }
+    const orgRes = await transport.organizeTabs({ strategy: 'domain', minGroupSize: 2 })
+    expect(orgRes.groups.length).toBeGreaterThanOrEqual(1)
+    expect(orgRes.groups[0].title).toBe('Localhost')
+    await transport.ungroupTabs([existing!.tabId, extraTab.tabId])
+    await transport.closeTab(extraTab.tabId)
 
     // Open real Side Panel extension HTML page and verify Security tab switches approvalMode -> strict with ZERO console errors
     const spTab = (await transport.rpc('tabs.create', {
@@ -432,7 +445,7 @@ describe('@browserpilot/extension real Chrome MV3 zero-click E2E', () => {
     await transport.rpc('extension.setConfig', {
       approvalMode: 'off',
       profileLabel: '',
-      domainRules: { blockedDomains: [], allowedDomains: [] },
+      domainRules: { blockedDomains: [], allowedDomains: [], trustedDomains: [] },
     })
 
     // 11. Detaching a managed tab automatically ungroups it so Chrome doesn't leave Saved Tab Groups behind

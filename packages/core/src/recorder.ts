@@ -155,10 +155,28 @@ export class ScreenRecorder {
     const maxDurationMs = options.maxDurationMs ?? 15 * 60 * 1000
 
     const ext = path.extname(outputPath).toLowerCase()
-    const codecArgs =
-      ext === '.webm'
-        ? ['-c:v', 'libvpx', '-b:v', '1M']
-        : ['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-movflags', '+faststart']
+    const isGif = ext === '.gif'
+    const codecArgs = isGif
+      ? [
+          '-filter_complex',
+          `fps=${Math.min(15, frameRate)},scale=min(iw\\,${maxWidth}):-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=4`,
+          '-loop',
+          '0',
+        ]
+      : ext === '.webm'
+        ? ['-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2', '-c:v', 'libvpx', '-b:v', '1M']
+        : [
+            '-vf',
+            'pad=ceil(iw/2)*2:ceil(ih/2)*2',
+            '-c:v',
+            'libx264',
+            '-pix_fmt',
+            'yuv420p',
+            '-preset',
+            'veryfast',
+            '-movflags',
+            '+faststart',
+          ]
 
     const ffmpeg = spawn(
       'ffmpeg',
@@ -172,8 +190,6 @@ export class ScreenRecorder {
         String(frameRate),
         '-i',
         '-',
-        '-vf',
-        'pad=ceil(iw/2)*2:ceil(ih/2)*2',
         ...codecArgs,
         videoOnlyPath,
       ],
@@ -484,6 +500,9 @@ export async function createDemoVideo(options: {
   const output = path.resolve(options.outputPath ?? input.replace(ext, `.demo${ext}`))
   const speed = Math.max(1, options.speed ?? (options.actionTimestamps?.length ? 6 : 2))
 
+  const outExt = path.extname(output).toLowerCase()
+  const isOutGif = outExt === '.gif'
+
   if (options.actionTimestamps && options.actionTimestamps.length > 0) {
     const probedSec = await probeVideoDurationSec(input)
     const durationMs = options.durationMs ?? (probedSec ? Math.round(probedSec * 1000) : 0)
@@ -501,23 +520,43 @@ export async function createDemoVideo(options: {
         )
         concatInputs.push(`[v${idx}]`)
       })
-      filters.push(`${concatInputs.join('')}concat=n=${segments.length}:v=1:a=0[vout]`)
-
-      await runFfmpeg([
-        '-y',
-        '-i',
-        input,
-        '-filter_complex',
-        filters.join(';'),
-        '-map',
-        '[vout]',
-        '-c:v',
-        ext === '.webm' ? 'libvpx' : 'libx264',
-        ...(ext === '.webm' ? ['-b:v', '1M'] : ['-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-movflags', '+faststart']),
-        output,
-      ])
+      if (isOutGif) {
+        filters.push(
+          `${concatInputs.join('')}concat=n=${segments.length}:v=1:a=0,fps=12,scale=min(iw\\,960):-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=4[vout]`,
+        )
+        await runFfmpeg(['-y', '-i', input, '-filter_complex', filters.join(';'), '-map', '[vout]', '-loop', '0', output])
+      } else {
+        filters.push(`${concatInputs.join('')}concat=n=${segments.length}:v=1:a=0[vout]`)
+        await runFfmpeg([
+          '-y',
+          '-i',
+          input,
+          '-filter_complex',
+          filters.join(';'),
+          '-map',
+          '[vout]',
+          '-c:v',
+          outExt === '.webm' ? 'libvpx' : 'libx264',
+          ...(outExt === '.webm' ? ['-b:v', '1M'] : ['-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-movflags', '+faststart']),
+          output,
+        ])
+      }
       return output
     }
+  }
+
+  if (isOutGif) {
+    await runFfmpeg([
+      '-y',
+      '-i',
+      input,
+      '-filter_complex',
+      `setpts=${(1 / speed).toFixed(4)}*PTS,fps=12,scale=min(iw\\,960):-1:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=4`,
+      '-loop',
+      '0',
+      output,
+    ])
+    return output
   }
 
   await runFfmpeg(['-y', '-i', input, '-filter:v', `setpts=${(1 / speed).toFixed(4)}*PTS`, '-an', output])

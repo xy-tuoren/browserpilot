@@ -19,6 +19,7 @@ interface RawViewportRectResult {
   offsetX: number
   offsetY: number
   connected: boolean
+  needsScroll?: boolean
 }
 
 const READ_ELEMENT_VIEWPORT_RECT_FN = `function() {
@@ -48,6 +49,61 @@ const READ_ELEMENT_VIEWPORT_RECT_FN = `function() {
     } catch { break; }
   }
   return { x: r.left, y: r.top, width: r.width, height: r.height, offsetX: ox, offsetY: oy, connected: true };
+}`
+
+const CHECK_SCROLL_AND_READ_RECT_FN = `function() {
+  if (!this.isConnected) return { x: 0, y: 0, width: 0, height: 0, offsetX: 0, offsetY: 0, connected: false, needsScroll: false };
+  const doc = this.ownerDocument || document;
+  const win = doc.defaultView || window;
+  let r = this.getBoundingClientRect();
+  const tag = (this.tagName || '').toLowerCase();
+  const inputType = (this.type || '').toLowerCase();
+  if (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio') && (!r || r.width <= 2 || r.height <= 2)) {
+    const lbl = this.closest?.('label') || (this.id ? doc.querySelector('label[for="' + CSS.escape(this.id) + '"]') : null);
+    if (lbl) {
+      const lr = lbl.getBoundingClientRect();
+      if (lr && lr.width > 2 && lr.height > 2) r = lr;
+    }
+  }
+  let needsScroll = false;
+  if (!r || (r.width === 0 && r.height === 0)) {
+    needsScroll = true;
+  } else {
+    const vw = win.innerWidth || doc.documentElement.clientWidth || 1280;
+    const vh = win.innerHeight || doc.documentElement.clientHeight || 720;
+    if (r.top < 0 || r.left < 0 || r.bottom > vh || r.right > vw) {
+      needsScroll = true;
+    } else {
+      let cur = this.parentElement;
+      while (cur && cur !== doc.body && cur !== doc.documentElement) {
+        const st = win.getComputedStyle(cur);
+        const clipY = /(auto|scroll|hidden|clip)/.test(st.overflowY) && cur.scrollHeight > cur.clientHeight + 2;
+        const clipX = /(auto|scroll|hidden|clip)/.test(st.overflowX) && cur.scrollWidth > cur.clientWidth + 2;
+        if (clipY || clipX) {
+          const ar = cur.getBoundingClientRect();
+          if (clipY && (r.top < ar.top - 1 || r.bottom > ar.bottom + 1)) { needsScroll = true; break; }
+          if (clipX && (r.left < ar.left - 1 || r.right > ar.right + 1)) { needsScroll = true; break; }
+        }
+        cur = cur.parentElement;
+      }
+    }
+  }
+  if (!r || (r.width === 0 && r.height === 0)) {
+    return { x: 0, y: 0, width: 0, height: 0, offsetX: 0, offsetY: 0, connected: true, needsScroll };
+  }
+  let ox = 0, oy = 0;
+  let w = doc.defaultView;
+  while (w && w !== w.parent) {
+    try {
+      const fe = w.frameElement;
+      if (!fe) break;
+      const fr = fe.getBoundingClientRect();
+      ox += fr.left;
+      oy += fr.top;
+      w = w.parent;
+    } catch { break; }
+  }
+  return { x: r.left, y: r.top, width: r.width, height: r.height, offsetX: ox, offsetY: oy, connected: true, needsScroll };
 }`
 
 export async function scrollChildIframeIntoView(
@@ -251,46 +307,29 @@ export async function resolveElement(
 
       if (!objectId) return null
 
-      // Scroll into view ONLY when outside viewport or clipped by a scrollable ancestor
+      // Scroll into view ONLY when outside viewport or clipped by a scrollable ancestor.
+      // Fast path: combine scroll-check + viewport bounding-box read into a single CDP round-trip.
+      let rawRect: RawViewportRectResult | null = null
       if (!options.allowHidden) {
         if (sessionId) {
           await scrollChildIframeIntoView(deps, refTarget?.frameId, sessionId).catch(() => {})
         }
-        const needScrollRes = await deps.session
-          .send<{ result?: { value?: boolean } }>(
+        const combinedRes = await deps.session
+          .send<{ result?: { value?: RawViewportRectResult | null } }>(
             'Runtime.callFunctionOn',
             {
               objectId,
               returnByValue: true,
-              functionDeclaration: `function() {
-                if (!this.isConnected) return false;
-                const doc = this.ownerDocument || document;
-                const win = doc.defaultView || window;
-                const r = this.getBoundingClientRect();
-                if (!r || (r.width === 0 && r.height === 0)) return true;
-                const vw = win.innerWidth || doc.documentElement.clientWidth || 1280;
-                const vh = win.innerHeight || doc.documentElement.clientHeight || 720;
-                if (r.top < 0 || r.left < 0 || r.bottom > vh || r.right > vw) return true;
-                let cur = this.parentElement;
-                while (cur && cur !== doc.body && cur !== doc.documentElement) {
-                  const st = win.getComputedStyle(cur);
-                  const clipY = /(auto|scroll|hidden|clip)/.test(st.overflowY) && cur.scrollHeight > cur.clientHeight + 2;
-                  const clipX = /(auto|scroll|hidden|clip)/.test(st.overflowX) && cur.scrollWidth > cur.clientWidth + 2;
-                  if (clipY || clipX) {
-                    const ar = cur.getBoundingClientRect();
-                    if (clipY && (r.top < ar.top - 1 || r.bottom > ar.bottom + 1)) return true;
-                    if (clipX && (r.left < ar.left - 1 || r.right > ar.right + 1)) return true;
-                  }
-                  cur = cur.parentElement;
-                }
-                return false;
-              }`,
+              functionDeclaration: CHECK_SCROLL_AND_READ_RECT_FN,
             },
             { sessionId },
           )
           .catch(() => null)
 
-        if (needScrollRes?.result?.value !== false) {
+        rawRect = combinedRes?.result?.value ?? null
+        if (rawRect && !rawRect.connected) return null
+
+        if (!rawRect || rawRect.needsScroll !== false) {
           if (backendNodeId) {
             await deps.session
               .send('DOM.scrollIntoViewIfNeeded', { backendNodeId }, { sessionId })
@@ -310,23 +349,34 @@ export async function resolveElement(
               { sessionId },
             )
             .catch(() => {})
+          const rectRes = await deps.session
+            .send<{ result?: { value?: RawViewportRectResult | null } }>(
+              'Runtime.callFunctionOn',
+              {
+                objectId,
+                returnByValue: true,
+                functionDeclaration: READ_ELEMENT_VIEWPORT_RECT_FN,
+              },
+              { sessionId },
+            )
+            .catch(() => null)
+          rawRect = rectRes?.result?.value ?? null
         }
+      } else {
+        const rectRes = await deps.session
+          .send<{ result?: { value?: RawViewportRectResult | null } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId,
+              returnByValue: true,
+              functionDeclaration: READ_ELEMENT_VIEWPORT_RECT_FN,
+            },
+            { sessionId },
+          )
+          .catch(() => null)
+        rawRect = rectRes?.result?.value ?? null
       }
 
-      // Fresh viewport bounding box + live same-origin frameOffset + sr-only label fallback
-      const rectRes = await deps.session
-        .send<{ result?: { value?: RawViewportRectResult | null } }>(
-          'Runtime.callFunctionOn',
-          {
-            objectId,
-            returnByValue: true,
-            functionDeclaration: READ_ELEMENT_VIEWPORT_RECT_FN,
-          },
-          { sessionId },
-        )
-        .catch(() => null)
-
-      const rawRect = rectRes?.result?.value ?? null
       if (rawRect && !rawRect.connected) return null
 
       let box: BoundingBox | null =
@@ -429,35 +479,163 @@ export async function readElementViewportBox(
   }
 }
 
-async function waitAnimationFrame(session: TabCDPSession, el: ResolvedElement): Promise<void> {
-  await session
-    .send(
-      'Runtime.callFunctionOn',
-      {
-        objectId: el.objectId,
-        awaitPromise: true,
-        returnByValue: true,
-        functionDeclaration: `function() {
-          const win = (this.ownerDocument && this.ownerDocument.defaultView) || window;
-          return new Promise((resolve) => {
-            let done = false;
-            const finish = () => {
-              if (!done) {
-                done = true;
-                resolve(true);
-              }
-            };
-            if (typeof win.requestAnimationFrame === 'function') {
-              win.requestAnimationFrame(() => finish());
-            }
-            setTimeout(finish, 150);
-          });
-        }`,
-      },
-      { sessionId: el.sessionId },
-    )
-    .catch(() => sleep(30))
+interface FusedActionableCheckResult {
+  ok: boolean
+  reason?: string
+  occluder?: string
+  underOwnPill?: boolean
+  box?: { x: number; y: number; width: number; height: number; offsetX: number; offsetY: number }
 }
+
+const FUSED_CLICK_ACTIONABLE_FN = `async function(isCrossOrigin) {
+  const doc = this.ownerDocument || document;
+  const win = doc.defaultView || window;
+  const readBox = () => {
+    if (!this.isConnected) return null;
+    let r = this.getBoundingClientRect();
+    const tag = (this.tagName || '').toLowerCase();
+    const inputType = (this.type || '').toLowerCase();
+    if (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio') && (!r || r.width <= 2 || r.height <= 2)) {
+      const lbl = this.closest?.('label') || (this.id ? doc.querySelector('label[for="' + CSS.escape(this.id) + '"]') : null);
+      if (lbl) {
+        const lr = lbl.getBoundingClientRect();
+        if (lr && lr.width > 2 && lr.height > 2) r = lr;
+      }
+    }
+    if (!r || (r.width === 0 && r.height === 0)) return null;
+    let ox = 0, oy = 0;
+    let w = win;
+    while (w && w !== w.parent) {
+      try {
+        const fe = w.frameElement;
+        if (!fe) break;
+        const fr = fe.getBoundingClientRect();
+        ox += fr.left;
+        oy += fr.top;
+        w = w.parent;
+      } catch { break; }
+    }
+    return { x: r.left, y: r.top, width: r.width, height: r.height, offsetX: ox, offsetY: oy };
+  };
+  const nextFrame = () => new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    if (typeof win.requestAnimationFrame === 'function') {
+      win.requestAnimationFrame(finish);
+    }
+    setTimeout(finish, 120);
+  });
+
+  // Playwright-style 2-rAF bounding-box stability wait executed completely in-page (1 CDP RPC instead of 5+)
+  let prev = readBox();
+  if (!prev) return { ok: false, reason: 'detached' };
+  let stableFrames = 0;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await nextFrame();
+    const next = readBox();
+    if (!next) return { ok: false, reason: 'detached' };
+    const moved =
+      Math.abs(next.x - prev.x) > 1.5 ||
+      Math.abs(next.y - prev.y) > 1.5 ||
+      Math.abs(next.width - prev.width) > 1.5 ||
+      Math.abs(next.height - prev.height) > 1.5;
+    prev = next;
+    if (!moved) {
+      stableFrames++;
+      if (stableFrames >= 2) break;
+    } else {
+      stableFrames = 0;
+    }
+  }
+  if (stableFrames < 2) {
+    return { ok: false, reason: 'animating', box: prev };
+  }
+  if (!this.isConnected) return { ok: false, reason: 'detached' };
+  if (this.disabled === true || this.getAttribute?.('aria-disabled') === 'true') {
+    return { ok: false, reason: 'disabled', box: prev };
+  }
+  if (isCrossOrigin) {
+    return { ok: true, box: prev, underOwnPill: false };
+  }
+  const style = win.getComputedStyle(this);
+  if (style.pointerEvents === 'none') {
+    return { ok: false, reason: 'pointer-events-none', box: prev };
+  }
+
+  const deepHit = (root, x, y) => {
+    let hit = root.elementFromPoint(x, y);
+    while (hit && hit.shadowRoot) {
+      const inner = hit.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === hit) break;
+      hit = inner;
+    }
+    return hit;
+  };
+
+  let underOwnPill = false;
+  for (let retry = 0; retry < 2; retry++) {
+    const cx = prev.x + prev.width / 2;
+    const cy = prev.y + prev.height / 2;
+    let hit = deepHit(doc, cx, cy);
+    if (hit && hit.id === '__browserpilot_ui_host') {
+      underOwnPill = true;
+      const prevDisplay = hit.style.display;
+      hit.style.display = 'none';
+      hit = deepHit(doc, cx, cy);
+      const uiHost = doc.getElementById('__browserpilot_ui_host');
+      if (uiHost) uiHost.style.display = prevDisplay;
+    }
+    if (!hit || hit === this || this.contains(hit) || hit.contains(this)) {
+      return { ok: true, box: prev, underOwnPill };
+    }
+    if (this.id && hit.closest && hit.closest('label[for="' + CSS.escape(this.id) + '"]')) {
+      return { ok: true, box: prev, underOwnPill };
+    }
+    const ownLabel = this.closest?.('label');
+    if (ownLabel && (hit === ownLabel || ownLabel.contains(hit))) {
+      return { ok: true, box: prev, underOwnPill };
+    }
+    let cur = hit;
+    let isFixedOrSticky = false;
+    let occluderBottom = 0;
+    while (cur && cur !== doc.body && cur !== doc.documentElement) {
+      const pos = win.getComputedStyle(cur).position;
+      if (pos === 'fixed' || pos === 'sticky') {
+        isFixedOrSticky = true;
+        occluderBottom = cur.getBoundingClientRect().bottom;
+        break;
+      }
+      cur = cur.parentElement;
+    }
+    if (isFixedOrSticky && retry === 0) {
+      this.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+      const r = this.getBoundingClientRect();
+      if (occluderBottom > 0 && r.top < occluderBottom + 8) {
+        win.scrollBy(0, -(occluderBottom - r.top + 24));
+      }
+      await nextFrame();
+      const refreshed = readBox();
+      if (refreshed) {
+        prev = refreshed;
+        continue;
+      }
+    }
+    const tag = hit.tagName?.toLowerCase() || 'element';
+    const cls = typeof hit.className === 'string' && hit.className.trim()
+      ? '.' + hit.className.trim().split(/\\s+/).slice(0, 2).join('.')
+      : '';
+    const id = hit.id ? '#' + hit.id : '';
+    const txt = (hit.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 40);
+    return {
+      ok: false,
+      reason: 'occluded',
+      occluder: '<' + tag + id + cls + '>' + (txt ? ' ("' + txt + '")' : ''),
+      box: prev,
+      underOwnPill,
+    };
+  }
+  return { ok: true, box: prev, underOwnPill };
+}`
 
 async function checkClickActionableOnce(
   session: TabCDPSession,
@@ -467,42 +645,51 @@ async function checkClickActionableOnce(
   | { ok: true; el: ResolvedElement; underOwnPill: boolean }
   | { ok: false; retryable: boolean; reason: string; error: Error }
 > {
-  let current = el
-  let underOwnPill = false
+  const res = await session
+    .send<{ result?: { value?: FusedActionableCheckResult } }>(
+      'Runtime.callFunctionOn',
+      {
+        objectId: el.objectId,
+        arguments: [{ value: Boolean(el.sessionId) }],
+        awaitPromise: true,
+        returnByValue: true,
+        functionDeclaration: FUSED_CLICK_ACTIONABLE_FN,
+      },
+      { sessionId: el.sessionId },
+    )
+    .catch(() => null)
 
-  // Playwright-style stability check: require 2 consecutive browser animation frames
-  // with unchanged bounding box so CPU-loaded machines never falsely declare a sliding
-  // element stable before the renderer actually ticks an animation frame.
-  let stableFrames = 0
-  for (let attempt = 0; attempt < 8; attempt++) {
-    await waitAnimationFrame(session, current)
-    const nextBox = await readElementViewportBox(session, current)
-    if (!nextBox) {
-      return {
-        ok: false,
-        retryable: true,
-        reason: 'detached',
-        error: new Error(`Element "${targetLabel}" detached or hidden during actionability check.`),
-      }
+  const val = res?.result?.value
+  if (!val) {
+    return {
+      ok: false,
+      retryable: true,
+      reason: 'detached',
+      error: new Error(`Element "${targetLabel}" became stale during actionability check.`),
     }
-    const moved =
-      Math.abs(nextBox.x - current.box.x) > 1.5 ||
-      Math.abs(nextBox.y - current.box.y) > 1.5 ||
-      Math.abs(nextBox.width - current.box.width) > 1.5 ||
-      Math.abs(nextBox.height - current.box.height) > 1.5
+  }
+
+  let current = el
+  if (val.box) {
+    const ox = el.sessionId ? (el.frameOffset?.x ?? 0) : val.box.offsetX || (el.frameOffset?.x ?? 0)
+    const oy = el.sessionId ? (el.frameOffset?.y ?? 0) : val.box.offsetY || (el.frameOffset?.y ?? 0)
+    const nextBox: BoundingBox = {
+      x: val.box.x + ox,
+      y: val.box.y + oy,
+      width: val.box.width,
+      height: val.box.height,
+    }
     current = {
-      ...current,
+      ...el,
       box: nextBox,
       center: { x: nextBox.x + nextBox.width / 2, y: nextBox.y + nextBox.height / 2 },
     }
-    if (!moved) {
-      stableFrames++
-      if (stableFrames >= 2) break
-    } else {
-      stableFrames = 0
-    }
   }
-  if (stableFrames < 2) {
+
+  if (val.ok) {
+    return { ok: true, el: current, underOwnPill: Boolean(val.underOwnPill) }
+  }
+  if (val.reason === 'animating') {
     return {
       ok: false,
       retryable: true,
@@ -510,204 +697,38 @@ async function checkClickActionableOnce(
       error: new Error(`Element "${targetLabel}" kept moving / animating and did not stabilize.`),
     }
   }
-
-  if (current.sessionId) {
-    const childCheck = await session
-      .send<{ result?: { value?: { ok: boolean; reason?: string } } }>(
-        'Runtime.callFunctionOn',
-        {
-          objectId: current.objectId,
-          returnByValue: true,
-          functionDeclaration: `function() {
-            if (!this.isConnected) return { ok: false, reason: 'detached' };
-            if (this.disabled === true || this.getAttribute?.('aria-disabled') === 'true') return { ok: false, reason: 'disabled' };
-            return { ok: true };
-          }`,
-        },
-        { sessionId: current.sessionId },
-      )
-      .catch(() => null)
-    const cval = childCheck?.result?.value
-    if (!cval) {
-      return {
-        ok: false,
-        retryable: true,
-        reason: 'detached',
-        error: new Error(`Element "${targetLabel}" detached inside cross-origin frame.`),
-      }
-    }
-    if (!cval.ok) {
-      return {
-        ok: false,
-        retryable: true,
-        reason: cval.reason ?? 'disabled',
-        error:
-          cval.reason === 'disabled'
-            ? new Error(`Element "${targetLabel}" is disabled and cannot be clicked.`)
-            : new Error(`Element "${targetLabel}" detached inside cross-origin frame.`),
-      }
-    }
-    return { ok: true, el: current, underOwnPill: false }
-  }
-
-  const offsetX = current.frameOffset?.x ?? 0
-  const offsetY = current.frameOffset?.y ?? 0
-  for (let retry = 0; retry < 2; retry++) {
-    const check = await session
-      .send<{
-        result?: {
-          value?: {
-            ok: boolean
-            reason?: string
-            occluder?: string
-            isFixedOrSticky?: boolean
-            occluderBottom?: number
-            underOwnPill?: boolean
-          }
-        }
-      }>('Runtime.callFunctionOn', {
-        objectId: current.objectId,
-        arguments: [{ value: current.center.x - offsetX }, { value: current.center.y - offsetY }],
-        functionDeclaration: `function(cx, cy) {
-          if (!this.isConnected) return { ok: false, reason: 'detached' };
-          const doc = this.ownerDocument || document;
-          const win = doc.defaultView || window;
-          if (this.disabled === true || this.getAttribute?.('aria-disabled') === 'true') {
-            return { ok: false, reason: 'disabled' };
-          }
-          const style = win.getComputedStyle(this);
-          if (style.pointerEvents === 'none') {
-            return { ok: false, reason: 'pointer-events-none' };
-          }
-          function deepHit(root, x, y) {
-            let hit = root.elementFromPoint(x, y);
-            while (hit && hit.shadowRoot) {
-              const inner = hit.shadowRoot.elementFromPoint(x, y);
-              if (!inner || inner === hit) break;
-              hit = inner;
-            }
-            return hit;
-          }
-          let hit = deepHit(doc, cx, cy);
-          let hitOwnPill = false;
-          if (hit && hit.id === '__browserpilot_ui_host') {
-            hitOwnPill = true;
-            const prevDisplay = hit.style.display;
-            hit.style.display = 'none';
-            hit = deepHit(doc, cx, cy);
-            const uiHost = doc.getElementById('__browserpilot_ui_host');
-            if (uiHost) uiHost.style.display = prevDisplay;
-          }
-          if (!hit) return { ok: true, underOwnPill: hitOwnPill };
-          if (hit === this || this.contains(hit) || hit.contains(this)) return { ok: true, underOwnPill: hitOwnPill };
-          if (this.id && hit.closest && hit.closest('label[for="' + CSS.escape(this.id) + '"]')) return { ok: true, underOwnPill: hitOwnPill };
-          const ownLabel = this.closest?.('label');
-          if (ownLabel && (hit === ownLabel || ownLabel.contains(hit))) return { ok: true, underOwnPill: hitOwnPill };
-          let cur = hit;
-          let isFixedOrSticky = false;
-          let occluderBottom = 0;
-          while (cur && cur !== doc.body && cur !== doc.documentElement) {
-            const pos = win.getComputedStyle(cur).position;
-            if (pos === 'fixed' || pos === 'sticky') {
-              isFixedOrSticky = true;
-              occluderBottom = cur.getBoundingClientRect().bottom;
-              break;
-            }
-            cur = cur.parentElement;
-          }
-          const tag = hit.tagName?.toLowerCase() || 'element';
-          const cls = typeof hit.className === 'string' && hit.className.trim()
-            ? '.' + hit.className.trim().split(/\\s+/).slice(0, 2).join('.')
-            : '';
-          const id = hit.id ? '#' + hit.id : '';
-          const txt = (hit.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 40);
-          return {
-            ok: false,
-            reason: 'occluded',
-            occluder: '<' + tag + id + cls + '>' + (txt ? ' ("' + txt + '")' : ''),
-            isFixedOrSticky,
-            occluderBottom,
-            underOwnPill: hitOwnPill,
-          };
-        }`,
-        returnByValue: true,
-      })
-      .catch(() => null)
-
-    const val = check?.result?.value
-    if (!val) {
-      return {
-        ok: false,
-        retryable: true,
-        reason: 'detached',
-        error: new Error(`Element "${targetLabel}" became stale during actionability check.`),
-      }
-    }
-    if (val.underOwnPill) underOwnPill = true
-    if (val.ok) return { ok: true, el: current, underOwnPill }
-
-    if (val.reason === 'detached') {
-      return {
-        ok: false,
-        retryable: true,
-        reason: 'detached',
-        error: new Error(`Element "${targetLabel}" detached from DOM before click.`),
-      }
-    }
-    if (val.reason === 'disabled') {
-      return {
-        ok: false,
-        retryable: true,
-        reason: 'disabled',
-        error: new Error(`Element "${targetLabel}" is disabled and cannot be clicked.`),
-      }
-    }
-    if (val.reason === 'pointer-events-none') {
-      return {
-        ok: false,
-        retryable: true,
-        reason: 'pointer-events-none',
-        error: new Error(`Element "${targetLabel}" has pointer-events: none (pass force: true to override).`),
-      }
-    }
-    if (val.reason === 'occluded' && val.isFixedOrSticky && retry === 0) {
-      await session
-        .send('Runtime.callFunctionOn', {
-          objectId: current.objectId,
-          arguments: [{ value: val.occluderBottom ?? 0 }],
-          functionDeclaration: `function(stickyBottom) {
-            this.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
-            const r = this.getBoundingClientRect();
-            if (stickyBottom > 0 && r.top < stickyBottom + 8) {
-              const win = this.ownerDocument?.defaultView || window;
-              win.scrollBy(0, -(stickyBottom - r.top + 24));
-            }
-          }`,
-        })
-        .catch(() => {})
-      await sleep(50)
-      const recentered = await readElementViewportBox(session, current)
-      if (recentered) {
-        current = {
-          ...current,
-          box: recentered,
-          center: { x: recentered.x + recentered.width / 2, y: recentered.y + recentered.height / 2 },
-        }
-        continue
-      }
-    }
-    if (val.reason === 'occluded') {
-      return {
-        ok: false,
-        retryable: true,
-        reason: 'occluded',
-        error: new Error(
-          `Element "${targetLabel}" is occluded at (${Math.round(current.center.x)}, ${Math.round(current.center.y)}) by ${val.occluder ?? 'another element'}. Dismiss the overlay/banner first or pass force: true.`,
-        ),
-      }
+  if (val.reason === 'detached') {
+    return {
+      ok: false,
+      retryable: true,
+      reason: 'detached',
+      error: new Error(`Element "${targetLabel}" detached or hidden during actionability check.`),
     }
   }
-  return { ok: true, el: current, underOwnPill }
+  if (val.reason === 'disabled') {
+    return {
+      ok: false,
+      retryable: true,
+      reason: 'disabled',
+      error: new Error(`Element "${targetLabel}" is disabled and cannot be clicked.`),
+    }
+  }
+  if (val.reason === 'pointer-events-none') {
+    return {
+      ok: false,
+      retryable: true,
+      reason: 'pointer-events-none',
+      error: new Error(`Element "${targetLabel}" has pointer-events: none (pass force: true to override).`),
+    }
+  }
+  return {
+    ok: false,
+    retryable: true,
+    reason: 'occluded',
+    error: new Error(
+      `Element "${targetLabel}" is occluded at (${Math.round(current.center.x)}, ${Math.round(current.center.y)}) by ${val.occluder ?? 'another element'}. Dismiss the overlay/banner first or pass force: true.`,
+    ),
+  }
 }
 
 /**

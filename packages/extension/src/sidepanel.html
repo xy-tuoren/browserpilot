@@ -291,7 +291,10 @@
 
   <main>
     <section id="tabs-section">
-      <h2 id="tabs-heading">当前受控标签页</h2>
+      <div class="section-head">
+        <h2 id="tabs-heading">当前受控标签页</h2>
+        <button id="sp-organize-tabs" class="fmt-btn">整理标签</button>
+      </div>
       <div id="sp-tabs" class="muted">暂无受控标签页</div>
     </section>
 
@@ -365,6 +368,12 @@
         </div>
         <div id="sec-allowed-chips" class="chips"></div>
         <div id="sec-allowed-hint" class="muted"></div>
+      </div>
+
+      <div class="sec-card">
+        <h2 id="sec-trusted-heading">已信任站点（免二次审批）</h2>
+        <div id="sec-trusted-chips" class="chips"></div>
+        <div id="sec-trusted-hint" class="muted"></div>
       </div>
     </section>
   </main>

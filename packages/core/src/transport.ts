@@ -59,6 +59,22 @@ export interface CDPTransport {
   activateTab(tabId: number): Promise<void>
   attachTab(tabId: number, options?: AttachTabOptions): Promise<TabInfo>
   detachTab(tabId: number): Promise<void>
+  groupTabs?(options: {
+    tabIds: number[]
+    title?: string
+    color?: TabGroupColor
+    collapsed?: boolean
+  }): Promise<{ groupId: number; title?: string; color?: TabGroupColor; tabIds: number[] }>
+  ungroupTabs?(tabIds: number[]): Promise<{ ungrouped: number[] }>
+  organizeTabs?(options?: {
+    tabIds?: number[]
+    strategy?: 'domain' | 'topic'
+    minGroupSize?: number
+    collapseOthers?: boolean
+  }): Promise<{
+    groups: Array<{ groupId: number; title: string; color: TabGroupColor; tabIds: number[] }>
+    ungroupedCount: number
+  }>
   highlightElement?(tabId: number, box: BoundingBox, label?: string): Promise<void>
   showSomLabels?(tabId: number, labels: SomLabelItem[]): Promise<void>
   hideSomLabels?(tabId: number): Promise<void>

@@ -217,6 +217,31 @@ async function main() {
       return { boundaryEnforced: true, sandboxBlockedFsExec: true }
     })
 
+    // 7. Bilingual Fuzzy Find + Parallel Multi-Tab Context + Hot-Path Action Latency
+    await runTask('Fuzzy Find + Multi-Tab Context + Action Latency', async () => {
+      await call(coreClient, 'browser_navigate', { url: `${baseUrl}/admin`, waitUntil: 'load' })
+      const findOut = await call(coreClient, 'browser_find', { query: '搜索框' })
+      const refMatch = /\[(e\d+)\]/.exec(findOut)
+      if (!refMatch) throw new Error(`browser_find did not return live ref: ${findOut}`)
+      const tFill = Date.now()
+      await call(coreClient, 'browser_fill', { target: refMatch[1], value: 'fast-find' })
+      const fillMs = Date.now() - tFill
+
+      const btnOut = await call(coreClient, 'browser_find', { query: 'apply button' })
+      const btnRef = /\[(e\d+)\]/.exec(btnOut)
+      if (!btnRef) throw new Error(`browser_find did not locate apply button: ${btnOut}`)
+      const tClick = Date.now()
+      await call(coreClient, 'browser_click', { target: btnRef[1] })
+      const clickMs = Date.now() - tClick
+
+      const st = await call(coreClient, 'browser_evaluate', { expression: 'document.getElementById("st").textContent' })
+      if (st.trim() !== 'q:fast-find') throw new Error(`Expected q:fast-find, got ${st}`)
+
+      const multiCtx = await call(fullClient, 'browser_tabs_context', { action: 'read_all', mode: 'summary' })
+      if (!multiCtx.includes('11k-DOM Admin')) throw new Error('browser_tabs_context did not synthesize open tab')
+      return { fillMs, clickMs, findRef: refMatch[1], multiTabOk: true }
+    })
+
     const summary = {
       schema: {
         coreTools: coreList.tools.length,

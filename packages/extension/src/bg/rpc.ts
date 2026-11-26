@@ -3,6 +3,7 @@ import {
   DEFAULT_TAB_GROUP_TITLE,
   isBlockedProfileWideCommand,
   isRestrictedUrl,
+  TAB_GROUP_COLORS,
   type ExtensionConfig,
   type TabGroupColor,
 } from '@browserpilot/protocol'
@@ -78,6 +79,121 @@ export async function executeBridgeMethod(method: string, params: Record<string,
       return { detached: true }
     }
 
+    case 'tabs.group': {
+      const rawIds = Array.isArray(params.tabIds) ? (params.tabIds as unknown[]).map(Number).filter(Number.isFinite) : []
+      if (!rawIds.length) throw new Error('tabs.group requires a non-empty tabIds array')
+      const title = typeof params.title === 'string' && params.title.trim() ? params.title.trim() : undefined
+      const color = (typeof params.color === 'string' ? params.color : undefined) as chrome.tabGroups.ColorEnum | undefined
+      const collapsed = typeof params.collapsed === 'boolean' ? params.collapsed : undefined
+      const groupId = await chrome.tabs.group({ tabIds: rawIds as [number, ...number[]] })
+      if (chrome.tabGroups?.update && (title !== undefined || color !== undefined || collapsed !== undefined)) {
+        await chrome.tabGroups.update(groupId, {
+          ...(title !== undefined ? { title } : {}),
+          ...(color !== undefined ? { color } : {}),
+          ...(collapsed !== undefined ? { collapsed } : {}),
+        })
+      }
+      broadcastUiUpdate()
+      return { groupId, title, color, tabIds: rawIds }
+    }
+
+    case 'tabs.ungroup': {
+      const rawIds = Array.isArray(params.tabIds) ? (params.tabIds as unknown[]).map(Number).filter(Number.isFinite) : []
+      if (!rawIds.length) return { ungrouped: [] }
+      await chrome.tabs.ungroup(rawIds as [number, ...number[]])
+      broadcastUiUpdate()
+      return { ungrouped: rawIds }
+    }
+
+    case 'tabs.organize': {
+      const strategy = params.strategy === 'topic' ? 'topic' : 'domain'
+      const minGroupSize = Math.max(1, Number(params.minGroupSize ?? 2))
+      const collapseOthers = Boolean(params.collapseOthers)
+      const explicitIds = Array.isArray(params.tabIds)
+        ? new Set((params.tabIds as unknown[]).map(Number).filter(Number.isFinite))
+        : null
+
+      const allTabs = await chrome.tabs.query({})
+      const activeTab = allTabs.find((t) => t.active)
+      const targetWindowId = activeTab?.windowId
+
+      const candidates = allTabs.filter((t) => {
+        if (t.id === undefined || t.pinned) return false
+        if (explicitIds) return explicitIds.has(t.id)
+        if (targetWindowId !== undefined && t.windowId !== targetWindowId) return false
+        const u = t.url || t.pendingUrl || ''
+        return !isRestrictedUrl(u) && u !== 'about:blank' && u.length > 0
+      })
+
+      const classifyBucket = (rawUrl: string): string => {
+        let host = ''
+        try {
+          host = new URL(rawUrl).hostname.toLowerCase().replace(/^www\./, '')
+        } catch {
+          return 'Other'
+        }
+        if (strategy === 'topic') {
+          if (/(github|gitlab|stackoverflow|npmjs|vercel|cloudflare|developer\.mozilla|localhost|127\.0\.0\.1|linear\.app|sentry\.io|datadog)/.test(host)) {
+            return 'Dev'
+          }
+          if (/(chatgpt|openai|claude\.ai|anthropic|gemini\.google|huggingface|perplexity)/.test(host)) {
+            return 'AI'
+          }
+          if (/(docs\.google|notion\.so|feishu\.cn|larksuite|figma\.com|confluence|miro\.com|airtable)/.test(host)) {
+            return 'Docs'
+          }
+          if (/(youtube|bilibili|twitter|x\.com|reddit|zhihu|weibo|xiaohongshu|tiktok)/.test(host)) {
+            return 'Social'
+          }
+          if (/(mail\.google|outlook|slack\.com|discord\.com|teams\.microsoft|telegram)/.test(host)) {
+            return 'Chat & Mail'
+          }
+          if (/(amazon|taobao|tmall|jd\.com|shopify|ebay|stripe)/.test(host)) {
+            return 'Shopping'
+          }
+        }
+        // Clean human-friendly domain label (e.g. docs.github.com -> github.com, 127.0.0.1 -> localhost)
+        if (host === '127.0.0.1' || host === 'localhost') return 'Localhost'
+        const parts = host.split('.')
+        return parts.length >= 2 ? parts.slice(-2).join('.') : host || 'Other'
+      }
+
+      const buckets = new Map<string, chrome.tabs.Tab[]>()
+      for (const t of candidates) {
+        const key = classifyBucket(t.url || t.pendingUrl || '')
+        const list = buckets.get(key) ?? []
+        list.push(t)
+        buckets.set(key, list)
+      }
+
+      const createdGroups: Array<{ groupId: number; title: string; color: TabGroupColor; tabIds: number[] }> = []
+      let ungroupedCount = 0
+      let colorIdx = 0
+
+      for (const [title, groupTabs] of buckets.entries()) {
+        if (groupTabs.length < minGroupSize) {
+          ungroupedCount += groupTabs.length
+          continue
+        }
+        const ids = groupTabs.map((t) => t.id!).filter((id) => Number.isFinite(id))
+        if (!ids.length) continue
+        const color = TAB_GROUP_COLORS[colorIdx++ % TAB_GROUP_COLORS.length]
+        const groupId = await chrome.tabs.group({ tabIds: ids as [number, ...number[]] })
+        const hasActive = groupTabs.some((t) => t.active)
+        if (chrome.tabGroups?.update) {
+          await chrome.tabGroups.update(groupId, {
+            title,
+            color: color as chrome.tabGroups.ColorEnum,
+            ...(collapseOthers && !hasActive ? { collapsed: true } : {}),
+          })
+        }
+        createdGroups.push({ groupId, title, color, tabIds: ids })
+      }
+
+      broadcastUiUpdate()
+      return { groups: createdGroups, ungroupedCount }
+    }
+
     case 'cdp.send': {
       const tabId = Number(params.tabId)
       const cdpMethod = String(params.method ?? '')
@@ -98,13 +214,10 @@ export async function executeBridgeMethod(method: string, params: Record<string,
 
       const target: chrome.debugger.DebuggerSession = sessionId ? { tabId, sessionId } : { tabId }
       const result = await chrome.debugger.sendCommand(target, cdpMethod, cdpParams)
-      if (
-        cdpMethod === 'Page.navigate' ||
-        cdpMethod === 'Input.dispatchMouseEvent' ||
-        cdpMethod === 'Input.insertText' ||
-        cdpMethod === 'Runtime.evaluate'
-      ) {
-        logActivity(cdpMethod, 'ok', cdpMethod === 'Page.navigate' ? String(cdpParams?.url ?? '') : undefined, tabId)
+      // Avoid flooding Side Panel IPC on low-level Runtime.evaluate / Input.dispatchMouseEvent calls;
+      // high-level tool steps stream cleanly via extension.logActivity.
+      if (cdpMethod === 'Page.navigate') {
+        logActivity(cdpMethod, 'ok', String(cdpParams?.url ?? ''), tabId)
       }
       return result ?? {}
     }

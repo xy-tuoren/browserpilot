@@ -8,6 +8,7 @@ import {
   type BridgeRequest,
   type BridgeResponse,
   type DownloadEntry,
+  type TabGroupColor,
   type TabInfo,
 } from '@browserpilot/protocol'
 import type { AttachTabOptions, CDPEventPacket, CDPSendOptions, CDPTransport, CreateTabOptions } from './transport.js'
@@ -198,6 +199,31 @@ export class ExtensionBridgeTransport implements CDPTransport {
 
   async detachTab(tabId: number): Promise<void> {
     await this.rpc('tabs.detach', { tabId })
+  }
+
+  async groupTabs(options: {
+    tabIds: number[]
+    title?: string
+    color?: TabGroupColor
+    collapsed?: boolean
+  }): Promise<{ groupId: number; title?: string; color?: TabGroupColor; tabIds: number[] }> {
+    return await this.rpc('tabs.group', options as Record<string, unknown>)
+  }
+
+  async ungroupTabs(tabIds: number[]): Promise<{ ungrouped: number[] }> {
+    return await this.rpc('tabs.ungroup', { tabIds })
+  }
+
+  async organizeTabs(options?: {
+    tabIds?: number[]
+    strategy?: 'domain' | 'topic'
+    minGroupSize?: number
+    collapseOthers?: boolean
+  }): Promise<{
+    groups: Array<{ groupId: number; title: string; color: TabGroupColor; tabIds: number[] }>
+    ungroupedCount: number
+  }> {
+    return await this.rpc('tabs.organize', (options ?? {}) as Record<string, unknown>)
   }
 
   async highlightElement(tabId: number, box: BoundingBox, label?: string): Promise<void> {

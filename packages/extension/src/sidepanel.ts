@@ -109,7 +109,7 @@ function renderRecordPanel(next: ExtensionState): void {
 function renderDomainChips(
   containerId: string,
   domains: string[],
-  kind: 'blocked' | 'allowed',
+  kind: 'blocked' | 'allowed' | 'trusted',
   emptyText: string,
 ): void {
   const box = $(containerId)
@@ -120,7 +120,7 @@ function renderDomainChips(
   }
   for (const domain of domains) {
     const chip = document.createElement('span')
-    chip.className = `chip ${kind}`
+    chip.className = `chip ${kind === 'trusted' ? 'allowed' : kind}`
     chip.innerHTML = `${escapeHtml(domain)}<button data-remove="${escapeHtml(domain)}" title="Remove">×</button>`
     box.appendChild(chip)
   }
@@ -132,7 +132,9 @@ function renderDomainChips(
       const nextRules =
         kind === 'blocked'
           ? { ...current, blockedDomains: current.blockedDomains.filter((d) => d !== target) }
-          : { ...current, allowedDomains: current.allowedDomains.filter((d) => d !== target) }
+          : kind === 'trusted'
+            ? { ...current, trustedDomains: (current.trustedDomains ?? []).filter((d) => d !== target) }
+            : { ...current, allowedDomains: current.allowedDomains.filter((d) => d !== target) }
       void safeSendMessage({ type: 'browserpilot:update-config', patch: { domainRules: nextRules } }).then(() =>
         refresh(),
       )
@@ -165,6 +167,8 @@ function renderSecurityPanel(next: ExtensionState): void {
 
   $('sec-blocked-heading').textContent = t.blockedHeading
   $('sec-allowed-heading').textContent = t.allowedHeading
+  $('sec-trusted-heading').textContent = t.trustedHeading
+  $('sec-trusted-hint').textContent = t.trustedHint
   $<HTMLInputElement>('sec-blocked-input').placeholder = t.domainInputPlaceholder
   $<HTMLInputElement>('sec-allowed-input').placeholder = t.domainInputPlaceholder
   $('sec-blocked-add').textContent = t.addDomain
@@ -174,6 +178,7 @@ function renderSecurityPanel(next: ExtensionState): void {
 
   renderDomainChips('sec-blocked-chips', next.config.domainRules.blockedDomains, 'blocked', t.noDomainsConfigured)
   renderDomainChips('sec-allowed-chips', next.config.domainRules.allowedDomains, 'allowed', t.noDomainsConfigured)
+  renderDomainChips('sec-trusted-chips', next.config.domainRules.trustedDomains ?? [], 'trusted', t.noDomainsConfigured)
 }
 
 function render(next: ExtensionState): void {
@@ -204,6 +209,7 @@ function render(next: ExtensionState): void {
   $('lbl-tab-errors').textContent = t.tabErrors
   $('lbl-tab-network').textContent = t.tabNetwork
   $('tabs-heading').textContent = t.activeTabsHeading
+  $('sp-organize-tabs').textContent = t.organizeTabs
   $('act-export').textContent = t.exportFlow
   $('act-clear').textContent = t.clearActivity
 
@@ -509,6 +515,16 @@ $('sp-pause').addEventListener('click', () => {
 })
 $('sp-detach-all').addEventListener('click', () => {
   void safeSendMessage({ type: 'browserpilot:detach-all' }).then(() => refresh())
+})
+$('sp-organize-tabs').addEventListener('click', () => {
+  const lang = resolveLang(state?.config.language)
+  void safeSendMessage({ type: 'browserpilot:organize-tabs', strategy: 'domain' }).then(() => {
+    $('sp-organize-tabs').textContent = MESSAGES[lang].organizedTabs
+    setTimeout(() => {
+      if (state) $('sp-organize-tabs').textContent = MESSAGES[resolveLang(state.config.language)].organizeTabs
+    }, 1200)
+    void refresh()
+  })
 })
 
 chrome.runtime.onMessage.addListener((msg) => {

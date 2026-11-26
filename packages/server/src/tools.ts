@@ -163,18 +163,36 @@ export async function executeTool(
       return textResult(JSON.stringify({ clients, sessions }, null, 2))
     }
 
+    // Pure-local store tools (shortcuts/schedules/memory metadata ops) can run even before a browser attaches
+    const isBrowserlessLocalOp =
+      (name === 'browser_shortcuts' && args.action !== 'run') ||
+      (name === 'browser_schedule' && (args.action !== 'run_now' || args.headless !== false)) ||
+      (name === 'browser_memory' && (args.action === 'list' || args.action === 'clear' || typeof args.domain === 'string'))
+
     const clientId = args.clientId as string | undefined
-    const manager = ctx.getManager(clientId)
+    let manager: ReturnType<ToolRuntimeContext['getManager']> | null = null
+    if (isBrowserlessLocalOp) {
+      try {
+        manager = ctx.getManager(clientId)
+      } catch {
+        manager = null
+      }
+    } else {
+      manager = ctx.getManager(clientId)
+    }
     resolvedManager = manager
     const sessionId = args.sessionId as string | undefined
     const explicitTabId = typeof args.tabId === 'number' ? args.tabId : undefined
     resolvedTabId = explicitTabId
 
     const dispatchCtx: ToolDispatchContext = {
-      manager,
+      manager: manager as ReturnType<ToolRuntimeContext['getManager']>,
       sessionId,
       explicitTabId,
-      resolveTab: () => manager.resolveActiveTab({ tabId: explicitTabId, sessionId }),
+      resolveTab: () => {
+        const m = manager ?? ctx.getManager(clientId)
+        return m.resolveActiveTab({ tabId: explicitTabId, sessionId })
+      },
       registerTraceHtml: ctx.registerTraceHtml,
     }
 
@@ -185,7 +203,9 @@ export async function executeTool(
       (await executeContextTool(dispatchCtx, name, args))
 
     if (result) {
-      reportToolActivity(manager, name, args, !result.isError, Date.now() - startedAt, explicitTabId)
+      if (manager) {
+        reportToolActivity(manager, name, args, !result.isError, Date.now() - startedAt, explicitTabId)
+      }
       return result
     }
     return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true }

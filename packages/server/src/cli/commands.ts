@@ -1,4 +1,7 @@
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import type { DaemonClient } from '../client.js'
+import { parseWorkflowPayload } from './replay.js'
 import { parseRect, printToolOutput, type CliFlags } from './args.js'
 
 export async function runDirectToolShortcutCommand(
@@ -14,9 +17,154 @@ export async function runDirectToolShortcutCommand(
     case 'status':
       printToolOutput(await client.callTool('browser_status'))
       return
-    case 'tabs':
-      printToolOutput(await client.callTool('browser_tabs', { clientId }))
+    case 'tabs': {
+      const sub = (positional[1] || 'list').toLowerCase()
+      if (sub === 'list') {
+        printToolOutput(await client.callTool('browser_tabs', { clientId }))
+        return
+      }
+      const parseIds = (raw: unknown): number[] | undefined =>
+        typeof raw === 'string'
+          ? raw
+              .split(',')
+              .map((s) => Number(s.trim()))
+              .filter(Number.isFinite)
+          : undefined
+      if (sub === 'read-all' || sub === 'read_all' || sub === 'context') {
+        printToolOutput(
+          await client.callTool('browser_tabs_context', {
+            action: 'read_all',
+            tabIds: parseIds(flags.ids),
+            tabGroup: typeof flags['tab-group'] === 'string' ? flags['tab-group'] : undefined,
+            urlContains: typeof flags.filter === 'string' ? flags.filter : undefined,
+            mode: typeof flags.mode === 'string' ? flags.mode : undefined,
+            maxTabs: typeof flags['max-tabs'] === 'string' ? Number(flags['max-tabs']) : undefined,
+            maxCharsPerTab: typeof flags['max-chars'] === 'string' ? Number(flags['max-chars']) : undefined,
+            clientId,
+          }),
+        )
+        return
+      }
+      if (sub === 'group' || sub === 'ungroup' || sub === 'organize') {
+        printToolOutput(
+          await client.callTool('browser_tabs_context', {
+            action: sub,
+            tabIds: parseIds(flags.ids ?? positional[2]),
+            title: typeof flags.title === 'string' ? flags.title : undefined,
+            color: typeof flags.color === 'string' ? flags.color : undefined,
+            collapsed: Boolean(flags.collapsed),
+            strategy: typeof flags.strategy === 'string' ? flags.strategy : undefined,
+            minGroupSize: typeof flags['min-size'] === 'string' ? Number(flags['min-size']) : undefined,
+            collapseOthers: Boolean(flags['collapse-others']),
+            clientId,
+          }),
+        )
+        return
+      }
+      throw new Error(`Unknown tabs subcommand "${sub}". Use: list, read-all, group, ungroup, organize.`)
+    }
+    case 'find': {
+      const query = positional.slice(1).join(' ').trim()
+      if (!query) throw new Error('Usage: browserpilot find "<query>" [--limit N] [--viewport]')
+      printToolOutput(
+        await client.callTool('browser_find', {
+          query,
+          limit: typeof flags.limit === 'string' ? Number(flags.limit) : undefined,
+          viewportOnly: Boolean(flags.viewport || flags['viewport-only']),
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
       return
+    }
+    case 'gif': {
+      const action = (positional[1] || 'status').toLowerCase()
+      printToolOutput(
+        await client.callTool('browser_gif', {
+          action,
+          label: typeof flags.label === 'string' ? flags.label : action === 'frame' ? positional[2] : undefined,
+          outputPath: action === 'export' ? positional[2] : undefined,
+          width: typeof flags.width === 'string' ? Number(flags.width) : undefined,
+          delayMs: typeof flags.delay === 'string' ? Number(flags.delay) : undefined,
+          showClickIndicators: flags['no-click-indicators'] ? false : undefined,
+          showActionLabels: flags['no-labels'] ? false : undefined,
+          showProgressBar: flags['no-progress'] ? false : undefined,
+          loop: typeof flags.loop === 'string' ? Number(flags.loop) : undefined,
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
+      return
+    }
+    case 'shortcut':
+    case 'shortcuts': {
+      const action = (positional[1] || 'list').toLowerCase()
+      if (action === 'save') {
+        const name = positional[2]
+        const flowFile = positional[3]
+        if (!name) throw new Error('Usage: browserpilot shortcut save <name> <flow.json> | --code "<js>" [--desc "..."]')
+        let steps: unknown[] | undefined
+        if (flowFile) {
+          const raw = await fs.readFile(path.resolve(flowFile), 'utf8')
+          steps = parseWorkflowPayload(raw).steps
+        }
+        printToolOutput(
+          await client.callTool('browser_shortcuts', {
+            action: 'save',
+            name,
+            description: typeof flags.desc === 'string' ? flags.desc : undefined,
+            steps,
+            code: typeof flags.code === 'string' ? flags.code : undefined,
+          }),
+        )
+        return
+      }
+      printToolOutput(
+        await client.callTool('browser_shortcuts', {
+          action,
+          name: positional[2],
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
+      return
+    }
+    case 'schedule':
+    case 'schedules': {
+      const rawAct = (positional[1] || 'list').toLowerCase()
+      const action = rawAct === 'run-now' ? 'run_now' : rawAct
+      printToolOutput(
+        await client.callTool('browser_schedule', {
+          action,
+          name: positional[2],
+          every: typeof flags.every === 'string' ? flags.every : undefined,
+          flowPath: typeof flags.flow === 'string' ? path.resolve(flags.flow) : undefined,
+          shortcut: typeof flags.shortcut === 'string' ? flags.shortcut : undefined,
+          code: typeof flags.code === 'string' ? flags.code : undefined,
+          headless: flags.headed ? false : true,
+        }),
+      )
+      return
+    }
+    case 'memory': {
+      const action = (positional[1] || 'list').toLowerCase()
+      printToolOutput(
+        await client.callTool('browser_memory', {
+          action,
+          domain: positional[2],
+          key: positional[3],
+          value: positional.slice(4).join(' ') || undefined,
+          note: typeof flags.note === 'string' ? flags.note : undefined,
+          tabId,
+          sessionId,
+          clientId,
+        }),
+      )
+      return
+    }
     case 'frames':
       printToolOutput(await client.callTool('browser_frames', { tabId, sessionId, clientId }))
       return

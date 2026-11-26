@@ -33,6 +33,8 @@ export interface DomainRules {
   blockedDomains: string[]
   /** If non-empty, only allow auto-attach on matching domains */
   allowedDomains: string[]
+  /** Domains explicitly trusted by user ("Trust This Site") to skip interactive action approval */
+  trustedDomains?: string[]
 }
 
 export type ExtensionTheme = 'dark' | 'light'

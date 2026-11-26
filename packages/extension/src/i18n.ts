@@ -79,6 +79,10 @@ export interface ExtensionMessages {
   profileLabelPlaceholder: string
   blockedHeading: string
   allowedHeading: string
+  trustedHeading: string
+  trustedHint: string
+  organizeTabs: string
+  organizedTabs: string
   domainInputPlaceholder: string
   addDomain: string
   blockCurrentSite: string
@@ -164,6 +168,10 @@ export const MESSAGES: Record<ExtensionLanguage, ExtensionMessages> = {
     profileLabelPlaceholder: '例如：Work / Personal（可用 --profile 指定）',
     blockedHeading: '禁止接管域名（黑名单）',
     allowedHeading: '仅允许域名（白名单）',
+    trustedHeading: '已信任站点（免二次审批）',
+    trustedHint: '在页面确认卡片点击「信任本站」后会自动加入此列表，可随时移除。',
+    organizeTabs: '整理标签',
+    organizedTabs: '已整理',
     domainInputPlaceholder: '例如 *.bank.com 或 example.com',
     addDomain: '添加',
     blockCurrentSite: '禁止当前站点',
@@ -247,6 +255,10 @@ export const MESSAGES: Record<ExtensionLanguage, ExtensionMessages> = {
     profileLabelPlaceholder: 'e.g. Work / Personal (target with --profile)',
     blockedHeading: 'Blocked Domains (Blocklist)',
     allowedHeading: 'Allowed Domains (Allowlist)',
+    trustedHeading: 'Trusted Sites (Skip Approval)',
+    trustedHint: 'Sites added via "Trust This Site" on approval cards appear here and can be revoked anytime.',
+    organizeTabs: 'Organize Tabs',
+    organizedTabs: 'Organized',
     domainInputPlaceholder: 'e.g. *.bank.com or example.com',
     addDomain: 'Add',
     blockCurrentSite: 'Block Current Site',

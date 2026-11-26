@@ -303,7 +303,7 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
     await new Promise<void>((r) => proc.once('close', () => r()))
   }, 15_000)
 
-  it('exposes all 53 tools over real MCP stdio server and executes full browser workflow + v1.6 trace/codegen tools + screenshot image blocks', async () => {
+  it('exposes all 59 tools over real MCP stdio server and executes full browser workflow + v1.6 trace/codegen tools + screenshot image blocks', async () => {
     if (!chromeOk) return
 
     const cliBin = path.resolve(import.meta.dirname, '..', 'dist', 'cli.js')
@@ -317,7 +317,13 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
     try {
       const { tools } = await client.listTools()
       expect(tools.length).toBe(TOOL_DEFINITIONS.length)
-      expect(tools.length).toBe(53)
+      expect(tools.length).toBe(59)
+      expect(tools.some((t) => t.name === 'browser_find')).toBe(true)
+      expect(tools.some((t) => t.name === 'browser_gif')).toBe(true)
+      expect(tools.some((t) => t.name === 'browser_tabs_context')).toBe(true)
+      expect(tools.some((t) => t.name === 'browser_shortcuts')).toBe(true)
+      expect(tools.some((t) => t.name === 'browser_schedule')).toBe(true)
+      expect(tools.some((t) => t.name === 'browser_memory')).toBe(true)
       expect(tools.some((t) => t.name === 'browser_touch')).toBe(true)
       expect(tools.some((t) => t.name === 'browser_snapshot')).toBe(true)
       expect(tools.some((t) => t.name === 'browser_debugger')).toBe(true)

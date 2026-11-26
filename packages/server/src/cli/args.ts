@@ -27,6 +27,7 @@ export async function getExtensionDistPath(metaUrl = import.meta.url): Promise<s
 
 const BOOLEAN_FLAGS = new Set([
   'headless',
+  'headed',
   'ephemeral',
   'json',
   'open',
@@ -59,6 +60,11 @@ const BOOLEAN_FLAGS = new Set([
   'no-snapshots',
   'no-network-bodies',
   'no-mask-passwords',
+  'no-click-indicators',
+  'no-labels',
+  'no-progress',
+  'collapsed',
+  'collapse-others',
   'down',
   'up',
   'help',
@@ -147,7 +153,13 @@ Stateful Sessions, Replay, Codegen & Visual Trace:
 
 Direct Quick Commands (pass --browser <name> | --profile <label> | --client <id> to target a specific browser):
   browserpilot status
-  browserpilot tabs | frames [--tab <id>]
+  browserpilot tabs [list|read-all|group|ungroup|organize] [--mode summary|markdown|snapshot] [--strategy domain|topic] [--ids 1,2] [--title <name>] [--color <c>]
+  browserpilot frames [--tab <id>]
+  browserpilot find "<query>" [--limit <N>] [--viewport] [--tab <id>]
+  browserpilot gif <start|frame|stop|clear|status|export> [outputPath] [--label <str>] [--width <N>] [--delay <ms>] [--tab <id>]
+  browserpilot shortcut <list|save|get|run|delete> [name] [flow.json] [--code <js>] [--desc <str>]
+  browserpilot schedule <list|add|remove|run-now> [name] [--every 30m] [--flow <path>] [--shortcut <name>] [--code <js>] [--headed]
+  browserpilot memory <list|get|set|delete|clear> [domain] [key] [value] [--note <str>]
   browserpilot open <url> [--tab-group <name>]
   browserpilot close <tabId>
   browserpilot navigate <url> [--tab <id>]

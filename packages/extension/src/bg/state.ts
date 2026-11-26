@@ -91,11 +91,19 @@ export function registerStateHooks(hooks: {
 }
 
 export async function listAllTabs(): Promise<TabInfo[]> {
-  const tabs = await chrome.tabs.query({})
+  const [tabs, groups] = await Promise.all([
+    chrome.tabs.query({}),
+    chrome.tabGroups?.query ? chrome.tabGroups.query({}).catch(() => []) : Promise.resolve([]),
+  ])
+  const groupTitleById = new Map<number, string>()
+  for (const g of groups) {
+    if (g.title) groupTitleById.set(g.id, g.title)
+  }
   const out: TabInfo[] = []
   for (const t of tabs) {
     if (t.id === undefined) continue
     const rec = bgState.attachedTabs.get(t.id)
+    const gid = t.groupId !== undefined && t.groupId >= 0 ? t.groupId : undefined
     out.push({
       tabId: t.id,
       windowId: t.windowId,
@@ -103,8 +111,8 @@ export async function listAllTabs(): Promise<TabInfo[]> {
       title: t.title || '',
       active: Boolean(t.active),
       attached: Boolean(rec),
-      groupId: t.groupId !== undefined && t.groupId >= 0 ? t.groupId : undefined,
-      groupTitle: rec?.tabGroup,
+      groupId: gid,
+      groupTitle: (gid !== undefined ? groupTitleById.get(gid) : undefined) ?? rec?.tabGroup,
       openerTabId: t.openerTabId,
       status: t.status,
       favIconUrl: t.favIconUrl,
@@ -134,7 +142,13 @@ export async function getExtensionState(): Promise<ExtensionState> {
   }
 }
 
-export function broadcastUiUpdate(): void {
+let uiBroadcastTimer: ReturnType<typeof setTimeout> | null = null
+let uiBroadcastPending = false
+let lastUiBroadcastAt = 0
+
+function flushUiBroadcast(): void {
+  lastUiBroadcastAt = Date.now()
+  uiBroadcastPending = false
   const maybeSend = () => {
     void getExtensionState()
       .then((state) => {
@@ -155,6 +169,25 @@ export function broadcastUiUpdate(): void {
     return
   }
   maybeSend()
+}
+
+export function broadcastUiUpdate(immediate = false): void {
+  const now = Date.now()
+  if (immediate || now - lastUiBroadcastAt >= 120) {
+    if (uiBroadcastTimer) {
+      clearTimeout(uiBroadcastTimer)
+      uiBroadcastTimer = null
+    }
+    flushUiBroadcast()
+    return
+  }
+  uiBroadcastPending = true
+  if (!uiBroadcastTimer) {
+    uiBroadcastTimer = setTimeout(() => {
+      uiBroadcastTimer = null
+      if (uiBroadcastPending) flushUiBroadcast()
+    }, 120)
+  }
 }
 
 export function logActivity(
@@ -237,6 +270,7 @@ export function loadConfig(): Promise<void> {
           domainRules: {
             blockedDomains: saved.domainRules?.blockedDomains ?? [],
             allowedDomains: saved.domainRules?.allowedDomains ?? [],
+            trustedDomains: saved.domainRules?.trustedDomains ?? [],
           },
         }
       }
@@ -295,6 +329,7 @@ export async function saveConfig(patch: Partial<ExtensionConfig>): Promise<Exten
       ? {
           blockedDomains: patch.domainRules.blockedDomains ?? bgState.config.domainRules.blockedDomains,
           allowedDomains: patch.domainRules.allowedDomains ?? bgState.config.domainRules.allowedDomains,
+          trustedDomains: patch.domainRules.trustedDomains ?? bgState.config.domainRules.trustedDomains ?? [],
         }
       : bgState.config.domainRules,
   }

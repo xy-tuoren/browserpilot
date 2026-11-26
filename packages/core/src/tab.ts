@@ -4,6 +4,7 @@ import { TabCDPSession } from './cdp-client.js'
 import { ConsoleCollector } from './console-collector.js'
 import { DOMExtractor } from './dom-extract.js'
 import { DownloadManager } from './downloads.js'
+import { GifRecorder } from './gif-encoder.js'
 import { JSDebugger, LiveEditor } from './js-debugger.js'
 import { Locator } from './locator.js'
 import { NetworkInspector } from './network-inspector.js'
@@ -35,6 +36,7 @@ export class BrowserPilotTab {
   readonly editor: LiveEditor
   readonly performance: PerformanceProfiler
   readonly recorder: ScreenRecorder
+  readonly gif: GifRecorder
   readonly downloads: DownloadManager
   readonly actionRecorder: ActionRecorder
   readonly trace: TraceRecorder
@@ -53,6 +55,7 @@ export class BrowserPilotTab {
     this.editor = new LiveEditor(this.session, this.debugger)
     this.performance = new PerformanceProfiler(this.session)
     this.recorder = new ScreenRecorder(this.session)
+    this.gif = new GifRecorder(this.session)
     this.downloads = new DownloadManager(this.session)
     this.actionRecorder = new ActionRecorder(this.session)
     this.trace = new TraceRecorder({
@@ -62,6 +65,7 @@ export class BrowserPilotTab {
       snapshotEngine: this.snapshots,
     })
     this.page.setTraceHook(this.trace)
+    this.page.setGifHook(this.gif)
   }
 
   async ensureInitialized(): Promise<void> {
@@ -82,8 +86,11 @@ export class BrowserPilotTab {
     await this.ensureInitialized()
     const beforeLogId = this.console.getLatestId()
     const beforeTs = Date.now() - 1
-    const beforeMeta = await this.page.getUrlAndTitle().catch(() => ({ url: '', title: '' }))
-    const beforeTabs = new Set((await this.session.transport.listTabs().catch(() => [])).map((t) => t.tabId))
+    const [beforeMeta, beforeTabsList] = await Promise.all([
+      this.page.getUrlAndTitle().catch(() => ({ url: '', title: '' })),
+      this.session.transport.listTabs().catch(() => []),
+    ])
+    const beforeTabs = new Set(beforeTabsList.map((t) => t.tabId))
 
     let sawNavOrRequest = false
     const offNav = this.session.on('Page.frameNavigated', () => {
@@ -98,10 +105,10 @@ export class BrowserPilotTab {
     try {
       result = await action()
       if (options.settle !== false) {
-        // Brief adaptive settle: if action triggered a route change / XHR / popup, give it a beat to register
-        await sleep(30)
+        // Brief adaptive settle: minimal tick when quiet, extra beat when nav/XHR fired
+        await sleep(12)
         if (sawNavOrRequest) {
-          await sleep(80)
+          await sleep(65)
         }
       }
     } finally {
@@ -109,8 +116,10 @@ export class BrowserPilotTab {
       offReq()
     }
 
-    const meta = await this.page.getUrlAndTitle().catch(() => beforeMeta)
-    const afterTabs = await this.session.transport.listTabs().catch(() => [])
+    const [meta, afterTabs] = await Promise.all([
+      this.page.getUrlAndTitle().catch(() => beforeMeta),
+      this.session.transport.listTabs().catch(() => []),
+    ])
     const openedTabs = afterTabs
       .filter((t) => !beforeTabs.has(t.tabId))
       .map((t) => ({ tabId: t.tabId, url: t.url, title: t.title }))
@@ -159,6 +168,7 @@ export class BrowserPilotTab {
 
   dispose(): void {
     void this.recorder.cancel().catch(() => {})
+    this.gif.clear()
     this.trace.dispose()
     this.downloads.dispose()
     this.actionRecorder.dispose()

@@ -82,10 +82,10 @@ export async function fillElement(
   }
 
   await markReady({ box: el.box, point: el.center })
-  await deps.session.transport
+  void deps.session.transport
     .setControlBanner?.(deps.tabId, { active: true, status: `Filling ${target}`, mode: 'working' })
     .catch(() => {})
-  await deps.session.transport.highlightElement?.(deps.tabId, el.box, `fill ${target}`).catch(() => {})
+  void deps.session.transport.highlightElement?.(deps.tabId, el.box, `fill ${target}`).catch(() => {})
 
   await deps.mouseClick(el.center.x, el.center.y)
 

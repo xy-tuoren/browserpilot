@@ -12,8 +12,49 @@ import {
 export const NAVIGATION_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'browser_tabs',
-    description: 'List all open Chrome tabs with tabId, URL, title, active state, and CDP attach status.',
+    description: 'List all open Chrome tabs with tabId, URL, title, group, active state, and CDP attach status.',
     inputSchema: { type: 'object', properties: { clientId: { type: 'string' } } },
+  },
+  {
+    name: 'browser_tabs_context',
+    description:
+      'Read context across multiple open tabs in parallel (summary, markdown, or interactive snapshot in 1 call), or organize/group/ungroup Chrome tabs into Tab Groups by domain or topic.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['read_all', 'group', 'ungroup', 'organize'], description: 'Action (default read_all)' },
+        tabIds: { type: 'array', items: { type: 'number' }, description: 'Optional specific tab IDs' },
+        tabGroup: { type: 'string', description: 'Filter read_all by Chrome Tab Group name' },
+        urlContains: { type: 'string', description: 'Filter read_all by URL or title substring' },
+        mode: { type: 'string', enum: ['summary', 'markdown', 'snapshot'], description: 'Content mode for read_all (default summary)' },
+        maxTabs: { type: 'number', description: 'Max tabs to read in parallel (default 8)' },
+        maxCharsPerTab: { type: 'number', description: 'Max chars per tab (default 1800 for summary)' },
+        title: { type: 'string', description: 'Tab Group title when action=group' },
+        color: { type: 'string', description: 'Tab Group color when action=group' },
+        collapsed: { type: 'boolean', description: 'Collapse group when action=group' },
+        strategy: { type: 'string', enum: ['domain', 'topic'], description: 'Auto-grouping strategy for action=organize (default domain)' },
+        minGroupSize: { type: 'number', description: 'Min tabs per auto-created group (default 2)' },
+        collapseOthers: { type: 'boolean', description: 'Collapse inactive groups during organize' },
+        clientId: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'browser_find',
+    description:
+      'Find UI elements by natural-language description (English or Chinese, e.g. "search input", "login button", "关闭按钮") across DOM, Shadow DOM & iframes, returning ranked matches with live clickable [eN] refs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Natural-language description of the element to locate' },
+        limit: { type: 'number', description: 'Max matches to return (default 8)' },
+        viewportOnly: { type: 'boolean', description: 'Only return elements visible in the current viewport' },
+        includeIframes: { type: 'boolean', description: 'Search cross-origin OOPIF iframes too (default true)' },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+      required: ['query'],
+    },
   },
   {
     name: 'browser_frames',
@@ -239,10 +280,84 @@ export async function executeNavigationTool(
       const formatted = tabs
         .map(
           (t) =>
-            `[${t.tabId}]${t.active ? ' *' : ''}${t.attached ? ' [CDP]' : ''} ${t.title || '(untitled)'} — ${t.url}`,
+            `[${t.tabId}]${t.active ? ' *' : ''}${t.attached ? ' [CDP]' : ''}${t.groupTitle ? ` [${t.groupTitle}]` : ''} ${t.title || '(untitled)'} — ${t.url}`,
         )
         .join('\n')
       return textResult(formatted || '(no tabs open)', { tabs })
+    }
+
+    case 'browser_tabs_context': {
+      const action = String(args.action ?? 'read_all')
+      const transport = manager.getTransport()
+      if (action === 'group') {
+        if (!transport.groupTabs) {
+          throw new Error('Chrome Tab Group management requires the BrowserPilot Chrome extension transport.')
+        }
+        const tabIds = Array.isArray(args.tabIds) ? (args.tabIds as unknown[]).map(Number).filter(Number.isFinite) : []
+        const res = await transport.groupTabs({
+          tabIds,
+          title: typeof args.title === 'string' ? args.title : undefined,
+          color: args.color as TabGroupColor | undefined,
+          collapsed: typeof args.collapsed === 'boolean' ? args.collapsed : undefined,
+        })
+        return textResult(
+          `Grouped ${res.tabIds.length} tab(s) into group #${res.groupId}${res.title ? ` "${res.title}"` : ''}${res.color ? ` (${res.color})` : ''}`,
+          res,
+        )
+      }
+      if (action === 'ungroup') {
+        if (!transport.ungroupTabs) {
+          throw new Error('Chrome Tab Group management requires the BrowserPilot Chrome extension transport.')
+        }
+        const tabIds = Array.isArray(args.tabIds) ? (args.tabIds as unknown[]).map(Number).filter(Number.isFinite) : []
+        const res = await transport.ungroupTabs(tabIds)
+        return textResult(`Ungrouped ${res.ungrouped.length} tab(s)`, res)
+      }
+      if (action === 'organize') {
+        if (!transport.organizeTabs) {
+          throw new Error('Chrome Tab Group organization requires the BrowserPilot Chrome extension transport.')
+        }
+        const res = await transport.organizeTabs({
+          tabIds: Array.isArray(args.tabIds) ? (args.tabIds as unknown[]).map(Number).filter(Number.isFinite) : undefined,
+          strategy: args.strategy === 'topic' ? 'topic' : 'domain',
+          minGroupSize: typeof args.minGroupSize === 'number' ? args.minGroupSize : undefined,
+          collapseOthers: Boolean(args.collapseOthers),
+        })
+        const summary = res.groups.length
+          ? res.groups.map((g) => `• ${g.title} (${g.color}): ${g.tabIds.length} tab(s) [${g.tabIds.join(', ')}]`).join('\n')
+          : '(no tab groups created — need at least minGroupSize tabs per group)'
+        return textResult(`Organized tabs (${res.groups.length} group(s), ${res.ungroupedCount} ungrouped):\n${summary}`, res)
+      }
+
+      const ctxRes = await manager.readTabsContext({
+        tabIds: Array.isArray(args.tabIds) ? (args.tabIds as unknown[]).map(Number).filter(Number.isFinite) : undefined,
+        tabGroup: typeof args.tabGroup === 'string' ? args.tabGroup : undefined,
+        urlContains: typeof args.urlContains === 'string' ? args.urlContains : undefined,
+        mode: (args.mode as 'summary' | 'markdown' | 'snapshot' | undefined) ?? 'summary',
+        maxTabs: typeof args.maxTabs === 'number' ? args.maxTabs : undefined,
+        maxCharsPerTab: typeof args.maxCharsPerTab === 'number' ? args.maxCharsPerTab : undefined,
+      })
+      return textResult(ctxRes.formatted, { count: ctxRes.tabs.length, tabs: ctxRes.tabs })
+    }
+
+    case 'browser_find': {
+      const tab = await resolveTab()
+      const query = String(args.query ?? '')
+      const matches = await tab.page.find(query, {
+        limit: typeof args.limit === 'number' ? args.limit : undefined,
+        viewportOnly: Boolean(args.viewportOnly),
+        includeIframes: args.includeIframes as boolean | undefined,
+      })
+      if (!matches.length) {
+        return textResult(`No elements matched "${query}". Try a broader query or browser_snapshot.`, { matches: [] })
+      }
+      const lines = matches.map((m, i) => {
+        const label = m.name || m.text || m.placeholder || '(unnamed)'
+        const vpTag = m.inViewport ? '' : ' [offscreen]'
+        const frameTag = m.frameUrl ? ` [iframe: ${m.frameUrl.slice(0, 48)}]` : ''
+        return `${i + 1}. [${m.ref}] ${m.role} "${label}" (score=${m.score}, locator=${m.recommendedLocator}, box=${m.box.x},${m.box.y},${m.box.width}x${m.box.height})${vpTag}${frameTag}`
+      })
+      return textResult(`Found ${matches.length} match(es) for "${query}":\n${lines.join('\n')}`, { matches })
     }
 
     case 'browser_frames': {

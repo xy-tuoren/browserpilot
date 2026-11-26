@@ -37,6 +37,9 @@ export class TabCDPSession {
   private emitter = new EventEmitter()
   private unsubscribeTransport: () => void
   private enabledDomains = new Set<string>()
+  private baseDomainsReady = false
+  private baseDomainsPromise: Promise<void> | null = null
+  private childAxEnabled = new Set<string>()
   private childSessions = new Map<string, ChildFrameSession>()
   private frameExecutionContexts = new Map<string, number>()
   private pendingDialog: DialogEventInfo | null = null
@@ -80,7 +83,9 @@ export class TabCDPSession {
             }
           }
         } else if (packet.method === 'Target.detachedFromTarget' && packet.params.sessionId) {
-          this.childSessions.delete(String(packet.params.sessionId))
+          const detachedSid = String(packet.params.sessionId)
+          this.childSessions.delete(detachedSid)
+          this.childAxEnabled.delete(detachedSid)
         } else if (packet.method === 'Runtime.executionContextCreated' && !packet.sessionId) {
           const ctx = packet.params.context as {
             id?: number
@@ -139,22 +144,36 @@ export class TabCDPSession {
   }
 
   async ensureBaseDomains(): Promise<void> {
-    await Promise.all([
-      this.enableDomain('Page'),
-      this.enableDomain('Runtime'),
-      this.enableDomain('DOM'),
-      this.enableDomain('Network'),
-      this.enableDomain('Log').catch(() => {}),
-      // Emulate page focus so background tabs do not stall 5s per Input.dispatchMouseEvent('mouseMoved')
-      // in Chromium's InputRouter compositor queue — without stealing the user's active tab/window focus.
-      this.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {}),
-    ])
-    // Enable OOPIF child frame auto-attach on this tab
-    await this.send('Target.setAutoAttach', {
-      autoAttach: true,
-      waitForDebuggerOnStart: false,
-      flatten: true,
-    }).catch(() => {})
+    if (this.baseDomainsReady) return
+    if (this.baseDomainsPromise) return await this.baseDomainsPromise
+    this.baseDomainsPromise = (async () => {
+      await Promise.all([
+        this.enableDomain('Page'),
+        this.enableDomain('Runtime'),
+        this.enableDomain('DOM'),
+        this.enableDomain('Network'),
+        this.enableDomain('Log').catch(() => {}),
+        // Emulate page focus so background tabs do not stall 5s per Input.dispatchMouseEvent('mouseMoved')
+        // in Chromium's InputRouter compositor queue — without stealing the user's active tab/window focus.
+        this.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {}),
+        // Enable OOPIF child frame auto-attach on this tab
+        this.send('Target.setAutoAttach', {
+          autoAttach: true,
+          waitForDebuggerOnStart: false,
+          flatten: true,
+        }).catch(() => {}),
+      ])
+      this.baseDomainsReady = true
+    })().finally(() => {
+      this.baseDomainsPromise = null
+    })
+    return await this.baseDomainsPromise
+  }
+
+  async ensureChildAccessibility(childSessionId: string): Promise<void> {
+    if (this.childAxEnabled.has(childSessionId)) return
+    await this.send('Accessibility.enable', {}, { sessionId: childSessionId }).catch(() => {})
+    this.childAxEnabled.add(childSessionId)
   }
 
   on(method: string, handler: (params: Record<string, unknown>, sessionId?: string) => void): () => void {
@@ -388,6 +407,9 @@ export class TabCDPSession {
 
   resetDomains(): void {
     this.enabledDomains.clear()
+    this.baseDomainsReady = false
+    this.baseDomainsPromise = null
+    this.childAxEnabled.clear()
     this.childSessions.clear()
     this.frameExecutionContexts.clear()
   }

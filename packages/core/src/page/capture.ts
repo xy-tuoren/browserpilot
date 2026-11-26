@@ -77,6 +77,17 @@ async function resizeBase64InPage(
   }
 }
 
+function readPngDimensions(base64: string): { width: number; height: number } | null {
+  try {
+    // Only decode the first 32 bytes (header + IHDR width/height)
+    const head = Buffer.from(base64.slice(0, 48), 'base64')
+    if (head.length >= 24 && head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47) {
+      return { width: head.readUInt32BE(16), height: head.readUInt32BE(20) }
+    }
+  } catch {}
+  return null
+}
+
 export async function capturePageScreenshot(
   deps: CaptureDeps,
   options: ScreenshotOptions = {},
@@ -95,20 +106,25 @@ export async function capturePageScreenshot(
 
   let region: { x: number; y: number; width: number; height: number; scale: number } | undefined
 
-  await deps.session.transport.setOverlayVisible?.(tabId, false).catch(() => {})
-  await deps
-    .evaluate(`(() => {
-      const el = document.getElementById('__browserpilot_ui_host');
-      if (el) el.style.visibility = 'hidden';
-    })()`)
-    .catch(() => {})
-
-  try {
-    const metrics = await deps.session.send<{
+  const [, dprVal, metrics] = await Promise.all([
+    deps.session.transport.setOverlayVisible?.(tabId, false).catch(() => {}),
+    deps
+      .evaluate<number>(`(() => {
+        const el = document.getElementById('__browserpilot_ui_host');
+        if (el) el.style.visibility = 'hidden';
+        return Number(window.devicePixelRatio || 1) || 1;
+      })()`)
+      .catch(() => 1),
+    deps.session.send<{
       cssVisualViewport?: { pageX: number; pageY: number; clientWidth: number; clientHeight: number }
       cssContentSize?: { width: number; height: number }
       contentSize?: { width: number; height: number }
-    }>('Page.getLayoutMetrics')
+    }>('Page.getLayoutMetrics'),
+  ])
+
+  const dpr = typeof dprVal === 'number' && Number.isFinite(dprVal) && dprVal > 0 ? dprVal : 1
+
+  try {
     const vp = metrics.cssVisualViewport ?? { pageX: 0, pageY: 0, clientWidth: 1280, clientHeight: 720 }
 
     if (options.grid) {
@@ -152,9 +168,10 @@ export async function capturePageScreenshot(
         .catch(() => {})
     }
 
+    let clip: { x: number; y: number; width: number; height: number; scale: number } | undefined
     if (options.zoom) {
       const scale = Math.max(1, Math.min(4, options.zoom.scale ?? 2))
-      params.clip = {
+      clip = {
         x: vp.pageX + options.zoom.x,
         y: vp.pageY + options.zoom.y,
         width: options.zoom.width,
@@ -169,11 +186,11 @@ export async function capturePageScreenshot(
         scale,
       }
     } else if (options.clip) {
-      params.clip = { ...options.clip, scale: 1 }
+      clip = { ...options.clip, scale: 1 }
       region = { ...options.clip, scale: 1 }
     } else if (options.fullPage) {
       const size = metrics.cssContentSize ?? metrics.contentSize ?? { width: 1280, height: 720 }
-      params.clip = {
+      clip = {
         x: 0,
         y: 0,
         width: size.width,
@@ -181,8 +198,8 @@ export async function capturePageScreenshot(
         scale: 1,
       }
       params.captureBeyondViewport = true
-    } else if (metrics.cssVisualViewport) {
-      params.clip = {
+    } else {
+      clip = {
         x: vp.pageX,
         y: vp.pageY,
         width: vp.clientWidth,
@@ -191,13 +208,37 @@ export async function capturePageScreenshot(
       }
     }
 
+    // Native CDP hardware downscaling via clip.scale:
+    // avoids multi-MB base64 JS canvas round-trip AND works under strict CSP (img-src 'self').
+    let scaledNatively = false
+    if (clip && options.maxDimension && options.maxDimension > 0) {
+      const maxCssSide = Math.max(clip.width, clip.height)
+      const estOutputMaxPx = maxCssSide * clip.scale * dpr
+      if (estOutputMaxPx > options.maxDimension && maxCssSide > 0) {
+        clip.scale = Math.max(0.05, options.maxDimension / (maxCssSide * dpr))
+        scaledNatively = true
+      }
+    }
+
+    if (clip) params.clip = clip
+
     const res = await deps.session.send<{ data: string }>('Page.captureScreenshot', params)
     let base64 = res.data
     const mimeType = format === 'jpeg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : 'image/png'
 
+    // Fallback in-page resize only if native clip scaling wasn't applied or somehow exceeded maxDimension
     if (options.maxDimension && options.maxDimension > 0) {
-      const resized = await resizeBase64InPage(deps.evaluate, base64, mimeType, options.maxDimension, options.quality)
-      if (resized) base64 = resized
+      let needsFallback = !scaledNatively
+      if (scaledNatively && format === 'png') {
+        const dims = readPngDimensions(base64)
+        if (dims && Math.max(dims.width, dims.height) > options.maxDimension + 4) {
+          needsFallback = true
+        }
+      }
+      if (needsFallback) {
+        const resized = await resizeBase64InPage(deps.evaluate, base64, mimeType, options.maxDimension, options.quality)
+        if (resized) base64 = resized
+      }
     }
 
     if (options.path) {
@@ -209,15 +250,15 @@ export async function capturePageScreenshot(
 
     return { base64, mimeType, ...(region ? { region } : {}) }
   } finally {
-    if (options.grid) {
-      await deps.evaluate(`document.getElementById('__browserpilot_grid_overlay')?.remove()`).catch(() => {})
-    }
-    await deps
-      .evaluate(`(() => {
-        const el = document.getElementById('__browserpilot_ui_host');
-        if (el) el.style.visibility = '';
-      })()`)
-      .catch(() => {})
-    await deps.session.transport.setOverlayVisible?.(tabId, true).catch(() => {})
+    await Promise.all([
+      deps
+        .evaluate(`(() => {
+          ${options.grid ? "document.getElementById('__browserpilot_grid_overlay')?.remove();" : ''}
+          const el = document.getElementById('__browserpilot_ui_host');
+          if (el) el.style.visibility = '';
+        })()`)
+        .catch(() => {}),
+      deps.session.transport.setOverlayVisible?.(tabId, true).catch(() => {}),
+    ])
   }
 }

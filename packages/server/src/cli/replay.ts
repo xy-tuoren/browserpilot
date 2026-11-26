@@ -46,7 +46,7 @@ export function parseWorkflowPayload(rawJson: string): ReplayFlowFile {
   throw new Error('Workflow JSON must be an array of steps or an object containing a "steps" array.')
 }
 
-async function runSingleReplayStep(
+export async function runSingleReplayStep(
   client: ReplayToolCaller,
   step: ReplayFlowStep,
   base: { tabId?: number; sessionId?: string; clientId?: string },

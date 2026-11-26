@@ -464,46 +464,43 @@ export function applyCharBudget(
   }
 }
 
-async function collectViewportVisibleBackendIds(
-  session: TabCDPSession,
+interface RawDOMSnapshot {
+  documents?: Array<{
+    nodes?: { backendNodeId?: number[] }
+    layout?: { nodeIndex?: number[]; bounds?: number[][] }
+  }>
+}
+
+function extractVisibleBackendIds(
+  snap: RawDOMSnapshot | null,
   viewport: { vw: number; vh: number; scrollX: number; scrollY: number },
   marginPx = 120,
-): Promise<Set<number> | undefined> {
-  try {
-    const snap = await session.send<{
-      documents?: Array<{
-        nodes?: { backendNodeId?: number[] }
-        layout?: { nodeIndex?: number[]; bounds?: number[][] }
-      }>
-    }>('DOMSnapshot.captureSnapshot', { computedStyles: [] })
-    const doc = snap.documents?.[0]
-    const backendIds = doc?.nodes?.backendNodeId
-    const nodeIndices = doc?.layout?.nodeIndex
-    const bounds = doc?.layout?.bounds
-    if (!backendIds || !nodeIndices || !bounds) return undefined
+): Set<number> | undefined {
+  const doc = snap?.documents?.[0]
+  const backendIds = doc?.nodes?.backendNodeId
+  const nodeIndices = doc?.layout?.nodeIndex
+  const bounds = doc?.layout?.bounds
+  if (!backendIds || !nodeIndices || !bounds) return undefined
 
-    const minX = viewport.scrollX - marginPx
-    const maxX = viewport.scrollX + viewport.vw + marginPx
-    const minY = viewport.scrollY - marginPx
-    const maxY = viewport.scrollY + viewport.vh + marginPx
-    const visible = new Set<number>()
+  const minX = viewport.scrollX - marginPx
+  const maxX = viewport.scrollX + viewport.vw + marginPx
+  const minY = viewport.scrollY - marginPx
+  const maxY = viewport.scrollY + viewport.vh + marginPx
+  const visible = new Set<number>()
 
-    for (let i = 0; i < nodeIndices.length; i++) {
-      const idx = nodeIndices[i]
-      const rect = bounds[i]
-      if (!rect || rect.length < 4) continue
-      const [x, y, w, h] = rect
-      if (w <= 0 || h <= 0) continue
-      const bid = backendIds[idx]
-      if (!bid) continue
-      if (x + w >= minX && x <= maxX && y + h >= minY && y <= maxY) {
-        visible.add(bid)
-      }
+  for (let i = 0; i < nodeIndices.length; i++) {
+    const idx = nodeIndices[i]
+    const rect = bounds[i]
+    if (!rect || rect.length < 4) continue
+    const [x, y, w, h] = rect
+    if (w <= 0 || h <= 0) continue
+    const bid = backendIds[idx]
+    if (!bid) continue
+    if (x + w >= minX && x <= maxX && y + h >= minY && y <= maxY) {
+      visible.add(bid)
     }
-    return visible.size > 0 ? visible : undefined
-  } catch {
-    return undefined
   }
+  return visible.size > 0 ? visible : undefined
 }
 
 /**
@@ -514,10 +511,9 @@ export class SnapshotEngine {
   private refMaps = new Map<number, Record<string, RefTarget>>()
 
   async capture(session: TabCDPSession, options: SnapshotOptions = {}): Promise<SnapshotResult> {
-    await session.ensureBaseDomains()
-    await session.enableDomain('Accessibility').catch(() => {})
+    await Promise.all([session.ensureBaseDomains(), session.enableDomain('Accessibility').catch(() => {})])
 
-    const meta = await session.send<{
+    const metaPromise = session.send<{
       result?: {
         value?: {
           url: string
@@ -541,25 +537,19 @@ export class SnapshotEngine {
       })`,
       returnByValue: true,
     })
-    const m = meta.result?.value
-    const url = m?.url ?? ''
-    const title = m?.title ?? ''
-    const scrollInfo =
-      m && m.scrollHeight > m.vh + 20
-        ? ` | Viewport: ${m.vw}x${m.vh} | Scroll: ${m.scrollY}/${m.scrollHeight}px (${Math.min(100, Math.round(((m.scrollY + m.vh) / m.scrollHeight) * 100))}%)`
-        : m?.vw
-          ? ` | Viewport: ${m.vw}x${m.vh}`
-          : ''
 
     // Single-frame targeted snapshot (supports cross-origin OOPIF and same-origin iframes)
     if (options.frame) {
-      const targetFrame = await session.resolveFrame(options.frame)
+      const [meta, targetFrame] = await Promise.all([metaPromise, session.resolveFrame(options.frame)])
+      const m = meta.result?.value
+      const url = m?.url ?? ''
+      const title = m?.title ?? ''
       if (!targetFrame) {
         throw new Error(`Snapshot frame not found: ${options.frame}`)
       }
       let formatted: FormattedAXTree
       if (targetFrame.sessionId) {
-        await session.send('Accessibility.enable', {}, { sessionId: targetFrame.sessionId }).catch(() => {})
+        await session.ensureChildAccessibility(targetFrame.sessionId)
         const childRes = await session.send<{ nodes: RawAXNode[] }>(
           'Accessibility.getFullAXTree',
           {},
@@ -585,10 +575,12 @@ export class SnapshotEngine {
           })
         } else {
           // Fallback via DOM.getFrameOwner subtree inside main AXTree
-          const owner = targetFrame.frameId
-            ? await session.send<{ backendNodeId?: number }>('DOM.getFrameOwner', { frameId: targetFrame.frameId }).catch(() => null)
-            : null
-          const mainRes = await session.send<{ nodes: RawAXNode[] }>('Accessibility.getFullAXTree')
+          const [owner, mainRes] = await Promise.all([
+            targetFrame.frameId
+              ? session.send<{ backendNodeId?: number }>('DOM.getFrameOwner', { frameId: targetFrame.frameId }).catch(() => null)
+              : Promise.resolve(null),
+            session.send<{ nodes: RawAXNode[] }>('Accessibility.getFullAXTree'),
+          ])
           formatted = formatAXTree(mainRes.nodes ?? [], {
             includeText: options.includeText,
             interactiveOnly: options.interactiveOnly,
@@ -612,67 +604,103 @@ export class SnapshotEngine {
       }
     }
 
-    // Resolve optional scope element (ref, standard CSS selector, or deep Shadow-DOM CSS selector)
-    let scopeBackendNodeId: number | undefined
-    if (options.scope) {
-      const existingRef = this.getRef(session.tabId, options.scope)
-      if (existingRef) {
-        scopeBackendNodeId = existingRef.backendDOMNodeId
-      } else {
-        const doc = await session.send<{ root: { nodeId: number } }>('DOM.getDocument', { depth: 0 })
-        const found = await session
-          .send<{ nodeId: number }>('DOM.querySelector', {
-            nodeId: doc.root.nodeId,
-            selector: options.scope,
-          })
-          .catch(() => ({ nodeId: 0 }))
-        if (found.nodeId) {
-          const desc = await session.send<{ node: { backendNodeId: number } }>('DOM.describeNode', {
-            nodeId: found.nodeId,
-          })
-          scopeBackendNodeId = desc.node.backendNodeId
-        } else {
-          // Deep Shadow DOM / role fallback
-          const evalFound = await session
-            .send<{ result?: { objectId?: string } }>('Runtime.evaluate', {
-              expression: `(() => {
-                const raw = ${JSON.stringify(options.scope)};
-                const roleMatch = /^role=([a-z0-9_-]+)$/i.exec(raw.trim());
-                const queue = [document];
-                while (queue.length) {
-                  const root = queue.shift();
-                  if (roleMatch) {
-                    const hit = root.querySelector('[role="' + roleMatch[1] + '"], ' + roleMatch[1]);
-                    if (hit) return hit;
-                  } else {
-                    try {
-                      const hit = root.querySelector(raw);
-                      if (hit) return hit;
-                    } catch {}
-                  }
-                  for (const el of root.querySelectorAll('*')) {
-                    if (el.shadowRoot) queue.push(el.shadowRoot);
-                  }
-                }
-                return null;
-              })()`,
-            })
-            .catch(() => null)
-          if (evalFound?.result?.objectId) {
-            const desc = await session.send<{ node: { backendNodeId: number } }>('DOM.describeNode', {
-              objectId: evalFound.result.objectId,
-            })
-            scopeBackendNodeId = desc.node.backendNodeId
-          } else {
-            throw new Error(`Snapshot scope selector not found: ${options.scope}`)
-          }
-        }
+    // Kick off main AXTree + optional DOMSnapshot + optional OOPIF child AXTrees concurrently with meta & scope resolution!
+    const domSnapPromise: Promise<RawDOMSnapshot | null> = options.viewportOnly
+      ? session
+          .send<RawDOMSnapshot>('DOMSnapshot.captureSnapshot', { computedStyles: [] })
+          .catch(() => null)
+      : Promise.resolve(null)
+    const mainAxPromise = session.send<{ nodes: RawAXNode[] }>('Accessibility.getFullAXTree')
+
+    const childSessions = options.includeIframes !== false && !options.scope ? session.getChildSessions() : []
+    const childAxPromises = childSessions.map(async (child) => {
+      try {
+        await session.ensureChildAccessibility(child.sessionId)
+        const childRes = await session.send<{ nodes: RawAXNode[] }>(
+          'Accessibility.getFullAXTree',
+          {},
+          { sessionId: child.sessionId },
+        )
+        return { child, nodes: childRes.nodes ?? [] }
+      } catch {
+        return { child, nodes: [] as RawAXNode[] }
       }
-    }
+    })
+
+    // Resolve optional scope element in parallel with meta + AXTree
+    const scopePromise: Promise<number | undefined> = (async () => {
+      if (!options.scope) return undefined
+      const existingRef = this.getRef(session.tabId, options.scope)
+      if (existingRef) return existingRef.backendDOMNodeId
+      const doc = await session.send<{ root: { nodeId: number } }>('DOM.getDocument', { depth: 0 })
+      const found = await session
+        .send<{ nodeId: number }>('DOM.querySelector', {
+          nodeId: doc.root.nodeId,
+          selector: options.scope,
+        })
+        .catch(() => ({ nodeId: 0 }))
+      if (found.nodeId) {
+        const desc = await session.send<{ node: { backendNodeId: number } }>('DOM.describeNode', {
+          nodeId: found.nodeId,
+        })
+        return desc.node.backendNodeId
+      }
+      // Deep Shadow DOM / role fallback
+      const evalFound = await session
+        .send<{ result?: { objectId?: string } }>('Runtime.evaluate', {
+          expression: `(() => {
+            const raw = ${JSON.stringify(options.scope)};
+            const roleMatch = /^role=([a-z0-9_-]+)$/i.exec(raw.trim());
+            const queue = [document];
+            while (queue.length) {
+              const root = queue.shift();
+              if (roleMatch) {
+                const hit = root.querySelector('[role="' + roleMatch[1] + '"], ' + roleMatch[1]);
+                if (hit) return hit;
+              } else {
+                try {
+                  const hit = root.querySelector(raw);
+                  if (hit) return hit;
+                } catch {}
+              }
+              for (const el of root.querySelectorAll('*')) {
+                if (el.shadowRoot) queue.push(el.shadowRoot);
+              }
+            }
+            return null;
+          })()`,
+        })
+        .catch(() => null)
+      if (evalFound?.result?.objectId) {
+        const desc = await session.send<{ node: { backendNodeId: number } }>('DOM.describeNode', {
+          objectId: evalFound.result.objectId,
+        })
+        return desc.node.backendNodeId
+      }
+      throw new Error(`Snapshot scope selector not found: ${options.scope}`)
+    })()
+
+    const [meta, rawDomSnap, mainRes, scopeBackendNodeId, childResults] = await Promise.all([
+      metaPromise,
+      domSnapPromise,
+      mainAxPromise,
+      scopePromise,
+      Promise.all(childAxPromises),
+    ])
+
+    const m = meta.result?.value
+    const url = m?.url ?? ''
+    const title = m?.title ?? ''
+    const scrollInfo =
+      m && m.scrollHeight > m.vh + 20
+        ? ` | Viewport: ${m.vw}x${m.vh} | Scroll: ${m.scrollY}/${m.scrollHeight}px (${Math.min(100, Math.round(((m.scrollY + m.vh) / m.scrollHeight) * 100))}%)`
+        : m?.vw
+          ? ` | Viewport: ${m.vw}x${m.vh}`
+          : ''
 
     const visibleBackendNodeIds =
       options.viewportOnly && m?.vw && m?.vh
-        ? await collectViewportVisibleBackendIds(session, {
+        ? extractVisibleBackendIds(rawDomSnap, {
             vw: m.vw,
             vh: m.vh,
             scrollX: m.scrollX ?? 0,
@@ -680,8 +708,6 @@ export class SnapshotEngine {
           })
         : undefined
 
-    // Main frame AXTree
-    const mainRes = await session.send<{ nodes: RawAXNode[] }>('Accessibility.getFullAXTree')
     const mainNodes = mainRes.nodes ?? []
 
     // If scope targets a Web Component / Shadow host or generic wrapper omitted from AXTree,
@@ -728,34 +754,23 @@ export class SnapshotEngine {
     const allRefs: Record<string, RefTarget> = { ...mainFormatted.refs }
     let nextRef = mainFormatted.nextRefIndex
 
-    // Include attached OOPIF child iframe sessions
-    if (options.includeIframes !== false && !scopeBackendNodeId) {
-      for (const child of session.getChildSessions()) {
-        try {
-          await session.send('Accessibility.enable', {}, { sessionId: child.sessionId }).catch(() => {})
-          const childRes = await session.send<{ nodes: RawAXNode[] }>(
-            'Accessibility.getFullAXTree',
-            {},
-            { sessionId: child.sessionId },
-          )
-          const formatted = formatAXTree(childRes.nodes ?? [], {
-            sessionId: child.sessionId,
-            includeText: options.includeText,
-            interactiveOnly: options.interactiveOnly,
-            maxDepth: options.maxDepth,
-            startingRefIndex: nextRef,
-          })
-          if (formatted.lines.length > 0) {
-            allLines.push(`- iframe "${cleanText(child.url, 100)}":`)
-            for (const line of formatted.lines) {
-              allLines.push(`  ${line}`)
-            }
-            Object.assign(allRefs, formatted.refs)
-            nextRef = formatted.nextRefIndex
-          }
-        } catch {
-          // Ignore detached or inaccessible child frames
+    // Merge OOPIF child iframe results in deterministic order
+    for (const { child, nodes } of childResults) {
+      if (!nodes.length) continue
+      const formatted = formatAXTree(nodes, {
+        sessionId: child.sessionId,
+        includeText: options.includeText,
+        interactiveOnly: options.interactiveOnly,
+        maxDepth: options.maxDepth,
+        startingRefIndex: nextRef,
+      })
+      if (formatted.lines.length > 0) {
+        allLines.push(`- iframe "${cleanText(child.url, 100)}":`)
+        for (const line of formatted.lines) {
+          allLines.push(`  ${line}`)
         }
+        Object.assign(allRefs, formatted.refs)
+        nextRef = formatted.nextRefIndex
       }
     }
 
@@ -839,6 +854,34 @@ export class SnapshotEngine {
 
   getAllRefs(tabId: number): Record<string, RefTarget> {
     return this.refMaps.get(tabId) ?? {}
+  }
+
+  /**
+   * Registers a resolved element into the tab's ref map (reusing an existing `[eN]` ref if
+   * the same `backendDOMNodeId` + `sessionId` is already tracked) without clobbering existing refs.
+   */
+  registerRef(tabId: number, entry: Omit<RefTarget, 'ref'>): string {
+    let map = this.refMaps.get(tabId)
+    if (!map) {
+      map = {}
+      this.refMaps.set(tabId, map)
+    }
+    for (const [ref, existing] of Object.entries(map)) {
+      if (existing.backendDOMNodeId === entry.backendDOMNodeId && existing.sessionId === entry.sessionId) {
+        return ref
+      }
+    }
+    let maxIdx = 0
+    for (const ref of Object.keys(map)) {
+      const m = /^e(\d+)$/.exec(ref)
+      if (m) {
+        const n = Number(m[1])
+        if (n > maxIdx) maxIdx = n
+      }
+    }
+    const newRef = `e${maxIdx + 1}`
+    map[newRef] = { ref: newRef, ...entry }
+    return newRef
   }
 
   clearTab(tabId: number): void {
