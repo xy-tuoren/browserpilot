@@ -131,7 +131,10 @@ export function computeChromeExtensionId(
 ): string {
   let payload: Buffer
   if (platform === 'win32') {
-    const resolved = path.win32.resolve(unpackedDir).replace(/^([a-z]):/, (_, d: string) => `${d.toUpperCase()}:`)
+    const resolved = path.win32
+      .resolve(unpackedDir)
+      .replace(/^\\\\\?\\/, '')
+      .replace(/^([a-z]):/, (_, d: string) => `${d.toUpperCase()}:`)
     const normalized = resolved.length > 3 ? resolved.replace(/\\+$/, '') : resolved
     payload = Buffer.from(normalized, 'utf16le')
   } else {

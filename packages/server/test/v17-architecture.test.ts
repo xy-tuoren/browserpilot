@@ -355,14 +355,19 @@ describe('v1.7 Architecture, Schema Validation, Lifecycle GC, Windows Host & Typ
     expect(contentJs).not.toMatch(/^\s*(import|export)\s/m)
 
     // 4. External TypeScript SDK consumer compiles against browserpilot-cdp .d.ts with ZERO workspace leaks
-    const tmpConsumer = await fs.mkdtemp(path.join(os.tmpdir(), 'bp-sdk-consumer-'))
+    const tmpConsumer = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'bp-sdk-consumer-')))
     try {
-      await fs.mkdir(path.join(tmpConsumer, 'node_modules'), { recursive: true })
+      await fs.mkdir(path.join(tmpConsumer, 'node_modules', '@types'), { recursive: true })
       const linkType = process.platform === 'win32' ? 'junction' : 'dir'
       await fs.symlink(serverRoot, path.join(tmpConsumer, 'node_modules', 'browserpilot-cdp'), linkType)
       await fs.symlink(
-        path.join(serverRoot, 'node_modules', '@types'),
-        path.join(tmpConsumer, 'node_modules', '@types'),
+        await fs.realpath(path.join(repoRoot, 'node_modules', '@types', 'node')),
+        path.join(tmpConsumer, 'node_modules', '@types', 'node'),
+        linkType,
+      )
+      await fs.symlink(
+        await fs.realpath(path.join(serverRoot, 'node_modules', '@types', 'ws')),
+        path.join(tmpConsumer, 'node_modules', '@types', 'ws'),
         linkType,
       )
 
@@ -413,7 +418,12 @@ describe('v1.7 Architecture, Schema Validation, Lifecycle GC, Windows Host & Typ
       )
 
       const tscBin = path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc')
-      await execFileAsync(process.execPath, [tscBin, '-p', path.join(tmpConsumer, 'tsconfig.json')])
+      try {
+        await execFileAsync(process.execPath, [tscBin, '-p', path.join(tmpConsumer, 'tsconfig.json')])
+      } catch (err) {
+        const e = err as { message?: string; stdout?: string; stderr?: string }
+        throw new Error(`SDK consumer tsc failed:\n${e.stdout || ''}\n${e.stderr || ''}\n${e.message || ''}`)
+      }
     } finally {
       await fs.rm(tmpConsumer, { recursive: true, force: true }).catch(() => {})
     }

@@ -456,8 +456,9 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
     if (!chromeOk) return
 
     // Build extension directly into isolated temp dir pointed at our running Daemon WS port + token
+    // Canonicalize path before passing to Chrome so Windows 8.3 short temp paths (RUNNER~1) match Chrome's path hash
     const extPkgDir = path.resolve(import.meta.dirname, '..', '..', 'extension')
-    const tempExtDir = await fs.mkdtemp(path.join(os.tmpdir(), 'browserpilot-srv-ext-'))
+    const tempExtDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'browserpilot-srv-ext-')))
     tmpDirs.push(tempExtDir)
     execFileSync(process.execPath, [path.join(extPkgDir, 'build.mjs')], {
       env: {
