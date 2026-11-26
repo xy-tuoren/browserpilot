@@ -34,7 +34,7 @@ await esbuild.build({
   format: 'esm',
   platform: 'node',
   target: ['node22'],
-  sourcemap: true,
+  sourcemap: process.env.BROWSERPILOT_SOURCEMAP === '1',
   define: {
     __BROWSERPILOT_SKILL_MD__: JSON.stringify(skillMdRaw),
   },

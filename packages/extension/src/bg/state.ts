@@ -211,21 +211,33 @@ export function syncContextMenuLanguage(): void {
   } catch {}
 }
 
-export async function loadConfig(): Promise<void> {
-  const stored = await chrome.storage.local.get(STORAGE_CONFIG_KEY)
-  const saved = stored[STORAGE_CONFIG_KEY] as Partial<ExtensionConfig> | undefined
-  if (saved) {
-    bgState.config = {
-      ...DEFAULT_CONFIG,
-      ...saved,
-      language: saved.language === 'en' ? 'en' : 'zh',
-      domainRules: {
-        blockedDomains: saved.domainRules?.blockedDomains ?? [],
-        allowedDomains: saved.domainRules?.allowedDomains ?? [],
-      },
+let configLoaded = false
+let configLoadInFlight: Promise<void> | null = null
+
+export function loadConfig(): Promise<void> {
+  if (configLoaded) return Promise.resolve()
+  if (configLoadInFlight) return configLoadInFlight
+  configLoadInFlight = (async () => {
+    try {
+      const stored = await chrome.storage.local.get(STORAGE_CONFIG_KEY)
+      const saved = stored[STORAGE_CONFIG_KEY] as Partial<ExtensionConfig> | undefined
+      if (saved) {
+        bgState.config = {
+          ...DEFAULT_CONFIG,
+          ...saved,
+          language: saved.language === 'en' ? 'en' : 'zh',
+          domainRules: {
+            blockedDomains: saved.domainRules?.blockedDomains ?? [],
+            allowedDomains: saved.domainRules?.allowedDomains ?? [],
+          },
+        }
+      }
+      configLoaded = true
+    } finally {
+      configLoadInFlight = null
     }
-  }
-  syncContextMenuLanguage()
+  })()
+  return configLoadInFlight
 }
 
 export function pushControlBanner(

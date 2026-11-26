@@ -6,7 +6,7 @@ const root = import.meta.dirname
 const distDir = process.env.BROWSERPILOT_OUT_DIR
   ? path.resolve(process.env.BROWSERPILOT_OUT_DIR)
   : path.join(root, 'dist')
-const sourcemap = process.env.BROWSERPILOT_NO_SOURCEMAP !== '1'
+const sourcemap = process.env.BROWSERPILOT_SOURCEMAP === '1'
 
 await fs.rm(distDir, { recursive: true, force: true })
 await fs.mkdir(path.join(distDir, 'icons'), { recursive: true })

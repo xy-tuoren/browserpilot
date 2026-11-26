@@ -4,7 +4,7 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { WebSocketServer, type WebSocket } from 'ws'
+import { WebSocketServer, WebSocket as WsClient, type WebSocket } from 'ws'
 import {
   ExtensionBridgeTransport,
   SessionManager,
@@ -80,6 +80,102 @@ describe('@browserpilot/extension real Chrome MV3 zero-click E2E', () => {
   let manager: SessionManager | null = null
   let available = false
   let helloPayload: Record<string, unknown> | null = null
+  let cdpPort = 0
+
+  async function queryDeveloperPrivateErrors(reloadAndRecheck = false): Promise<{
+    isActive: boolean
+    manifestErrors: unknown[]
+    runtimeErrors: Array<{ message: string; contextUrl?: string }>
+    runtimeWarnings: unknown[]
+    installWarnings: unknown[]
+  }> {
+    const versionInfo = (await (await fetch(`http://127.0.0.1:${cdpPort}/json/version`)).json()) as {
+      webSocketDebuggerUrl: string
+    }
+    const bws = new WsClient(versionInfo.webSocketDebuggerUrl)
+    await new Promise<void>((res, rej) => {
+      bws.once('open', () => res())
+      bws.once('error', rej)
+    })
+    let seq = 1
+    const pending = new Map<number, { res: (v: unknown) => void; rej: (e: Error) => void }>()
+    bws.on('message', (raw) => {
+      const msg = JSON.parse(raw.toString('utf8')) as {
+        id?: number
+        result?: unknown
+        error?: { message: string }
+      }
+      if (msg.id && pending.has(msg.id)) {
+        const slot = pending.get(msg.id)!
+        pending.delete(msg.id)
+        if (msg.error) slot.rej(new Error(msg.error.message))
+        else slot.res(msg.result)
+      }
+    })
+    const sendBrowserCdp = <T = Record<string, unknown>>(
+      method: string,
+      params: Record<string, unknown> = {},
+      sessionId?: string,
+    ): Promise<T> => {
+      const id = seq++
+      return new Promise<T>((res, rej) => {
+        pending.set(id, { res: res as (v: unknown) => void, rej })
+        bws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }))
+      })
+    }
+    try {
+      const { targetId } = await sendBrowserCdp<{ targetId: string }>('Target.createTarget', {
+        url: 'chrome://extensions',
+        background: true,
+      })
+      await new Promise((r) => setTimeout(r, 400))
+      const { sessionId } = await sendBrowserCdp<{ sessionId: string }>('Target.attachToTarget', {
+        targetId,
+        flatten: true,
+      })
+      const evalRes = await sendBrowserCdp<{
+        result: {
+          value: {
+            isActive: boolean
+            manifestErrors: unknown[]
+            runtimeErrors: Array<{ message: string; contextUrl?: string }>
+            runtimeWarnings: unknown[]
+            installWarnings: unknown[]
+          }
+        }
+      }>(
+        'Runtime.evaluate',
+        {
+          expression: `(async () => {
+            await chrome.developerPrivate.updateProfileConfiguration({ inDeveloperMode: true });
+            const [ext] = await chrome.developerPrivate.getExtensionsInfo();
+            if (!ext.errorCollection.isActive) {
+              await chrome.developerPrivate.updateExtensionConfiguration({ extensionId: ext.id, errorCollection: true });
+            }
+            if (${reloadAndRecheck}) {
+              await chrome.developerPrivate.reload(ext.id, { failQuietly: true });
+              await new Promise((r) => setTimeout(r, 900));
+            }
+            const [fresh] = await chrome.developerPrivate.getExtensionsInfo();
+            return {
+              isActive: Boolean(fresh.errorCollection?.isActive),
+              manifestErrors: fresh.manifestErrors ?? [],
+              runtimeErrors: fresh.runtimeErrors ?? [],
+              runtimeWarnings: fresh.runtimeWarnings ?? [],
+              installWarnings: fresh.installWarnings ?? [],
+            };
+          })()`,
+          awaitPromise: true,
+          returnByValue: true,
+        },
+        sessionId,
+      )
+      await sendBrowserCdp('Target.closeTarget', { targetId }).catch(() => {})
+      return evalRes.result.value
+    } finally {
+      bws.close()
+    }
+  }
 
   beforeAll(async () => {
     available = await hasChromeForTesting()
@@ -140,6 +236,7 @@ describe('@browserpilot/extension real Chrome MV3 zero-click E2E', () => {
     })
 
     // Launch real Google Chrome for Testing with the compiled MV3 extension loaded and an already-open tab!
+    cdpPort = await getFreePort()
     userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'browserpilot-ext-profile-'))
     chromeProc = spawn(
       CHROME_FOR_TESTING,
@@ -148,7 +245,9 @@ describe('@browserpilot/extension real Chrome MV3 zero-click E2E', () => {
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-gpu',
+        '--enable-features=ExtensionsMenuAccessControl',
         ...(process.env.CI ? ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] : []),
+        `--remote-debugging-port=${cdpPort}`,
         `--disable-extensions-except=${tempExtDir}`,
         `--load-extension=${tempExtDir}`,
         `--user-data-dir=${userDataDir}`,
@@ -158,6 +257,9 @@ describe('@browserpilot/extension real Chrome MV3 zero-click E2E', () => {
     )
 
     const socket = await connectedSocketPromise
+    // Enable Chrome's real chrome://extensions Developer Mode ErrorConsole BEFORE running the E2E suite!
+    const initialErrCheck = await queryDeveloperPrivateErrors()
+    expect(initialErrCheck.isActive).toBe(true)
     const channel: ExtensionChannel = {
       send(msg) {
         socket.send(JSON.stringify(msg))
@@ -297,5 +399,13 @@ describe('@browserpilot/extension real Chrome MV3 zero-click E2E', () => {
     const detachedTab = afterDetach.find((t) => t.tabId === existing!.tabId)
     expect(detachedTab?.attached).toBe(false)
     expect(detachedTab?.groupId).toBeUndefined()
+
+    // 11. Verify Chrome's real chrome://extensions Error Console recorded ZERO errors or warnings across run + live reload
+    const finalErrCheck = await queryDeveloperPrivateErrors(true)
+    expect(finalErrCheck.isActive).toBe(true)
+    expect(finalErrCheck.manifestErrors).toEqual([])
+    expect(finalErrCheck.runtimeErrors).toEqual([])
+    expect(finalErrCheck.runtimeWarnings).toEqual([])
+    expect(finalErrCheck.installWarnings).toEqual([])
   }, 30_000)
 })

@@ -222,29 +222,42 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener((details) => {
 })
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.removeAll(() => {
-    void chrome.runtime.lastError
-    chrome.contextMenus.create(
-      {
-        id: CONTEXT_MENU_PIN_ID,
-        title: getContextMenuPinTitle(bgState.config.language),
-        contexts: ['all'],
-      },
-      () => {
+  void loadConfig()
+    .catch(() => {})
+    .finally(() => {
+      chrome.contextMenus.removeAll(() => {
         void chrome.runtime.lastError
-      },
-    )
-  })
+        chrome.contextMenus.create(
+          {
+            id: CONTEXT_MENU_PIN_ID,
+            title: getContextMenuPinTitle(bgState.config.language),
+            contexts: ['all'],
+          },
+          () => {
+            void chrome.runtime.lastError
+          },
+        )
+      })
+    })
 
-  // Refresh content scripts in already-open http(s) tabs so orphaned capsules from prior extension reloads are cleaned immediately
+  // Remove any orphaned #__browserpilot_ui_host capsules left in active loaded http(s) tabs before extension reload
+  // without waking discarded Memory-Saver tabs or injecting full scripts into unrelated pages
   void chrome.tabs
     .query({ url: ['http://*/*', 'https://*/*'] })
     .then(async (tabs) => {
       for (const t of tabs) {
-        if (t.id !== undefined && !isRestrictedUrl(t.url)) {
-          await chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['content-script.js'] }).catch(() => {})
+        if (t.id !== undefined && !t.discarded && t.status === 'complete' && !isRestrictedUrl(t.url)) {
+          await chrome.scripting
+            .executeScript({
+              target: { tabId: t.id },
+              func: () => {
+                document.getElementById('__browserpilot_ui_host')?.remove()
+              },
+            })
+            .catch(() => {})
         }
       }
+      broadcastBannerToAttachedTabs()
     })
     .catch(() => {})
 })
