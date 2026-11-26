@@ -42,7 +42,7 @@ jobs:
           pnpm -r --workspace-concurrency=1 test
       - name: Publish browserpilot-cdp to npm (OIDC Trusted Publishing)
         working-directory: packages/server
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --tag latest
       - name: Package Extension ZIP & Update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
