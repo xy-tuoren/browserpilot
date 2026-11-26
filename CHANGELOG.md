@@ -6,6 +6,8 @@ All notable changes to **BrowserPilot** (`browserpilot-cdp`) are documented in t
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-26
+
 ### Added
 - **Full Feature Parity & Beyond Claude in Chrome / ChatGPT Browser Extension (`browser_find`, `browser_gif`, `browser_tabs_context`, `browser_shortcuts`, `browser_schedule`, `browser_memory`, `Trust This Site`)**:
   - **Bilingual Natural-Language Fuzzy Element Finder (`browser_find` / `page.find` / `browserpilot find`)**: Multi-signal semantic scorer (English + Chinese synonyms, accessible name, visible text, placeholder, section heading context, role/tag intent) piercing open Shadow DOM, same-origin iframes, and cross-origin OOPIF frames — automatically registering live clickable `[eN]` refs without needing a full-page snapshot (included directly in the default 20-tool `core` MCP profile!).
