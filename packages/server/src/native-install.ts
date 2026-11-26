@@ -122,11 +122,23 @@ export function getNativeMessagingHostDirs(platform: NodeJS.Platform = process.p
 /**
  * Computes Chromium's exact deterministic 32-char extension ID (a-p alphabet)
  * for an unpacked extension loaded from `unpackedDir`.
- * Matches Chrome's `crx_file::id_util::GenerateIdForPath`.
+ * Matches Chrome's `crx_file::id_util::GenerateIdForPath` on both POSIX (UTF-8)
+ * and Windows (UTF-16LE with uppercase drive letter).
  */
-export function computeChromeExtensionId(unpackedDir: string): string {
-  const normalized = path.resolve(unpackedDir)
-  const hash = crypto.createHash('sha256').update(normalized, 'utf8').digest('hex').slice(0, 32)
+export function computeChromeExtensionId(
+  unpackedDir: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  let payload: Buffer
+  if (platform === 'win32') {
+    const resolved = path.win32.resolve(unpackedDir).replace(/^([a-z]):/, (_, d: string) => `${d.toUpperCase()}:`)
+    const normalized = resolved.length > 3 ? resolved.replace(/\\+$/, '') : resolved
+    payload = Buffer.from(normalized, 'utf16le')
+  } else {
+    const normalized = platform === process.platform ? path.resolve(unpackedDir) : path.posix.resolve(unpackedDir)
+    payload = Buffer.from(normalized, 'utf8')
+  }
+  const hash = crypto.createHash('sha256').update(payload).digest('hex').slice(0, 32)
   return hash.replace(/[0-9a-f]/g, (ch) => String.fromCharCode(97 + Number.parseInt(ch, 16)))
 }
 

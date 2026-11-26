@@ -149,9 +149,15 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
   })
 
   it('computes deterministic Chrome unpacked extension IDs and normalizes bare navigation URLs', () => {
-    const extId = computeChromeExtensionId('/Users/xy/code/GeoPerch/extensions/session-export')
+    const extId = computeChromeExtensionId('/Users/xy/code/GeoPerch/extensions/session-export', 'darwin')
     expect(extId).toBe('ijmnhnbofbelbelnekloahnfjdecbpcm')
     expect(extId).toMatch(/^[a-p]{32}$/)
+
+    // Windows GenerateIdForPath normalizes drive letter casing and hashes UTF-16LE bytes
+    const winIdLower = computeChromeExtensionId('c:\\Users\\demo\\.browserpilot\\extension', 'win32')
+    const winIdUpper = computeChromeExtensionId('C:\\Users\\demo\\.browserpilot\\extension\\', 'win32')
+    expect(winIdLower).toBe(winIdUpper)
+    expect(winIdLower).toMatch(/^[a-p]{32}$/)
 
     expect(normalizeNavigationUrl('example.com')).toBe('https://example.com')
     expect(normalizeNavigationUrl('localhost:3000/app')).toBe('http://localhost:3000/app')
@@ -482,16 +488,16 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
 
     // Wait for real MV3 extension to register with Daemon
     const client = new DaemonClient({ host: '127.0.0.1', port: daemonPort, token: daemonToken })
-    let connected = false
+    let connectedClient: { extensionId?: string } | undefined
     for (let i = 0; i < 40; i++) {
       const h = await client.health()
-      if (h.clients.some((c) => c.transport === 'extension-ws')) {
-        connected = true
-        break
-      }
+      connectedClient = h.clients.find((c) => c.transport === 'extension-ws')
+      if (connectedClient) break
       await new Promise((r) => setTimeout(r, 150))
     }
-    expect(connected).toBe(true)
+    expect(connectedClient).toBeTruthy()
+    const canonicalExtDir = await fs.realpath(tempExtDir)
+    expect(connectedClient?.extensionId).toBe(computeChromeExtensionId(canonicalExtDir))
 
     // Run real CLI binary against the daemon using isolated BROWSERPILOT_HOME
     const cliHome = await fs.mkdtemp(path.join(os.tmpdir(), 'browserpilot-cli-home-'))

@@ -256,7 +256,7 @@ export class ScreenRecorder {
     if (spawnErr) {
       await this.cancel()
       throw new Error(
-        `ffmpeg failed to start (install via "brew install ffmpeg" or "apt install ffmpeg"): ${(spawnErr as Error).message}`,
+        `ffmpeg failed to start (install via "brew install ffmpeg", "apt install ffmpeg", or "winget install Gyan.FFmpeg"): ${(spawnErr as Error).message}`,
       )
     }
 

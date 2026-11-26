@@ -40,10 +40,19 @@ jobs:
           test -x "$CHROME_BIN"
           echo "BROWSERPILOT_CHROME_BIN=$CHROME_BIN" >> "$GITHUB_ENV"
           echo "Using Chrome for Testing: $CHROME_BIN"
-      - name: Install Chrome for Testing (Windows)
+      - name: Install ffmpeg & Chrome for Testing (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+            choco install ffmpeg -y --no-progress
+          }
+          $chocoBin = "C:\ProgramData\chocolatey\bin"
+          if (Test-Path $chocoBin) {
+            "$chocoBin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            $env:Path = "$chocoBin;$env:Path"
+          }
+          ffmpeg -version | Select-Object -First 1
           $out = npx --yes @puppeteer/browsers install chrome@stable --path "$env:USERPROFILE\.cache\browserpilot-chrome"
           $lastLine = ($out | Select-Object -Last 1).ToString().Trim()
           $chromeBin = ($lastLine -replace '^[^\s]+\s+', '').Trim()

@@ -358,11 +358,12 @@ describe('v1.7 Architecture, Schema Validation, Lifecycle GC, Windows Host & Typ
     const tmpConsumer = await fs.mkdtemp(path.join(os.tmpdir(), 'bp-sdk-consumer-'))
     try {
       await fs.mkdir(path.join(tmpConsumer, 'node_modules'), { recursive: true })
-      await fs.symlink(serverRoot, path.join(tmpConsumer, 'node_modules', 'browserpilot-cdp'), 'dir')
+      const linkType = process.platform === 'win32' ? 'junction' : 'dir'
+      await fs.symlink(serverRoot, path.join(tmpConsumer, 'node_modules', 'browserpilot-cdp'), linkType)
       await fs.symlink(
         path.join(serverRoot, 'node_modules', '@types'),
         path.join(tmpConsumer, 'node_modules', '@types'),
-        'dir',
+        linkType,
       )
 
       await fs.writeFile(
