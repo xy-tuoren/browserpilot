@@ -6,6 +6,8 @@ All notable changes to **BrowserPilot** (`browserpilot-cdp`) are documented in t
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-26
+
 ### Changed
 - **Full Simplified Chinese Default Across All In-Page UI Surfaces (`packages/extension`, `packages/core/src/page/handoff.ts`)**:
   - In-page floating control capsule (`运行中` / `已暂停` / `暂停` / `恢复` / `接管`), live action status & highlight labels (`正在点击` / `正在输入` / `向下滚动` / `等待你操作…`), Element Picker / Pin / Codegen assertion toasts, right-click context menu (`固定此元素到 BrowserPilot`), and Human Handoff card (`请你手动完成操作` / `我已完成，继续执行` / `取消`) now all default to Simplified Chinese (`zh`) and follow the Popup / Side Panel `中文` <-> `EN` toggle.
@@ -15,8 +17,8 @@ All notable changes to **BrowserPilot** (`browserpilot-cdp`) are documented in t
 - **Multi-Browser / Multi-Profile Routing & Auto-Start Daemon Service (`packages/server/src/daemon.ts`, `cli/service.ts`)**:
   - Added `browserpilot clients`, `browserpilot daemon use <clientId|browser|profile>`, and `--browser` / `--profile` CLI targeting across concurrent Chrome, Edge, Brave, Opera, Vivaldi, and Direct-CDP connections.
   - Added opt-in cross-platform user auto-start daemon service commands (`browserpilot daemon install-service` / `uninstall-service`) for macOS LaunchAgents, Linux `systemd --user`, and Windows Startup.
-- **Windows CI (`windows-latest`) & Chrome ErrorConsole Gate (`.github/workflows/ci.yml`, `packages/extension/test/extension-e2e.test.ts`)**:
-  - Expanded GitHub Actions CI matrix to `ubuntu-latest`, `macos-latest`, and `windows-latest` with real Chrome for Testing, and enforced zero `manifestErrors`, `runtimeErrors`, and `runtimeWarnings` via `chrome.developerPrivate.getExtensionsInfo()`.
+- **Windows CI (`windows-latest`), UTF-16LE Extension IDs & Chrome ErrorConsole Gate (`.github/workflows/ci.yml`, `packages/server/src/native-install.ts`, `packages/extension/test/extension-e2e.test.ts`)**:
+  - Expanded GitHub Actions CI matrix to `ubuntu-latest`, `macos-latest`, and `windows-latest` with real Chrome for Testing + `ffmpeg`, fixed Windows `computeChromeExtensionId()` to match Chromium's `GenerateIdForPath` (UTF-16LE + uppercase drive letter), and enforced zero `manifestErrors`, `runtimeErrors`, and `runtimeWarnings` via `chrome.developerPrivate.getExtensionsInfo()`.
 - **Real-World SPA Interaction Hardening (`packages/core/src/page/{forms,context,input}.ts`, `page-controller.ts`, `tools/interaction.ts`)**:
   - Hardened `fill()` for ProseMirror/Slate/TipTap/Draft.js `contenteditable` editors via native CDP `Cmd/Ctrl+A` + `Backspace` + `insertText` fallback.
   - Added virtual-scroll finder `page.scrollUntil(target, opts)` (`browser_scroll` `untilTarget` / CLI `scroll --until`) for lazily mounted infinite lists and tables.
@@ -34,7 +36,7 @@ All notable changes to **BrowserPilot** (`browserpilot-cdp`) are documented in t
 - **Interactive-Only Compact Snapshot Mode (`snapshot -i` / `--interactive` / `interactiveOnly: true`)**:
   - Emits only interactive controls (`[e1]`, `[e2]`...) and enclosing container landmarks that actually hold interactive descendants, cutting snapshot token usage by ~60–75% on content-heavy pages while maintaining independent full vs interactive diff baselines.
 - **Tiered Low-Token MCP Tool Profiles (`packages/server/src/mcp.ts`, `cli.ts`)**:
-  - `browserpilot mcp` now advertises a lean **19-tool `core` profile** (+ `browser_exec` Code Mode) by default, slashing upfront MCP schema context tokens by **>65%**; pass `--full` (or `BROWSERPILOT_MCP_CAPS=all`) for all 52 tools, or `--caps=interaction,extraction,devtools,context,media` to enable specific tool groups.
+  - `browserpilot mcp` now advertises a lean **19-tool `core` profile** (+ `browser_exec` Code Mode) by default (`12.2 KB` / ~3,038 schema tokens vs `30.8 KB` / ~7,711 tokens in `--full`, cutting upfront MCP schema tokens by **60.6%**); pass `--full` (or `BROWSERPILOT_MCP_CAPS=all`) for all 53 tools, or `--caps=interaction,extraction,devtools,context,media` to enable specific tool groups.
 - **Playwright Misuse Guidance Guards in `exec` Sandbox (`packages/core/src/session-manager.ts`)**:
   - Intercepts accidental `page.*`, `context.*`, `browser.*`, `expect()`, and `require('playwright' | 'puppeteer')` calls inside `browserpilot exec` with one-line correction hints pointing to BrowserPilot's pure-CDP globals without interfering with local variables.
 - **Idle Unpacked Extension Auto-Reload & Stale-Memory Diagnostics (`packages/extension/src/bg/rpc.ts`, `daemon.ts`, `cli/setup-doctor.ts`)**:
