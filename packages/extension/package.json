@@ -1,6 +1,6 @@
 {
   "name": "@browserpilot/extension",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "private": true,
   "type": "module",
   "dependencies": {
@@ -14,7 +14,7 @@
   },
   "scripts": {
     "build": "node scripts/gen-icons.mjs && node build.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
     "test": "vitest run",
     "clean": "rm -rf dist"
   }

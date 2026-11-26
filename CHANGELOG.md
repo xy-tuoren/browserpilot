@@ -2,6 +2,35 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
+## [1.7.0] - 2026-11-25
+
+### Added
+- **Unified MCP / HTTP Tool Schema Validator & Safe Type Coercer (`packages/server/src/tools/validate.ts`, `tools.ts`)**:
+  - Validates `required` fields, `enum` values, nested `object` / `array` schemas, and primitive types across all **52** MCP / HTTP tools before execution.
+  - Safely coerces unambiguous stringified primitives (`"tabId": "42"` -> `42`, `"force": "true"` -> `true`) while rejecting malformed inputs (`"tabId": "abc"`) with explicit errors instead of silently falling back to `undefined` and acting on the wrong active browser tab.
+- **Complete Self-Contained TypeScript SDK & ~74% Smaller npm Package (`packages/server/src/index.ts`, `build.mjs`, `package.json`)**:
+  - Re-exports the full `@browserpilot/protocol` and `@browserpilot/core` APIs (`DirectCDPTransport`, `ExtensionBridgeTransport`, `SessionManager`, `BrowserPilotTab`, `PageController`, `Locator`, `TraceRecorder`, `computeStableDomSelector`, etc.) directly from `browserpilot-cdp` with self-contained `.d.ts` declarations (`types` & `exports['.'].types`).
+  - Enabled ESM code-splitting (`splitting: true`) across `dist/cli.js`, `dist/index.js`, and `dist/native-host.js` and excluded `.map` bloat from the published tarball, shrinking unpacked npm install size from **3.2 MB -> 841 KB (-74%)** and compressed tarball size from **739 KB -> 217 KB (-71%)**.
+- **Windows (`win32`) Chrome Native Messaging Host Support (`packages/server/src/native-install.ts`, `cli/setup-doctor.ts`)**:
+  - Added `%LOCALAPPDATA%` user-data discovery, `browserpilot-native-host.cmd` launcher generation, and `HKCU\Software\...\NativeMessagingHosts\com.browserpilot.bridge` registry registration for Chrome, Chromium, Brave, and Edge on Windows, plus Windows Chrome/Edge binary detection.
+- **Atomic Version Sync & Single-Source Skill Documentation (`scripts/sync-version.mjs`, `packages/server/src/skill-doc.ts`)**:
+  - Added `pnpm version:sync <X.Y.Z>` / `pnpm version:check` across all 7 package, manifest, and protocol constant files, and embedded `skills/browserpilot/SKILL.md` directly into `browserpilot-cdp` at build time to eliminate documentation drift.
+
+### Changed
+- **Second-Wave Modular Architecture Split (Zero Breaking Public API Changes)**:
+  - Split `packages/core/src/page-controller.ts` (1,238 -> 675 lines) by extracting `packages/core/src/page/{forms,context}.ts` and deduplicating viewport rect + `frameOffset` evaluation in `packages/core/src/page/actionability.ts`.
+  - Split `packages/core/src/network-inspector.ts` (801 -> 410 lines) by extracting active CDP `Fetch` interception & Playwright-style `route()` into `packages/core/src/network/router.ts`.
+  - Split `packages/core/src/locator.ts` (933 -> 196 lines) into `packages/core/src/locator/{parser,evaluator}.ts` + fluent `Locator` facade.
+  - Extracted canonical cross-realm-safe `computeStableDomSelector()` into `@browserpilot/protocol`, unifying DOM selector generation across `locator`, `dom-extract`, `action-recorder`, and the Chrome Extension content script.
+  - Split `packages/extension/src/content-script.ts` (778 -> 94 lines) into `packages/extension/src/content/{overlay,picker,codegen}.ts` and bundled `content-script.js` as a classic-script-safe **IIFE** with an idempotent `__browserpilotContentBooted` guard.
+  - Split `packages/server/src/cli.ts` (1,143 -> 109 lines) into `packages/server/src/cli/{args,setup-doctor,daemon-browser,commands}.ts`.
+- **Strict Compiler Hygiene (`tsconfig.base.json`, `packages/*/tsconfig.typecheck.json`)**:
+  - Enabled `noUnusedLocals: true` and `noUnusedParameters: true` workspace-wide and expanded `pnpm typecheck` to cover both `src/**/*.ts` and `test/**/*.ts` across all 4 packages.
+
+### Fixed
+- **Long-Running Daemon Tab & Session Memory GC (`packages/core/src/session-manager.ts`, `extension-transport.ts`, `native-host.ts`)**:
+  - Disposes and evicts closed `BrowserPilotTab` instances (and their buffered console/network histories) on `target_closed`, `target_destroyed`, and `tab.removed` events while preserving state across temporary debugger detaches; added bounded LRU/TTL eviction for idle non-default sessions and capped `pendingOutbound` frames in `native-host.ts`.
+
 ## [1.6.0] - 2026-11-25
 
 ### Added

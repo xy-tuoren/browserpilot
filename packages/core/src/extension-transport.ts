@@ -81,6 +81,8 @@ export class ExtensionBridgeTransport implements CDPTransport {
         } satisfies CDPEventPacket)
       } else if (ev.event === 'tab.detached') {
         this.events.emit('tab-detached', Number(params.tabId), String(params.reason ?? 'detached'))
+      } else if (ev.event === 'tab.removed') {
+        this.events.emit('tab-detached', Number(params.tabId), 'tab_removed')
       } else if (ev.event === 'popup.opened') {
         this.events.emit('popup-opened', {
           openerTabId: Number(params.openerTabId),

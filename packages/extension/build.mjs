@@ -3,7 +3,10 @@ import path from 'node:path'
 import esbuild from 'esbuild'
 
 const root = import.meta.dirname
-const distDir = process.env.BROWSERPILOT_OUT_DIR ? path.resolve(process.env.BROWSERPILOT_OUT_DIR) : path.join(root, 'dist')
+const distDir = process.env.BROWSERPILOT_OUT_DIR
+  ? path.resolve(process.env.BROWSERPILOT_OUT_DIR)
+  : path.join(root, 'dist')
+const sourcemap = process.env.BROWSERPILOT_NO_SOURCEMAP !== '1'
 
 await fs.rm(distDir, { recursive: true, force: true })
 await fs.mkdir(path.join(distDir, 'icons'), { recursive: true })
@@ -15,10 +18,10 @@ const define = {
   __BROWSERPILOT_DEFAULT_TOKEN__: JSON.stringify(process.env.BROWSERPILOT_AUTH_TOKEN || ''),
 }
 
+// Extension pages & MV3 Service Worker (ES modules)
 await esbuild.build({
   entryPoints: {
     background: path.join(root, 'src/background.ts'),
-    'content-script': path.join(root, 'src/content-script.ts'),
     popup: path.join(root, 'src/popup.ts'),
     sidepanel: path.join(root, 'src/sidepanel.ts'),
   },
@@ -27,7 +30,22 @@ await esbuild.build({
   format: 'esm',
   platform: 'browser',
   target: ['chrome120'],
-  sourcemap: true,
+  sourcemap,
+  define,
+})
+
+// Content script (classic script context + chrome.scripting.executeScript):
+// bundle as a self-contained IIFE so top-level bindings never leak or collide.
+await esbuild.build({
+  entryPoints: {
+    'content-script': path.join(root, 'src/content-script.ts'),
+  },
+  outdir: distDir,
+  bundle: true,
+  format: 'iife',
+  platform: 'browser',
+  target: ['chrome120'],
+  sourcemap,
   define,
 })
 

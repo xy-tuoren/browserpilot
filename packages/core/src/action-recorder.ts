@@ -1,6 +1,7 @@
 import {
   compileRecordingArtifacts,
-  compressRecordedSteps,
+   compressRecordedSteps,
+  computeStableDomSelector,
   type ActionRecordingResult,
   type RecordedStep,
 } from '@browserpilot/protocol'
@@ -20,13 +21,10 @@ export function buildCaptureScript(maskPasswords: boolean): string {
 
     const pendingInputs = new Map();
     const lastEmittedValue = new WeakMap();
+    const stableSelector = ${computeStableDomSelector.toString()};
 
     function isElem(node) {
       return Boolean(node && typeof node === 'object' && node.nodeType === 1);
-    }
-
-    function cssEsc(s) {
-      return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : String(s).replace(/([^a-zA-Z0-9_-])/g, '\\\\$1');
     }
 
     function emit(payload) {
@@ -34,117 +32,6 @@ export function buildCaptureScript(maskPasswords: boolean): string {
       if (typeof globalThis.${BINDING_NAME} === 'function') {
         try { globalThis.${BINDING_NAME}(JSON.stringify(payload)); } catch {}
       }
-    }
-
-    function isDynamicId(id) {
-      if (!id) return true;
-      return /^(:r|«r|radix-|headlessui-|mui-|el-id-|rc_select_|react-aria)/i.test(id) || /[0-9a-f]{8}-[0-9a-f]{4}/i.test(id);
-    }
-
-    function findAssociatedLabelText(el, root) {
-      try {
-        const wrap = el.closest && el.closest('label');
-        if (wrap) {
-          const t = (wrap.innerText || wrap.textContent || '').replace(/\\s+/g, ' ').trim();
-          if (t && t.length <= 50) return t;
-        }
-        if (el.id && root.querySelector) {
-          const lbl = root.querySelector('label[for="' + cssEsc(el.id) + '"]');
-          if (lbl) {
-            const t = (lbl.innerText || lbl.textContent || '').replace(/\\s+/g, ' ').trim();
-            if (t && t.length <= 50) return t;
-          }
-        }
-      } catch {}
-      return '';
-    }
-
-    function disambiguateCss(el, css, root) {
-      try {
-        const matches = Array.from(root.querySelectorAll(css));
-        if (matches.length <= 1) return css;
-        const idx = matches.indexOf(el);
-        return idx >= 0 ? css + ' >> nth=' + idx : css;
-      } catch {
-        return css;
-      }
-    }
-
-    function localSelector(el, root) {
-      if (!isElem(el)) return '';
-      const tag = el.tagName.toLowerCase();
-      const prefixTag = tag === 'iframe' ? 'iframe' : '';
-      for (const attr of ['data-testid', 'data-test', 'data-cy']) {
-        const v = el.getAttribute(attr);
-        if (v) {
-          return disambiguateCss(el, prefixTag + '[' + attr + '="' + v.replace(/"/g, '\\\\"') + '"]', root);
-        }
-      }
-      if (el.id && !isDynamicId(el.id)) {
-        return disambiguateCss(el, prefixTag + '#' + cssEsc(el.id), root);
-      }
-      const nameAttr = el.getAttribute('name');
-      if (nameAttr) {
-        return disambiguateCss(el, tag + '[name="' + nameAttr.replace(/"/g, '\\\\"') + '"]', root);
-      }
-      const ph = el.getAttribute('placeholder');
-      if (ph && ph.length <= 60) {
-        const matches = root.querySelectorAll ? root.querySelectorAll('[placeholder="' + cssEsc(ph) + '"]').length : 1;
-        return matches <= 1 ? 'placeholder=' + ph : disambiguateCss(el, tag + '[placeholder="' + ph.replace(/"/g, '\\\\"') + '"]', root);
-      }
-      const aria = el.getAttribute('aria-label');
-      if (aria && aria.length <= 60) {
-        return disambiguateCss(el, tag + '[aria-label="' + aria.replace(/"/g, '\\\\"') + '"]', root);
-      }
-      if (tag === 'input' || tag === 'textarea' || tag === 'select') {
-        const lblText = findAssociatedLabelText(el, root);
-        if (lblText) return 'label=' + lblText;
-      }
-      const explicitRole = el.getAttribute('role');
-      const role = explicitRole || (tag === 'button' ? 'button' : tag === 'a' ? 'link' : '');
-      const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
-      if (role && text && text.length <= 60) {
-        const sameRoleText = Array.from(root.querySelectorAll ? root.querySelectorAll(explicitRole ? '[role="' + cssEsc(explicitRole) + '"]' : tag) : []).filter(
-          (n) => ((n.innerText || n.textContent || '').replace(/\\s+/g, ' ').trim()) === text
-        );
-        const base = 'role=' + role + '[name="' + text.replace(/"/g, '\\\\"') + '"]';
-        if (sameRoleText.length <= 1) return base;
-        const rIdx = sameRoleText.indexOf(el);
-        return rIdx >= 0 ? base + ' >> nth=' + rIdx : base;
-      }
-      const cleanClasses = Array.from(el.classList || [])
-        .filter((c) => c && !/^(hover|focus|active|open|selected|checked|disabled)$/i.test(c) && !c.includes(':'))
-        .slice(0, 2)
-        .map((c) => '.' + cssEsc(c))
-        .join('');
-      return disambiguateCss(el, tag + cleanClasses, root);
-    }
-
-    function stableSelector(el) {
-      if (!isElem(el)) return '';
-      const chain = [];
-      let cur = el;
-      while (cur) {
-        const root = cur.getRootNode ? cur.getRootNode() : document;
-        if (root && isElem(root.host)) {
-          chain.unshift(localSelector(cur, root));
-          cur = root.host;
-          continue;
-        }
-        const doc = cur.ownerDocument || document;
-        chain.unshift(localSelector(cur, doc));
-        const win = doc.defaultView;
-        if (win && win !== win.parent) {
-          try {
-            if (isElem(win.frameElement)) {
-              cur = win.frameElement;
-              continue;
-            }
-          } catch {}
-        }
-        break;
-      }
-      return chain.filter(Boolean).join(' >> ');
     }
 
     function interactiveTarget(raw) {

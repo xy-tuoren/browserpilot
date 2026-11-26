@@ -1,17 +1,22 @@
+import { execFile } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 import { NATIVE_HOST_NAME } from '@browserpilot/protocol'
 import { ensureBrowserPilotHome, getBrowserPilotHomeDir } from './config.js'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const execFileAsync = promisify(execFile)
+const rawDir = path.dirname(fileURLToPath(import.meta.url))
+const __dirname = path.basename(rawDir) === 'chunks' ? path.dirname(rawDir) : rawDir
 
 export interface BrowserHostTarget {
   name: string
   dir: string
   userDataDir: string
+  registryKey?: string
 }
 
 export function getNativeMessagingHostDirs(platform: NodeJS.Platform = process.platform): BrowserHostTarget[] {
@@ -78,6 +83,36 @@ export function getNativeMessagingHostDirs(platform: NodeJS.Platform = process.p
         name: 'Microsoft Edge',
         userDataDir: path.join(config, 'microsoft-edge'),
         dir: path.join(config, 'microsoft-edge', 'NativeMessagingHosts'),
+      },
+    ]
+  }
+  if (platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local')
+    const hostManifestBase = path.join(getBrowserPilotHomeDir(), 'native-hosts')
+    return [
+      {
+        name: 'Google Chrome',
+        userDataDir: path.join(localAppData, 'Google', 'Chrome', 'User Data'),
+        dir: path.join(hostManifestBase, 'chrome'),
+        registryKey: `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`,
+      },
+      {
+        name: 'Chromium',
+        userDataDir: path.join(localAppData, 'Chromium', 'User Data'),
+        dir: path.join(hostManifestBase, 'chromium'),
+        registryKey: `HKCU\\Software\\Chromium\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`,
+      },
+      {
+        name: 'Brave',
+        userDataDir: path.join(localAppData, 'BraveSoftware', 'Brave-Browser', 'User Data'),
+        dir: path.join(hostManifestBase, 'brave'),
+        registryKey: `HKCU\\Software\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`,
+      },
+      {
+        name: 'Microsoft Edge',
+        userDataDir: path.join(localAppData, 'Microsoft', 'Edge', 'User Data'),
+        dir: path.join(hostManifestBase, 'edge'),
+        registryKey: `HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`,
       },
     ]
   }
@@ -173,7 +208,11 @@ export async function discoverInstalledExtensionIds(
     for (const profile of profiles) {
       for (const fileName of ['Secure Preferences', 'Preferences']) {
         const prefPath = path.join(target.userDataDir, profile, fileName)
-        let parsed: { extensions?: { settings?: Record<string, { location?: number; path?: string; manifest?: { name?: string } }> } }
+        let parsed: {
+          extensions?: {
+            settings?: Record<string, { location?: number; path?: string; manifest?: { name?: string } }>
+          }
+        }
         try {
           parsed = JSON.parse(await fs.readFile(prefPath, 'utf8'))
         } catch {
@@ -243,30 +282,35 @@ export async function readInstalledNativeHosts(
 export interface InstallNativeHostOptions {
   extensionIds: string[]
   dryRun?: boolean
+  platform?: NodeJS.Platform
 }
 
 export interface InstallNativeHostResult {
   wrapperPath: string
-  installedManifests: Array<{ browser: string; manifestPath: string }>
+  installedManifests: Array<{ browser: string; manifestPath: string; registryKey?: string }>
   manifestJson: Record<string, unknown>
 }
 
 /**
- * Installs Chrome Native Messaging host wrapper & JSON manifests so the BrowserPilot
- * extension connects automatically via chrome.runtime.connectNative() with zero
+ * Installs Chrome Native Messaging host wrapper & JSON manifests (plus HKCU registry keys on Windows)
+ * so the BrowserPilot extension connects automatically via chrome.runtime.connectNative() with zero
  * exposed port and automatic auth token injection.
  */
 export async function installNativeHost(options: InstallNativeHostOptions): Promise<InstallNativeHostResult> {
+  const platform = options.platform ?? process.platform
+  const isWin = platform === 'win32'
   const nativeHostJs = path.resolve(__dirname, 'native-host.js')
   const binDir = path.join(getBrowserPilotHomeDir(), 'bin')
-  const wrapperPath = path.join(binDir, 'browserpilot-native-host')
+  const wrapperPath = path.join(binDir, isWin ? 'browserpilot-native-host.cmd' : 'browserpilot-native-host')
 
   const allowedOrigins = Array.from(
     new Set(
       options.extensionIds
         .map((id) => id.trim())
         .filter(Boolean)
-        .map((id) => (id.startsWith('chrome-extension://') ? (id.endsWith('/') ? id : `${id}/`) : `chrome-extension://${id}/`)),
+        .map((id) =>
+          id.startsWith('chrome-extension://') ? (id.endsWith('/') ? id : `${id}/`) : `chrome-extension://${id}/`,
+        ),
     ),
   )
 
@@ -278,10 +322,12 @@ export async function installNativeHost(options: InstallNativeHostOptions): Prom
     allowed_origins: allowedOrigins,
   }
 
-  const wrapperScript = `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(nativeHostJs)} "$@"\n`
+  const wrapperScript = isWin
+    ? `@echo off\r\n"${process.execPath}" "${nativeHostJs}" %*\r\n`
+    : `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(nativeHostJs)} "$@"\n`
 
-  const targets = getNativeMessagingHostDirs()
-  const installedManifests: Array<{ browser: string; manifestPath: string }> = []
+  const targets = getNativeMessagingHostDirs(platform)
+  const installedManifests: Array<{ browser: string; manifestPath: string; registryKey?: string }> = []
 
   if (!options.dryRun) {
     await ensureBrowserPilotHome()
@@ -289,12 +335,10 @@ export async function installNativeHost(options: InstallNativeHostOptions): Prom
     await fs.writeFile(wrapperPath, wrapperScript, { mode: 0o755 })
 
     for (const target of targets) {
-      // Install if parent browser data dir exists (or always for Google Chrome)
-      const parentDir = path.dirname(target.dir)
       let exists = target.name === 'Google Chrome'
       if (!exists) {
         try {
-          await fs.access(parentDir)
+          await fs.access(isWin ? target.userDataDir : path.dirname(target.dir))
           exists = true
         } catch {
           exists = false
@@ -304,13 +348,19 @@ export async function installNativeHost(options: InstallNativeHostOptions): Prom
       await fs.mkdir(target.dir, { recursive: true })
       const manifestPath = path.join(target.dir, `${NATIVE_HOST_NAME}.json`)
       await fs.writeFile(manifestPath, JSON.stringify(manifestJson, null, 2) + '\n', 'utf8')
-      installedManifests.push({ browser: target.name, manifestPath })
+      if (isWin && target.registryKey) {
+        await execFileAsync('reg', ['add', target.registryKey, '/ve', '/t', 'REG_SZ', '/d', manifestPath, '/f']).catch(
+          () => {},
+        )
+      }
+      installedManifests.push({ browser: target.name, manifestPath, registryKey: target.registryKey })
     }
   } else {
     for (const target of targets) {
       installedManifests.push({
         browser: target.name,
         manifestPath: path.join(target.dir, `${NATIVE_HOST_NAME}.json`),
+        registryKey: target.registryKey,
       })
     }
   }

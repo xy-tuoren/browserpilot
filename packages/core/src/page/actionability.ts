@@ -11,6 +11,45 @@ export interface ActionabilityDeps {
   evaluate: <T = unknown>(expression: string) => Promise<T>
 }
 
+interface RawViewportRectResult {
+  x: number
+  y: number
+  width: number
+  height: number
+  offsetX: number
+  offsetY: number
+  connected: boolean
+}
+
+const READ_ELEMENT_VIEWPORT_RECT_FN = `function() {
+  if (!this.isConnected) return { x: 0, y: 0, width: 0, height: 0, offsetX: 0, offsetY: 0, connected: false };
+  const doc = this.ownerDocument || document;
+  let r = this.getBoundingClientRect();
+  const tag = (this.tagName || '').toLowerCase();
+  const inputType = (this.type || '').toLowerCase();
+  if (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio') && (!r || r.width <= 2 || r.height <= 2)) {
+    const lbl = this.closest?.('label') || (this.id ? doc.querySelector('label[for="' + CSS.escape(this.id) + '"]') : null);
+    if (lbl) {
+      const lr = lbl.getBoundingClientRect();
+      if (lr && lr.width > 2 && lr.height > 2) r = lr;
+    }
+  }
+  if (!r || (r.width === 0 && r.height === 0)) return { x: 0, y: 0, width: 0, height: 0, offsetX: 0, offsetY: 0, connected: true };
+  let ox = 0, oy = 0;
+  let win = doc.defaultView;
+  while (win && win !== win.parent) {
+    try {
+      const fe = win.frameElement;
+      if (!fe) break;
+      const fr = fe.getBoundingClientRect();
+      ox += fr.left;
+      oy += fr.top;
+      win = win.parent;
+    } catch { break; }
+  }
+  return { x: r.left, y: r.top, width: r.width, height: r.height, offsetX: ox, offsetY: oy, connected: true };
+}`
+
 export async function scrollChildIframeIntoView(
   deps: ActionabilityDeps,
   frameId?: string,
@@ -221,51 +260,12 @@ export async function resolveElement(
 
       // Fresh viewport bounding box + live same-origin frameOffset + sr-only label fallback
       const rectRes = await deps.session
-        .send<{
-          result?: {
-            value?: {
-              x: number
-              y: number
-              width: number
-              height: number
-              offsetX: number
-              offsetY: number
-              connected: boolean
-            } | null
-          }
-        }>(
+        .send<{ result?: { value?: RawViewportRectResult | null } }>(
           'Runtime.callFunctionOn',
           {
             objectId,
             returnByValue: true,
-            functionDeclaration: `function() {
-              if (!this.isConnected) return { x: 0, y: 0, width: 0, height: 0, offsetX: 0, offsetY: 0, connected: false };
-              const doc = this.ownerDocument || document;
-              let r = this.getBoundingClientRect();
-              const tag = (this.tagName || '').toLowerCase();
-              const inputType = (this.type || '').toLowerCase();
-              if (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio') && (!r || r.width <= 2 || r.height <= 2)) {
-                const lbl = this.closest?.('label') || (this.id ? doc.querySelector('label[for="' + CSS.escape(this.id) + '"]') : null);
-                if (lbl) {
-                  const lr = lbl.getBoundingClientRect();
-                  if (lr && lr.width > 2 && lr.height > 2) r = lr;
-                }
-              }
-              if (!r || (r.width === 0 && r.height === 0)) return { x: 0, y: 0, width: 0, height: 0, offsetX: 0, offsetY: 0, connected: true };
-              let ox = 0, oy = 0;
-              let win = doc.defaultView;
-              while (win && win !== win.parent) {
-                try {
-                  const fe = win.frameElement;
-                  if (!fe) break;
-                  const fr = fe.getBoundingClientRect();
-                  ox += fr.left;
-                  oy += fr.top;
-                  win = win.parent;
-                } catch { break; }
-              }
-              return { x: r.left, y: r.top, width: r.width, height: r.height, offsetX: ox, offsetY: oy, connected: true };
-            }`,
+            functionDeclaration: READ_ELEMENT_VIEWPORT_RECT_FN,
           },
           { sessionId },
         )
@@ -349,40 +349,12 @@ export async function readElementViewportBox(
 ): Promise<BoundingBox | null> {
   try {
     const res = await session.send<{
-      result?: {
-        value?: { x: number; y: number; width: number; height: number; offsetX: number; offsetY: number; connected: boolean }
-      }
+      result?: { value?: RawViewportRectResult }
     }>(
       'Runtime.callFunctionOn',
       {
         objectId: el.objectId,
-        functionDeclaration: `function() {
-          if (!this.isConnected) return { x: 0, y: 0, width: 0, height: 0, offsetX: 0, offsetY: 0, connected: false };
-          const doc = this.ownerDocument || document;
-          let r = this.getBoundingClientRect();
-          const tag = (this.tagName || '').toLowerCase();
-          const inputType = (this.type || '').toLowerCase();
-          if (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio') && (!r || r.width <= 2 || r.height <= 2)) {
-            const lbl = this.closest?.('label') || (this.id ? doc.querySelector('label[for="' + CSS.escape(this.id) + '"]') : null);
-            if (lbl) {
-              const lr = lbl.getBoundingClientRect();
-              if (lr && lr.width > 2 && lr.height > 2) r = lr;
-            }
-          }
-          let ox = 0, oy = 0;
-          let win = doc.defaultView;
-          while (win && win !== win.parent) {
-            try {
-              const fe = win.frameElement;
-              if (!fe) break;
-              const fr = fe.getBoundingClientRect();
-              ox += fr.left;
-              oy += fr.top;
-              win = win.parent;
-            } catch { break; }
-          }
-          return { x: r.left, y: r.top, width: r.width, height: r.height, offsetX: ox, offsetY: oy, connected: true };
-        }`,
+        functionDeclaration: READ_ELEMENT_VIEWPORT_RECT_FN,
         returnByValue: true,
       },
       { sessionId: el.sessionId },

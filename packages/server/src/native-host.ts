@@ -23,7 +23,22 @@ async function main(): Promise<void> {
   let ws: WebSocket | null = null
   let lastHello: ExtensionHelloMessage | null = null
   const pendingOutbound: BridgeMessage[] = []
+  const MAX_PENDING_OUTBOUND = 256
   let closing = false
+
+  function pushBoundedOutbound(msg: BridgeMessage): void {
+    if (pendingOutbound.length >= MAX_PENDING_OUTBOUND) {
+      const droppableIdx = pendingOutbound.findIndex(
+        (m) => m.type === 'event' || m.type === 'ping' || m.type === 'pong',
+      )
+      if (droppableIdx >= 0) {
+        pendingOutbound.splice(droppableIdx, 1)
+      } else {
+        pendingOutbound.shift()
+      }
+    }
+    pendingOutbound.push(msg)
+  }
 
   function writeNative(msg: BridgeMessage): void {
     try {
@@ -104,7 +119,7 @@ async function main(): Promise<void> {
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify(msg))
         } else {
-          pendingOutbound.push(msg)
+          pushBoundedOutbound(msg)
         }
       }
     } catch {

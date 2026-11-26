@@ -39,6 +39,9 @@ function renderPlaywrightSegment(rootExpr: string, seg: string, hasFollowingSegm
   const nthMatch = /^nth=(-?\d+)$/i.exec(seg)
   if (nthMatch) return `${rootExpr}.nth(${Number(nthMatch[1])})`
 
+  if (seg.startsWith('testid=')) {
+    return `${rootExpr}.getByTestId(${JSON.stringify(seg.slice('testid='.length))})`
+  }
   const testIdMatch = /^\[data-testid=["'](.+)["']\]$/.exec(seg)
   if (testIdMatch) {
     return `${rootExpr}.getByTestId(${JSON.stringify(testIdMatch[1].replace(/\\"/g, '"'))})`

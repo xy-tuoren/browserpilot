@@ -1,6 +1,6 @@
 {
   "name": "browserpilot-monorepo",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "private": true,
   "description": "Zero-click pure-CDP Chrome Extension, MCP Server & CLI for AI Agents to control, inspect, and debug real browsers.",
   "engines": {
@@ -12,6 +12,8 @@
     "test": "pnpm -r test",
     "test:e2e": "pnpm --filter browserpilot-cdp test:e2e",
     "pack:npm": "pnpm build && cd packages/server && npm pack",
+    "version:sync": "node scripts/sync-version.mjs",
+    "version:check": "node scripts/sync-version.mjs --check",
     "clean": "pnpm -r clean"
   },
   "devDependencies": {

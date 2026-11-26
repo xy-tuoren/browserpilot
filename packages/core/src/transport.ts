@@ -424,6 +424,11 @@ export class DirectCDPTransport implements CDPTransport {
     if (!rec) return
     await this.sendRaw('Target.closeTarget', { targetId: rec.targetId }).catch(() => {})
     if (rec.sessionId) this.tabIdBySessionId.delete(rec.sessionId)
+    const children = this.childSessionsByParentTab.get(tabId)
+    if (children) {
+      for (const sid of children) this.tabIdBySessionId.delete(sid)
+      this.childSessionsByParentTab.delete(tabId)
+    }
     this.targetsByTabId.delete(tabId)
     this.tabIdByTargetId.delete(rec.targetId)
   }

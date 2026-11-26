@@ -1,8 +1,10 @@
+import vm from 'node:vm'
 import { describe, expect, it } from 'vitest'
 import {
   BridgeChunkReassembler,
   compileRecordingArtifacts,
   compressRecordedSteps,
+  computeStableDomSelector,
   encodeNativeMessage,
   encodeNativeMessageFrames,
   NATIVE_INCOMING_MAX_BYTES,
@@ -223,6 +225,7 @@ describe('@browserpilot/protocol', () => {
   describe('Codegen locator & artifact compiler', () => {
     it('translates BrowserPilot semantic, Shadow DOM & iframe locators into idiomatic Playwright TS', () => {
       expect(translateLocatorToPlaywright('[data-testid="login-btn"]')).toBe('page.getByTestId("login-btn")')
+      expect(translateLocatorToPlaywright('testid=login-btn')).toBe('page.getByTestId("login-btn")')
       expect(translateLocatorToPlaywright('placeholder=Search docs')).toBe('page.getByPlaceholder("Search docs")')
       expect(translateLocatorToPlaywright('label=Email address')).toBe('page.getByLabel("Email address")')
       expect(translateLocatorToPlaywright('role=button[name="Save Changes"] >> nth=1')).toBe(
@@ -231,6 +234,92 @@ describe('@browserpilot/protocol', () => {
       expect(translateLocatorToPlaywright('iframe#checkout >> [data-testid="pay-now"]')).toBe(
         'page.locator("iframe#checkout").contentFrame().getByTestId("pay-now")',
       )
+      expect(translateLocatorToPlaywright('iframe#checkout >> testid=pay-now')).toBe(
+        'page.locator("iframe#checkout").contentFrame().getByTestId("pay-now")',
+      )
+    })
+
+    it('executes computeStableDomSelector identically directly AND via isolated VM .toString() across Shadow DOM & foreign iframe realms', () => {
+      // Compile serialized function inside a brand-new empty V8 VM realm to prove ZERO external module closures!
+      const vmFn = vm.runInNewContext(`(${computeStableDomSelector.toString()})`) as typeof computeStableDomSelector
+
+      const topDoc: Record<string, unknown> = {
+        defaultView: null as unknown,
+        querySelector: () => null,
+        querySelectorAll: (sel: string) => {
+          if (sel === 'iframe#pay-frame') return [iframeEl]
+          if (sel === '#shadow-card') return [shadowHost]
+          return []
+        },
+      }
+      const topWin = { parent: null as unknown }
+      topWin.parent = topWin
+      topDoc.defaultView = topWin
+
+      const iframeEl = {
+        nodeType: 1,
+        tagName: 'IFRAME',
+        id: 'pay-frame',
+        ownerDocument: topDoc,
+        getAttribute: (n: string) => (n === 'id' ? 'pay-frame' : null),
+        getRootNode: () => topDoc,
+      }
+
+      const frameDoc: Record<string, unknown> = {
+        defaultView: { parent: topWin, frameElement: iframeEl },
+        querySelector: () => null,
+        querySelectorAll: (sel: string) => {
+          if (sel.includes('data-testid')) return [dupTestId0, dupTestId1]
+          return []
+        },
+      }
+
+      const dupTestId0 = {
+        nodeType: 1,
+        tagName: 'BUTTON',
+        id: ':r0:', // dynamic React ID — must be ignored
+        ownerDocument: frameDoc,
+        getAttribute: (n: string) => (n === 'data-testid' ? 'buy-btn' : null),
+        getRootNode: () => frameDoc,
+      }
+      const dupTestId1 = {
+        nodeType: 1,
+        tagName: 'BUTTON',
+        id: 'radix-123', // dynamic Radix ID — must be ignored
+        ownerDocument: frameDoc,
+        getAttribute: (n: string) => (n === 'data-testid' ? 'buy-btn' : null),
+        getRootNode: () => frameDoc,
+      }
+
+      expect(computeStableDomSelector(dupTestId1)).toBe('iframe#pay-frame >> testid=buy-btn >> nth=1')
+      expect(vmFn(dupTestId1)).toBe('iframe#pay-frame >> testid=buy-btn >> nth=1')
+      // Also verify `this`-bound invocation used by CDP Runtime.callFunctionOn
+      expect(vmFn.call(dupTestId1)).toBe('iframe#pay-frame >> testid=buy-btn >> nth=1')
+
+      // Shadow DOM chain
+      const shadowHost = {
+        nodeType: 1,
+        tagName: 'DIV',
+        id: 'shadow-card',
+        ownerDocument: topDoc,
+        getAttribute: (n: string) => (n === 'id' ? 'shadow-card' : null),
+        getRootNode: () => topDoc,
+      }
+      const shadowRoot = {
+        host: shadowHost,
+        querySelectorAll: () => [shadowBtn],
+      }
+      const shadowBtn: Record<string, unknown> = {
+        nodeType: 1,
+        tagName: 'BUTTON',
+        id: '550e8400-e29b-41d4-a716-446655440000', // UUID — must be ignored
+        innerText: 'Confirm Order',
+        ownerDocument: topDoc,
+        getAttribute: () => null,
+        getRootNode: () => shadowRoot,
+      }
+
+      expect(vmFn(shadowBtn)).toBe('#shadow-card >> role=button[name="Confirm Order"]')
     })
 
     it('compresses noisy click/fill/dblclick events and compiles Playwright, BrowserPilot, Batch & Skill outputs', () => {

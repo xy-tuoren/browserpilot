@@ -9,7 +9,8 @@ import {
 } from './config.js'
 import type { ToolExecutionResult } from './tools.js'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const rawDir = path.dirname(fileURLToPath(import.meta.url))
+const __dirname = path.basename(rawDir) === 'chunks' ? path.dirname(rawDir) : rawDir
 
 export class DaemonClient {
   readonly config: DaemonConfigFile

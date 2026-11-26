@@ -11,9 +11,11 @@ import {
   type ToolResultContent,
   type ToolRuntimeContext,
 } from './tools/types.js'
+import { validateAndNormalizeToolArgs } from './tools/validate.js'
 
 export {
   normalizeNavigationUrl,
+  validateAndNormalizeToolArgs,
   type ToolDefinition,
   type ToolExecutionResult,
   type ToolResultContent,
@@ -34,12 +36,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ...CONTEXT_TOOL_DEFINITIONS,
 ]
 
+const TOOL_DEFINITION_MAP = new Map<string, ToolDefinition>(TOOL_DEFINITIONS.map((t) => [t.name, t]))
+
 export async function executeTool(
   ctx: ToolRuntimeContext,
   name: string,
-  args: Record<string, unknown> = {},
+  rawArgs: Record<string, unknown> = {},
 ): Promise<ToolExecutionResult> {
   try {
+    const def = TOOL_DEFINITION_MAP.get(name)
+    if (!def) {
+      return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true }
+    }
+
+    const args = validateAndNormalizeToolArgs(def, rawArgs)
+
     if (name === 'browser_status') {
       const clients = ctx.listClients()
       const sessions = clients.length > 0 ? ctx.getManager().listSessions() : []

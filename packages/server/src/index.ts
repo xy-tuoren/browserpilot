@@ -1,3 +1,5 @@
+export * from '@browserpilot/protocol'
+export * from '@browserpilot/core'
 export * from './config.js'
 export * from './daemon.js'
 export * from './client.js'

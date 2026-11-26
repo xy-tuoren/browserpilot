@@ -64,6 +64,9 @@ interface InternalSession {
   lastUsedAt: number
 }
 
+const MAX_NON_DEFAULT_SESSIONS = 50
+const SESSION_IDLE_TTL_MS = 24 * 60 * 60 * 1000
+
 /**
  * Multi-session manager + isolated stateful JS execution sandbox.
  * Replaces Playwriter's `session new / exec -s <id> -e ...` with pure-CDP helpers.
@@ -77,9 +80,19 @@ export class SessionManager {
 
   constructor(transport: CDPTransport) {
     this.transport = transport
-    this.unsubDetach = transport.onTabDetached?.((tabId) => {
+    this.unsubDetach = transport.onTabDetached?.((tabId, reason) => {
       const tab = this.tabs.get(tabId)
-      if (tab) {
+      const permanentlyClosed =
+        reason === 'target_closed' || reason === 'target_destroyed' || reason === 'tab_removed'
+      if (permanentlyClosed) {
+        if (tab) {
+          tab.dispose()
+          this.tabs.delete(tabId)
+        }
+        for (const s of this.sessions.values()) {
+          if (s.activeTabId === tabId) s.activeTabId = undefined
+        }
+      } else if (tab) {
         tab.resetAfterDetach()
       }
     })
@@ -186,6 +199,23 @@ export class SessionManager {
     throw new Error('No accessible browser tabs available')
   }
 
+  private pruneStaleSessions(now = Date.now(), preserveId?: string): void {
+    for (const [sid, s] of this.sessions) {
+      if (sid === 'default' || sid === preserveId) continue
+      if (now - s.lastUsedAt > SESSION_IDLE_TTL_MS) {
+        this.sessions.delete(sid)
+      }
+    }
+    if (this.sessions.size <= MAX_NON_DEFAULT_SESSIONS) return
+    const candidates = Array.from(this.sessions.values())
+      .filter((s) => s.id !== 'default' && s.id !== preserveId)
+      .sort((a, b) => a.lastUsedAt - b.lastUsedAt)
+    while (this.sessions.size > MAX_NON_DEFAULT_SESSIONS && candidates.length > 0) {
+      const oldest = candidates.shift()!
+      this.sessions.delete(oldest.id)
+    }
+  }
+
   createSession(options?: { id?: string; tabGroup?: string; tabGroupColor?: TabGroupColor }): SessionInfo {
     const id = options?.id ?? String(this.nextSessionNum++)
     const tabGroup = options?.tabGroup?.trim() || DEFAULT_TAB_GROUP_TITLE
@@ -200,6 +230,7 @@ export class SessionManager {
       lastUsedAt: now,
     }
     this.sessions.set(id, sess)
+    this.pruneStaleSessions(now, id)
     return this.toSessionInfo(sess)
   }
 
@@ -209,7 +240,9 @@ export class SessionManager {
       this.createSession({ id })
       sess = this.sessions.get(id)!
     }
-    sess.lastUsedAt = Date.now()
+    const now = Date.now()
+    sess.lastUsedAt = now
+    this.pruneStaleSessions(now, id)
     return sess
   }
 
