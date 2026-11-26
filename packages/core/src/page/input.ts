@@ -193,8 +193,12 @@ export class PageInputDriver {
     const clicks = opts.clickCount ?? 1
     await this.mouseMove(x, y, { steps: 1 })
     for (let c = 1; c <= clicks; c++) {
-      await this.mouseDown(x, y, { button, clickCount: c, modifiers: opts.modifiers })
-      await this.mouseUp(x, y, { button, clickCount: c, modifiers: opts.modifiers })
+      // Pipeline mousePressed + mouseReleased back-to-back over ordered CDP FIFO so fast DOM
+      // re-render timers (React/Vue remounts) cannot split mousedown and mouseup across detached nodes.
+      await Promise.all([
+        this.mouseDown(x, y, { button, clickCount: c, modifiers: opts.modifiers }),
+        this.mouseUp(x, y, { button, clickCount: c, modifiers: opts.modifiers }),
+      ])
     }
   }
 

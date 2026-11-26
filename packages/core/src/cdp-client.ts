@@ -220,6 +220,12 @@ export class TabCDPSession {
    */
   async listFrames(): Promise<FrameInfo[]> {
     await this.ensureBaseDomains()
+    // Ensure any newly spawned OOPIF child targets (main + nested) are attached before listing frames
+    await this.send('Target.setAutoAttach', {
+      autoAttach: true,
+      waitForDebuggerOnStart: false,
+      flatten: true,
+    }).catch(() => {})
     const frames: FrameInfo[] = []
     const seenIds = new Set<string>()
     const children = this.getChildSessions()

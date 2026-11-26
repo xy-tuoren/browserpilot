@@ -345,12 +345,6 @@ export class DirectCDPTransport implements CDPTransport {
       })
       rec.sessionId = attached.sessionId
       this.tabIdBySessionId.set(rec.sessionId, tabId)
-      // Enable OOPIF child frame auto-attach
-      await this.sendRaw(
-        'Target.setAutoAttach',
-        { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
-        rec.sessionId,
-      ).catch(() => {})
     }
     return rec
   }

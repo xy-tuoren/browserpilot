@@ -574,6 +574,7 @@ describe('@browserpilot/core Complex Page Archetypes B: 2-Level Cross-Origin OOP
   it('Archetype 7: operates under strict CSP (no unsafe-inline), History SPA routing, OAuth popup flow, flaky 503 route recovery & Prompt-Injection boundary wrapping', async () => {
     if (!chromeBin || !manager) return
     const tab = await manager.openTab({ url: `${mainUrl}/csp` })
+    await tab.page.navigate(`${mainUrl}/csp`, { waitUntil: 'load' })
 
     // 1. Strict CSP: verify BrowserPilot snapshot, click, History SPA navigation & back/forward work with ZERO CSP violations
     await tab.page.click('#go-settings')
