@@ -21,8 +21,8 @@
 | 零 Playwright / Puppeteer 运行时依赖 | 否 | 否（Puppeteer） | 是 | **是（100% 纯 CDP）** |
 | Chrome Native Messaging 自动鉴权 + 本地守护进程 | 否 | 否 | 是 | **是（双传输通道）** |
 | 有状态 JS 多步沙盒（`session new` / `exec -s 1 -e`） | 是 | 否 | 否 | **是** |
-| 原生 MCP Server（51 个工具 + 多模态截图直出） | 部分（单工具执行） | 是 | 是 | **是** |
-| 侧边栏诊断面板 + 操作高亮 + 幽灵光标 | 部分 | 否 | 是 | **是** |
+| 原生 MCP Server（52 个工具 + 多模态截图直出） | 部分（单工具执行） | 是 | 是 | **是** |
+| 侧边栏实时录制代码生成（Codegen）+ 交互式 Trace 查看器 | 否 | 否 | 否 | **是（原生内置）** |
 | 全套 DevTools（Console / Network / Fetch Mock / CSS / 断点调试 / 热改代码 / React Fiber / Web Vitals / Tracing / 录屏 / 下载 / 动作录制） | 大部分 | 大部分 | 部分 | **全部内置** |
 | Direct CDP 直连模式（`--remote-debugging-port`，适合 CI/无头） | 是 | 是 | 否 | **是** |
 
@@ -32,7 +32,7 @@
 
 ```text
 AI Coding Agents (Claude Code / Cursor / Codex / Antigravity / 自定义 SDK)
-        │   MCP stdio (51 个工具 + 图像块)  /  CLI (`browserpilot`)  /  TypeScript SDK
+        │   MCP stdio (52 个工具 + 图像块)  /  CLI (`browserpilot`)  /  TypeScript SDK
         ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │  @browserpilot/server   本地鉴权守护进程 (127.0.0.1 + 256-bit Token)          │
@@ -83,7 +83,7 @@ browserpilot setup
   ```
   或将 `skills/browserpilot/SKILL.md`（或 `browserpilot skill` 的输出）放到指定项目的 `.claude/skills/browserpilot/`、`.agents/skills/browserpilot/` 目录即可，无需配置 MCP。
 
-- **方式 B — 配置 MCP Server（51 个原生 `browser_*` 工具 + 截图直出给模型看）：**  
+- **方式 B — 配置 MCP Server（52 个原生 `browser_*` 工具 + 截图直出给模型看）：**  
   将下面配置加入你想启用的 Agent 的 MCP 配置文件（Claude Code / Cursor / Codex / Antigravity）：
   ```json
   {
@@ -162,13 +162,15 @@ browserpilot styles "#submit-btn"                    # 查看 DevTools 命中样
 browserpilot react "#submit-btn"                     # 检查 React Fiber 组件名与源码位置
 browserpilot perf metrics                            # 采集 Core Web Vitals（LCP/CLS/FCP/TTFB）与内存指标
 browserpilot downloads list                          # 查看或等待浏览器文件下载
-browserpilot record-actions start                    # 录制人工操作并导出可复用脚本 / Agent Skill Markdown
+browserpilot codegen example.com -o flow.spec.ts     # 实时录制操作并生成 Playwright TS / BrowserPilot JS
+browserpilot exec --trace trace.html -e '...'        # 执行脚本并自动导出单文件交互式 HTML Trace 报告
+browserpilot trace open trace.html                   # 在 Chrome 中直接打开可视化 Trace 查看器
 browserpilot skill                                   # 打印完整 Agent Skill 使用文档
 ```
 
 ---
 
-## 完整 MCP 工具矩阵（共 51 个工具）
+## 完整 MCP 工具矩阵（共 52 个工具）
 
 | 分类 | 工具列表 |
 | :--- | :--- |
@@ -177,7 +179,7 @@ browserpilot skill                                   # 打印完整 Agent Skill 
 | **可信交互与智能等待** | `browser_click`（含遮挡/稳定性自检 + 新开弹窗与弹窗文案反馈）, `browser_check`（幂等勾选）, `browser_fill`, `browser_fill_form`（文本/单多选/复选/单选/滑块/文件）, `browser_type`, `browser_press_key`（`down`/`up`/`repeat` + 原生编辑指令）, `browser_hover`, `browser_scroll`, `browser_drag`（两点拖拽 & 多点 `points` 轨迹绘制）, `browser_select_option`, `browser_upload_file`, `browser_handle_dialog`, `browser_wait`（`selector`+`state` / `text`+`gone` / `url` / `responseUrl` / `fn` / `popup`）, `browser_batch`, `browser_handoff`（页内人工接管卡片） |
 | **系统与上下文控制** | `browser_clipboard`（剪贴板读写）, `browser_pdf`（导出 PDF）, `browser_init_script`（持久化前置注入脚本）, `browser_permissions`（授予/重置权限）, `browser_emulate`, `browser_cookies`, `browser_storage` |
 | **DevTools 深度调试** | `browser_evaluate`（支持 `frame`）, `browser_console`, `browser_network`, `browser_network_intercept`, `browser_styles`, `browser_react_info`, `browser_debugger`, `browser_live_edit`, `browser_performance`, `browser_cdp` |
-| **下载、录屏与沙盒** | `browser_downloads`, `browser_action_recorder`（含 API 与报错记录）, `browser_record`, `browser_exec`（链式 `locator()`、`onResponse`、`mouse`/`keyboard`） |
+| **下载、录制代码生成、Trace 与沙盒** | `browser_downloads`, `browser_action_recorder`（支持导出 Playwright TS / BrowserPilot JS / Skill / Batch）, `browser_trace`（单文件交互式 HTML Trace 查看器）, `browser_record`, `browser_exec`（链式 `locator()`、`route()`、`waitForFileChooser()`、`trace`） |
 
 ---
 
@@ -196,7 +198,7 @@ browserpilot skill                                   # 打印完整 Agent Skill 
 - [`packages/protocol`](./packages/protocol) — 共享协议类型、JSON-RPC 桥 Schema、Native Messaging 分帧/分片编解码（64 MB 入站 + 自动分片）与安全守卫。
 - [`packages/core`](./packages/core) — 100% 纯 CDP 引擎（可信输入、AXTree 快照、Set-of-Mark 截图、全套 DevTools 调试器、ffmpeg 智能录屏、下载管理、动作录制器与有状态沙盒）。
 - [`packages/extension`](./packages/extension) — 零点击 Chrome Manifest V3 扩展（Closed-Shadow-DOM 高亮与幽灵光标、弹窗设置、伴随侧边栏实时错误/网络面板）。
-- [`packages/server`](./packages/server) — 发布为 npm 包 `browserpilot-cdp`（内置本地鉴权守护进程、Native Messaging Host 与安装器、51 工具 MCP Server、CLI 与 SDK）。
+- [`packages/server`](./packages/server) — 发布为 npm 包 `browserpilot-cdp`（内置本地鉴权守护进程、Native Messaging Host 与安装器、52 工具 MCP Server、CLI 与 SDK）。
 - [`skills/browserpilot/SKILL.md`](./skills/browserpilot/SKILL.md) — 供 AI Agent 按需安装的标准化 Skill 文件。
 
 ## 开源协议

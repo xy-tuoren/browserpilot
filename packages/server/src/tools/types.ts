@@ -27,6 +27,7 @@ export interface ToolExecutionResult {
 export interface ToolRuntimeContext {
   getManager(clientId?: string): SessionManager
   listClients(): BrowserClientInfo[]
+  registerTraceHtml?: (html: string) => string
 }
 
 export interface ToolDispatchContext {
@@ -34,6 +35,7 @@ export interface ToolDispatchContext {
   sessionId?: string
   explicitTabId?: number
   resolveTab: () => Promise<BrowserPilotTab>
+  registerTraceHtml?: (html: string) => string
 }
 
 export function textResult(text: string, meta?: Record<string, unknown>): ToolExecutionResult {

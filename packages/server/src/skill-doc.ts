@@ -24,10 +24,10 @@ BrowserPilot controls the user's running Chrome browser (existing logins, cookie
    - \`browser_react_info\` / \`browserpilot react <target>\` — React Fiber component, source \`file:line\`, props
    - \`browser_debugger\` / \`browser_live_edit\` — breakpoints, call frames, live JS/CSS patching
    - \`browser_performance\` / \`browserpilot perf metrics\` — Web Vitals (LCP/CLS/FCP/TTFB), heap, CPU/trace
-   - \`browser_downloads\`, \`browser_action_recorder\` (captures steps + API calls & dialogs), \`browser_record\` (MP4/WebM + smart idle speedup)
+   - \`browser_downloads\`, \`browser_action_recorder\` / \`browserpilot codegen [url] --format playwright|browserpilot|skill|batch -o flow.spec.ts\` (records clicks, checks, fills, Shadow DOM/iframes, and \`Alt+Shift+Click\` assertions), \`browser_trace\` / \`browserpilot trace start|stop|open\` & \`browserpilot exec --trace trace.html\` (self-contained interactive HTML Trace Viewer with Before/After screenshots, click reticle, Console & Network response previews), \`browser_record\` (MP4/WebM + smart idle speedup)
 
 ## 3. Stateful JS Sandbox (\`browserpilot exec\`)
-> Pure CDP — use the built-in \`locator()\`, \`frameLocator()\`, \`mouse\`, \`keyboard\`, \`onResponse\`, and \`t.page.*\` helpers rather than importing Playwright.
+> Pure CDP — use the built-in \`locator()\`, \`frameLocator()\`, \`route()\`, \`waitForFileChooser()\`, \`trace\`, \`mouse\`, \`keyboard\`, \`onResponse\`, and \`t.page.*\` helpers rather than importing Playwright.
 
 \`\`\`bash
 SID=$(browserpilot session new --tab-group work)
@@ -42,7 +42,7 @@ browserpilot exec -s "$SID" -e '
 '
 \`\`\`
 
-Globals: \`state\`, \`tabs\` (\`list\`, \`open\`, \`use\`, \`current\`, \`close\`), \`locator\`, \`frameLocator\`, \`click\`, \`dblclick\`, \`rightClick\`, \`hover\`, \`fill\`, \`type\`, \`pressKey\`, \`check\`, \`uncheck\`, \`selectOption\`, \`uploadFiles\`, \`scroll\`, \`drag\`, \`mouseStroke\`, \`mouse\`, \`keyboard\`, \`fillForm\`, \`handoff\`, \`evaluate\`, \`getLocatorString\`, \`listFrames\`, \`snapshot\`, \`screenshot\`, \`pdf\`, \`screenshotWithLabels\`, \`cleanHTML\`, \`markdown\`, \`inspect\`, \`clipboard\`, \`addInitScript\`, \`removeInitScript\`, \`grantPermissions\`, \`emulate\`, \`getLatestLogs\`, \`getNetwork\`, \`onRequest\`, \`onResponse\`, \`getStyles\`, \`getReactInfo\`, \`waitForPageLoad\`, \`waitForSelector\`, \`waitForText\`, \`waitForUrl\`, \`waitForResponse\`, \`waitForFunction\`, \`waitForPopup\`, \`getDebugger\`, \`getLiveEditor\`, \`getRecorder\`, \`getPerformance\`, \`downloads\`, \`actionRecorder\`, \`cdp\`, \`sleep\`, \`createDemoVideo\`.
+Globals: \`state\`, \`tabs\` (\`list\`, \`open\`, \`use\`, \`current\`, \`close\`), \`locator\`, \`frameLocator\`, \`click\`, \`dblclick\`, \`rightClick\`, \`hover\`, \`fill\`, \`type\`, \`pressKey\`, \`check\`, \`uncheck\`, \`selectOption\`, \`uploadFiles\`, \`waitForFileChooser\`, \`route\`, \`unroute\`, \`scroll\`, \`drag\`, \`mouseStroke\`, \`mouse\`, \`keyboard\`, \`fillForm\`, \`handoff\`, \`evaluate\`, \`getLocatorString\`, \`listFrames\`, \`snapshot\`, \`screenshot\`, \`pdf\`, \`screenshotWithLabels\`, \`cleanHTML\`, \`markdown\`, \`inspect\`, \`clipboard\`, \`addInitScript\`, \`removeInitScript\`, \`grantPermissions\`, \`emulate\`, \`getLatestLogs\`, \`getNetwork\`, \`onRequest\`, \`onResponse\`, \`getStyles\`, \`getReactInfo\`, \`waitForPageLoad\`, \`waitForSelector\`, \`waitForText\`, \`waitForUrl\`, \`waitForResponse\`, \`waitForFunction\`, \`waitForPopup\`, \`getDebugger\`, \`getLiveEditor\`, \`getRecorder\`, \`getPerformance\`, \`downloads\`, \`actionRecorder\`, \`trace\`, \`cdp\`, \`sleep\`, \`createDemoVideo\`.
 
 ## 4. Safety & Pitfalls
 - Confirm with the user before irreversible actions (payments, deletions, account/security changes, public posts).

@@ -1,9 +1,14 @@
-import type { ActionRecordingResult, RecordedStep } from '@browserpilot/protocol'
+import {
+  compileRecordingArtifacts,
+  compressRecordedSteps,
+  type ActionRecordingResult,
+  type RecordedStep,
+} from '@browserpilot/protocol'
 import type { TabCDPSession } from './cdp-client.js'
 
 const BINDING_NAME = '__browserpilotRecordEvent'
 
-function buildCaptureScript(maskPasswords: boolean): string {
+export function buildCaptureScript(maskPasswords: boolean): string {
   return `(() => {
     if (globalThis.__bpActionRecorderInstalled) {
       globalThis.__bpActionRecorderEnabled = true;
@@ -11,6 +16,18 @@ function buildCaptureScript(maskPasswords: boolean): string {
     }
     globalThis.__bpActionRecorderInstalled = true;
     globalThis.__bpActionRecorderEnabled = true;
+    globalThis.__bpAssertMode = Boolean(globalThis.__bpAssertMode);
+
+    const pendingInputs = new Map();
+    const lastEmittedValue = new WeakMap();
+
+    function isElem(node) {
+      return Boolean(node && typeof node === 'object' && node.nodeType === 1);
+    }
+
+    function cssEsc(s) {
+      return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : String(s).replace(/([^a-zA-Z0-9_-])/g, '\\\\$1');
+    }
 
     function emit(payload) {
       if (!globalThis.__bpActionRecorderEnabled) return;
@@ -19,98 +36,297 @@ function buildCaptureScript(maskPasswords: boolean): string {
       }
     }
 
-    function stableSelector(el) {
-      if (!el || !(el instanceof Element)) return '';
-      const tid = el.getAttribute('data-testid');
-      if (tid) return '[data-testid="' + tid.replace(/"/g, '\\\\"') + '"]';
-      if (el.id) return '#' + CSS.escape(el.id);
+    function isDynamicId(id) {
+      if (!id) return true;
+      return /^(:r|«r|radix-|headlessui-|mui-|el-id-|rc_select_|react-aria)/i.test(id) || /[0-9a-f]{8}-[0-9a-f]{4}/i.test(id);
+    }
+
+    function findAssociatedLabelText(el, root) {
+      try {
+        const wrap = el.closest && el.closest('label');
+        if (wrap) {
+          const t = (wrap.innerText || wrap.textContent || '').replace(/\\s+/g, ' ').trim();
+          if (t && t.length <= 50) return t;
+        }
+        if (el.id && root.querySelector) {
+          const lbl = root.querySelector('label[for="' + cssEsc(el.id) + '"]');
+          if (lbl) {
+            const t = (lbl.innerText || lbl.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (t && t.length <= 50) return t;
+          }
+        }
+      } catch {}
+      return '';
+    }
+
+    function disambiguateCss(el, css, root) {
+      try {
+        const matches = Array.from(root.querySelectorAll(css));
+        if (matches.length <= 1) return css;
+        const idx = matches.indexOf(el);
+        return idx >= 0 ? css + ' >> nth=' + idx : css;
+      } catch {
+        return css;
+      }
+    }
+
+    function localSelector(el, root) {
+      if (!isElem(el)) return '';
       const tag = el.tagName.toLowerCase();
+      const prefixTag = tag === 'iframe' ? 'iframe' : '';
+      for (const attr of ['data-testid', 'data-test', 'data-cy']) {
+        const v = el.getAttribute(attr);
+        if (v) {
+          return disambiguateCss(el, prefixTag + '[' + attr + '="' + v.replace(/"/g, '\\\\"') + '"]', root);
+        }
+      }
+      if (el.id && !isDynamicId(el.id)) {
+        return disambiguateCss(el, prefixTag + '#' + cssEsc(el.id), root);
+      }
       const nameAttr = el.getAttribute('name');
-      if (nameAttr) return tag + '[name="' + nameAttr.replace(/"/g, '\\\\"') + '"]';
-      const aria = el.getAttribute('aria-label');
-      if (aria) return tag + '[aria-label="' + aria.replace(/"/g, '\\\\"') + '"]';
+      if (nameAttr) {
+        return disambiguateCss(el, tag + '[name="' + nameAttr.replace(/"/g, '\\\\"') + '"]', root);
+      }
       const ph = el.getAttribute('placeholder');
-      if (ph) return 'placeholder=' + ph;
-      const role = el.getAttribute('role') || (tag === 'button' ? 'button' : tag === 'a' ? 'link' : '');
+      if (ph && ph.length <= 60) {
+        const matches = root.querySelectorAll ? root.querySelectorAll('[placeholder="' + cssEsc(ph) + '"]').length : 1;
+        return matches <= 1 ? 'placeholder=' + ph : disambiguateCss(el, tag + '[placeholder="' + ph.replace(/"/g, '\\\\"') + '"]', root);
+      }
+      const aria = el.getAttribute('aria-label');
+      if (aria && aria.length <= 60) {
+        return disambiguateCss(el, tag + '[aria-label="' + aria.replace(/"/g, '\\\\"') + '"]', root);
+      }
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+        const lblText = findAssociatedLabelText(el, root);
+        if (lblText) return 'label=' + lblText;
+      }
+      const explicitRole = el.getAttribute('role');
+      const role = explicitRole || (tag === 'button' ? 'button' : tag === 'a' ? 'link' : '');
       const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
       if (role && text && text.length <= 60) {
-        return 'role=' + role + '[name="' + text.replace(/"/g, '\\\\"') + '"]';
+        const sameRoleText = Array.from(root.querySelectorAll ? root.querySelectorAll(explicitRole ? '[role="' + cssEsc(explicitRole) + '"]' : tag) : []).filter(
+          (n) => ((n.innerText || n.textContent || '').replace(/\\s+/g, ' ').trim()) === text
+        );
+        const base = 'role=' + role + '[name="' + text.replace(/"/g, '\\\\"') + '"]';
+        if (sameRoleText.length <= 1) return base;
+        const rIdx = sameRoleText.indexOf(el);
+        return rIdx >= 0 ? base + ' >> nth=' + rIdx : base;
       }
-      const classes = Array.from(el.classList || []).slice(0, 2).map((c) => '.' + CSS.escape(c)).join('');
-      return tag + classes;
+      const cleanClasses = Array.from(el.classList || [])
+        .filter((c) => c && !/^(hover|focus|active|open|selected|checked|disabled)$/i.test(c) && !c.includes(':'))
+        .slice(0, 2)
+        .map((c) => '.' + cssEsc(c))
+        .join('');
+      return disambiguateCss(el, tag + cleanClasses, root);
+    }
+
+    function stableSelector(el) {
+      if (!isElem(el)) return '';
+      const chain = [];
+      let cur = el;
+      while (cur) {
+        const root = cur.getRootNode ? cur.getRootNode() : document;
+        if (root && isElem(root.host)) {
+          chain.unshift(localSelector(cur, root));
+          cur = root.host;
+          continue;
+        }
+        const doc = cur.ownerDocument || document;
+        chain.unshift(localSelector(cur, doc));
+        const win = doc.defaultView;
+        if (win && win !== win.parent) {
+          try {
+            if (isElem(win.frameElement)) {
+              cur = win.frameElement;
+              continue;
+            }
+          } catch {}
+        }
+        break;
+      }
+      return chain.filter(Boolean).join(' >> ');
     }
 
     function interactiveTarget(raw) {
-      if (!(raw instanceof Element)) return null;
-      return raw.closest('button, a, input, textarea, select, [role="button"], [role="link"], [role="tab"], [role="menuitem"], label') || raw;
+      if (!isElem(raw)) return null;
+      return raw.closest('button, a, input, textarea, select, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="switch"], [role="checkbox"], [contenteditable="true"], label') || raw;
     }
 
-    document.addEventListener('click', (e) => {
-      const el = interactiveTarget(e.target);
-      if (!el) return;
-      const tag = el.tagName.toLowerCase();
-      // Skip redundant click right on text inputs when followed by fill
-      emit({
-        action: 'click',
-        url: location.href,
-        target: stableSelector(el),
-        text: (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80) || undefined,
-        coordinates: { x: Math.round(e.clientX), y: Math.round(e.clientY) },
-        tag,
-      });
-    }, true);
-
-    const inputTimers = new WeakMap();
-    const recordInput = (el) => {
+    function recordInputNow(el) {
+      if (!isElem(el)) return;
       const tag = el.tagName.toLowerCase();
       const sel = stableSelector(el);
       if (tag === 'select') {
-        emit({ action: 'select_option', url: location.href, target: sel, value: el.value });
+        const sVal = String(el.value ?? '');
+        if (lastEmittedValue.get(el) === sVal) return;
+        lastEmittedValue.set(el, sVal);
+        emit({ action: 'select_option', url: location.href, target: sel, value: sVal });
         return;
       }
       if (tag === 'input' && (el.type === 'checkbox' || el.type === 'radio')) {
-        return; // captured via click
+        return;
       }
       const isPassword = ${maskPasswords} && tag === 'input' && el.type === 'password';
       const val = el.isContentEditable ? (el.innerText || '') : (el.value || '');
+      const masked = isPassword ? '<REDACTED_PASSWORD>' : val;
+      if (lastEmittedValue.get(el) === masked) return;
+      lastEmittedValue.set(el, masked);
       emit({
         action: 'fill',
         url: location.href,
         target: sel,
-        value: isPassword ? '<REDACTED_PASSWORD>' : val,
+        value: masked,
       });
-    };
+    }
 
-    document.addEventListener('input', (e) => {
-      const el = e.target;
-      if (!(el instanceof Element)) return;
-      const prev = inputTimers.get(el);
-      if (prev) clearTimeout(prev);
-      inputTimers.set(el, setTimeout(() => recordInput(el), 350));
-    }, true);
-
-    document.addEventListener('change', (e) => {
-      const el = e.target;
-      if (!(el instanceof Element)) return;
-      const prev = inputTimers.get(el);
-      if (prev) clearTimeout(prev);
-      recordInput(el);
-    }, true);
-
-    document.addEventListener('keydown', (e) => {
-      if (['Enter', 'Escape', 'Tab'].includes(e.key)) {
-        emit({ action: 'press_key', url: location.href, key: e.key });
+    function flushPendingInputs() {
+      for (const [el, timer] of pendingInputs.entries()) {
+        clearTimeout(timer);
+        pendingInputs.delete(el);
+        recordInputNow(el);
       }
-    }, true);
+    }
+    globalThis.__bpFlushRecordedInputs = flushPendingInputs;
+
+    function attachListeners(doc) {
+      if (!doc || doc.__bpListenersBound) return;
+      doc.__bpListenersBound = true;
+
+      doc.addEventListener('click', (e) => {
+        if (!globalThis.__bpActionRecorderEnabled) return;
+        const rawTarget = e.composedPath ? e.composedPath()[0] : e.target;
+        if (isElem(rawTarget) && rawTarget.closest && rawTarget.closest('#__browserpilot_ui_host')) return;
+        const el = interactiveTarget(isElem(rawTarget) ? rawTarget : e.target);
+        if (!el) return;
+
+        flushPendingInputs();
+
+        // Alt+Shift+Click or active Assert Mode records an assertion without triggering navigation
+        if ((e.altKey && e.shiftKey) || globalThis.__bpAssertMode) {
+          e.preventDefault();
+          e.stopPropagation();
+          globalThis.__bpAssertMode = false;
+          const sel = stableSelector(el);
+          const tag = el.tagName.toLowerCase();
+          if ((tag === 'input' || tag === 'textarea' || tag === 'select') && typeof el.value === 'string') {
+            emit({ action: 'assert_value', url: location.href, target: sel, value: el.value });
+          } else {
+            const txt = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 120);
+            if (txt) {
+              emit({ action: 'assert_text', url: location.href, target: sel, value: txt, text: txt });
+            } else {
+              emit({ action: 'assert_visible', url: location.href, target: sel });
+            }
+          }
+          return;
+        }
+
+        const tag = el.tagName.toLowerCase();
+        const role = (el.getAttribute('role') || '').toLowerCase();
+        const sel = stableSelector(el);
+
+        // Checkbox / switch state transitions
+        if ((tag === 'input' && el.type === 'checkbox') || role === 'checkbox' || role === 'switch') {
+          const checked = tag === 'input' ? Boolean(el.checked) : el.getAttribute('aria-checked') !== 'true';
+          emit({
+            action: checked ? 'check' : 'uncheck',
+            url: location.href,
+            target: sel,
+            coordinates: { x: Math.round(e.clientX), y: Math.round(e.clientY) },
+          });
+          return;
+        }
+
+        emit({
+          action: 'click',
+          url: location.href,
+          target: sel,
+          text: (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80) || undefined,
+          coordinates: { x: Math.round(e.clientX), y: Math.round(e.clientY) },
+        });
+      }, true);
+
+      doc.addEventListener('dblclick', (e) => {
+        if (!globalThis.__bpActionRecorderEnabled) return;
+        const rawTarget = e.composedPath ? e.composedPath()[0] : e.target;
+        const el = interactiveTarget(isElem(rawTarget) ? rawTarget : e.target);
+        if (!el) return;
+        flushPendingInputs();
+        emit({
+          action: 'dblclick',
+          url: location.href,
+          target: stableSelector(el),
+          text: (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80) || undefined,
+          coordinates: { x: Math.round(e.clientX), y: Math.round(e.clientY) },
+        });
+      }, true);
+
+      doc.addEventListener('input', (e) => {
+        if (!globalThis.__bpActionRecorderEnabled) return;
+        const rawTarget = e.composedPath ? e.composedPath()[0] : e.target;
+        const el = isElem(rawTarget) ? rawTarget : e.target;
+        if (!isElem(el)) return;
+        const prev = pendingInputs.get(el);
+        if (prev) clearTimeout(prev);
+        pendingInputs.set(el, setTimeout(() => {
+          pendingInputs.delete(el);
+          recordInputNow(el);
+        }, 300));
+      }, true);
+
+      doc.addEventListener('change', (e) => {
+        if (!globalThis.__bpActionRecorderEnabled) return;
+        const rawTarget = e.composedPath ? e.composedPath()[0] : e.target;
+        const el = isElem(rawTarget) ? rawTarget : e.target;
+        if (!isElem(el)) return;
+        const prev = pendingInputs.get(el);
+        if (prev) {
+          clearTimeout(prev);
+          pendingInputs.delete(el);
+        }
+        recordInputNow(el);
+      }, true);
+
+      doc.addEventListener('keydown', (e) => {
+        if (!globalThis.__bpActionRecorderEnabled) return;
+        if (['Enter', 'Escape'].includes(e.key)) {
+          flushPendingInputs();
+          emit({ action: 'press_key', url: location.href, key: e.key });
+        }
+      }, true);
+    }
+
+    attachListeners(document);
+
+    // Also attach to accessible same-origin iframes (present and dynamically added)
+    function bindSameOriginIframes() {
+      for (const frame of document.querySelectorAll('iframe')) {
+        try {
+          if (frame.contentDocument) attachListeners(frame.contentDocument);
+          if (!frame.__bpLoadHooked) {
+            frame.__bpLoadHooked = true;
+            frame.addEventListener('load', () => {
+              try { if (frame.contentDocument) attachListeners(frame.contentDocument); } catch {}
+            });
+          }
+        } catch {}
+      }
+    }
+    bindSameOriginIframes();
+    const mo = new MutationObserver(() => bindSameOriginIframes());
+    if (document.documentElement) {
+      mo.observe(document.documentElement, { childList: true, subtree: true });
+    }
 
     let lastScrollY = Math.round(window.scrollY || 0);
     let scrollTimer = null;
     window.addEventListener('scroll', () => {
+      if (!globalThis.__bpActionRecorderEnabled) return;
       if (scrollTimer) clearTimeout(scrollTimer);
       scrollTimer = setTimeout(() => {
         const curY = Math.round(window.scrollY || 0);
         const delta = curY - lastScrollY;
-        if (Math.abs(delta) >= 180) {
+        if (Math.abs(delta) >= 200) {
           emit({ action: 'scroll', url: location.href, value: String(delta) });
           lastScrollY = curY;
         }
@@ -119,11 +335,6 @@ function buildCaptureScript(maskPasswords: boolean): string {
   })()`
 }
 
-/**
- * Compresses raw recorded events (collapsing repeated fills on the same input
- * and click-before-fill noise) and renders executable batch steps, JS script,
- * and reusable Agent Skill Markdown.
- */
 export function buildActionRecordingResult(
   rawSteps: RecordedStep[],
   durationMs: number,
@@ -132,125 +343,13 @@ export function buildActionRecordingResult(
     errors?: Array<{ timestamp: number; kind: 'console' | 'exception' | 'dialog'; text: string }>
   },
 ): ActionRecordingResult {
-  const steps: RecordedStep[] = []
-  for (const s of rawSteps) {
-    const prev = steps[steps.length - 1]
-    // Collapse consecutive fills on the same input target
-    if (s.action === 'fill' && prev?.action === 'fill' && prev.target === s.target) {
-      prev.value = s.value
-      prev.timestamp = s.timestamp
-      continue
-    }
-    // Collapse click immediately before fill/select on the exact same element
-    if ((s.action === 'fill' || s.action === 'select_option') && prev?.action === 'click' && prev.target === s.target) {
-      steps.pop()
-    }
-    // Skip duplicate consecutive navigations to same URL
-    if (s.action === 'navigate' && prev?.action === 'navigate' && prev.url === s.url) {
-      continue
-    }
-    steps.push({ ...s })
-  }
-
-  const batchSteps: Array<Record<string, unknown>> = steps.map((s) => {
-    switch (s.action) {
-      case 'navigate':
-        return { action: 'navigate', url: s.url }
-      case 'click':
-        return { action: 'click', target: s.target }
-      case 'fill':
-        return { action: 'fill', target: s.target, value: s.value ?? '' }
-      case 'select_option':
-        return { action: 'select_option', target: s.target, value: s.value ?? '' }
-      case 'press_key':
-        return { action: 'press_key', key: s.key ?? 'Enter' }
-      case 'scroll': {
-        const dy = Number(s.value ?? 400)
-        return { action: 'scroll', direction: dy >= 0 ? 'down' : 'up', amount: Math.abs(dy) }
-      }
-    }
-  })
-
-  const scriptLines: string[] = [
-    '// Recorded by BrowserPilot Action Recorder',
-    'const t = await tabs.current();',
-  ]
-  for (const s of steps) {
-    switch (s.action) {
-      case 'navigate':
-        scriptLines.push(`await t.page.navigate(${JSON.stringify(s.url)});`)
-        break
-      case 'click':
-        scriptLines.push(`await t.page.click(${JSON.stringify(s.target ?? '')});`)
-        break
-      case 'fill':
-        scriptLines.push(`await t.page.fill(${JSON.stringify(s.target ?? '')}, ${JSON.stringify(s.value ?? '')});`)
-        break
-      case 'select_option':
-        scriptLines.push(`await t.page.selectOption(${JSON.stringify(s.target ?? '')}, ${JSON.stringify(s.value ?? '')});`)
-        break
-      case 'press_key':
-        scriptLines.push(`await t.page.pressKey(${JSON.stringify(s.key ?? 'Enter')});`)
-        break
-      case 'scroll': {
-        const dy = Number(s.value ?? 400)
-        scriptLines.push(`await t.page.scroll({ deltaY: ${dy} });`)
-        break
-      }
-    }
-  }
-  const execScript = scriptLines.join('\n')
-
-  const mdLines: string[] = [
-    '# Recorded BrowserPilot Workflow',
-    '',
-    `Recorded ${steps.length} step(s) in ${(durationMs / 1000).toFixed(1)}s.`,
-    '',
-    '## Steps',
-  ]
-  steps.forEach((s, idx) => {
-    const desc =
-      s.action === 'navigate'
-        ? `Navigate to \`${s.url}\``
-        : s.action === 'click'
-          ? `Click \`${s.target}\`${s.text ? ` ("${s.text}")` : ''}`
-          : s.action === 'fill'
-            ? `Fill \`${s.target}\` with \`${s.value ?? ''}\``
-            : s.action === 'select_option'
-              ? `Select \`${s.value ?? ''}\` in \`${s.target}\``
-              : s.action === 'press_key'
-                ? `Press key \`${s.key}\``
-                : `Scroll ${Number(s.value ?? 0) >= 0 ? 'down' : 'up'} ${Math.abs(Number(s.value ?? 0))}px`
-    mdLines.push(`${idx + 1}. ${desc}`)
-  })
-  if (extras?.apiCalls?.length) {
-    mdLines.push('', '## Observed API Calls')
-    for (const c of extras.apiCalls.slice(0, 20)) {
-      mdLines.push(`- \`${c.method} ${c.status ?? '?'}\` ${c.url}`)
-    }
-  }
-  if (extras?.errors?.length) {
-    mdLines.push('', '## Observed Errors / Dialogs')
-    for (const e of extras.errors.slice(0, 15)) {
-      mdLines.push(`- [${e.kind}] ${e.text}`)
-    }
-  }
-  mdLines.push('', '## Replay Script (`browserpilot exec`)', '```js', execScript, '```')
-
-  return {
-    durationMs,
-    steps,
-    ...(extras?.apiCalls?.length ? { apiCalls: extras.apiCalls } : {}),
-    ...(extras?.errors?.length ? { errors: extras.errors } : {}),
-    batchSteps,
-    execScript,
-    skillMarkdown: mdLines.join('\n'),
-  }
+  return compileRecordingArtifacts(rawSteps, durationMs, extras)
 }
 
 /**
- * Records live user interactions (clicks, fills, selects, keys, scrolls, navigations)
- * plus concurrent XHR/Fetch API calls, dialogs, and uncaught exceptions across page loads.
+ * Records live user interactions (clicks, dblclicks, checks, fills, selects, keys, scrolls,
+ * navigations, and assertions) across Shadow DOM & same-origin iframes, plus concurrent
+ * XHR/Fetch API calls, dialogs, and uncaught exceptions.
  */
 export class ActionRecorder {
   private readonly session: TabCDPSession
@@ -262,6 +361,7 @@ export class ActionRecorder {
   private pendingReqMethods = new Map<string, string>()
   private scriptId: string | null = null
   private unsubs: Array<() => void> = []
+  private stepListeners = new Set<(step: RecordedStep, compressed: RecordedStep[]) => void>()
 
   constructor(session: TabCDPSession) {
     this.session = session
@@ -272,7 +372,43 @@ export class ActionRecorder {
   }
 
   getSteps(): RecordedStep[] {
+    return compressRecordedSteps(this.steps)
+  }
+
+  onStep(listener: (step: RecordedStep, compressed: RecordedStep[]) => void): () => void {
+    this.stepListeners.add(listener)
+    return () => this.stepListeners.delete(listener)
+  }
+
+  deleteStep(index: number): RecordedStep[] {
+    const compressed = compressRecordedSteps(this.steps)
+    if (index >= 0 && index < compressed.length) {
+      compressed.splice(index, 1)
+      this.steps = compressed
+    }
     return [...this.steps]
+  }
+
+  clearSteps(): void {
+    this.steps = []
+  }
+
+  async setAssertMode(enabled: boolean): Promise<void> {
+    await this.session
+      .send('Runtime.evaluate', { expression: `globalThis.__bpAssertMode = ${Boolean(enabled)};` })
+      .catch(() => {})
+  }
+
+  private pushStep(step: RecordedStep): void {
+    this.steps.push(step)
+    if (this.stepListeners.size > 0) {
+      const compressed = compressRecordedSteps(this.steps)
+      for (const fn of this.stepListeners) {
+        try {
+          fn(step, compressed)
+        } catch {}
+      }
+    }
   }
 
   async start(options: { maskPasswords?: boolean } = {}): Promise<{ startedAt: number; url: string }> {
@@ -294,7 +430,7 @@ export class ActionRecorder {
     })
     const initialUrl = initialUrlRes.result?.value ?? ''
     if (initialUrl && initialUrl !== 'about:blank') {
-      this.steps.push({ timestamp: this.startedAt, action: 'navigate', url: initialUrl })
+      this.pushStep({ timestamp: this.startedAt, action: 'navigate', url: initialUrl })
     }
 
     await this.session.send('Runtime.addBinding', { name: BINDING_NAME })
@@ -313,7 +449,7 @@ export class ActionRecorder {
         try {
           const parsed = JSON.parse(String(params.payload ?? '{}')) as Partial<RecordedStep>
           if (!parsed.action) return
-          this.steps.push({
+          this.pushStep({
             timestamp: Date.now(),
             action: parsed.action,
             url: parsed.url ?? '',
@@ -331,7 +467,7 @@ export class ActionRecorder {
         if (!this.recording) return
         const frame = params.frame as { parentId?: string; url?: string } | undefined
         if (frame && !frame.parentId && frame.url && frame.url !== 'about:blank') {
-          this.steps.push({
+          this.pushStep({
             timestamp: Date.now(),
             action: 'navigate',
             url: frame.url,
@@ -381,6 +517,13 @@ export class ActionRecorder {
     if (!this.recording) {
       throw new Error('Action recorder is not running on this tab')
     }
+    // Flush any pending debounced input before disabling
+    await this.session
+      .send('Runtime.evaluate', {
+        expression: 'if (typeof globalThis.__bpFlushRecordedInputs === "function") globalThis.__bpFlushRecordedInputs();',
+      })
+      .catch(() => {})
+
     this.recording = false
     const durationMs = Date.now() - this.startedAt
 
@@ -392,7 +535,7 @@ export class ActionRecorder {
       this.scriptId = null
     }
     await this.session
-      .send('Runtime.evaluate', { expression: 'globalThis.__bpActionRecorderEnabled = false;' })
+      .send('Runtime.evaluate', { expression: 'globalThis.__bpActionRecorderEnabled = false; globalThis.__bpAssertMode = false;' })
       .catch(() => {})
 
     return buildActionRecordingResult(this.steps, durationMs, {
@@ -403,6 +546,7 @@ export class ActionRecorder {
 
   dispose(): void {
     this.recording = false
+    this.stepListeners.clear()
     for (const off of this.unsubs) off()
     this.unsubs = []
   }

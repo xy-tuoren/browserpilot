@@ -127,3 +127,27 @@ export interface ResolvedElement {
   box: BoundingBox
   center: { x: number; y: number }
 }
+
+export interface PageActionReadyMeta {
+  point?: { x: number; y: number }
+  box?: BoundingBox
+}
+
+export interface PageActionTraceInput {
+  action: string
+  title: string
+  target?: string
+  value?: string
+  key?: string
+  point?: { x: number; y: number }
+  box?: BoundingBox
+  captureBeforeImmediately?: boolean
+}
+
+export interface PageTraceHook {
+  isActive(): boolean
+  runStep<T>(
+    input: PageActionTraceInput,
+    fn: (markReady: (meta?: PageActionReadyMeta) => Promise<void>) => Promise<T>,
+  ): Promise<T>
+}

@@ -17,6 +17,9 @@ import type {
   InitScriptEntry,
   KeyModifier,
   MouseButton,
+  PageActionReadyMeta,
+  PageActionTraceInput,
+  PageTraceHook,
   PdfOptions,
   ResolvedElement,
   ScreenshotOptions,
@@ -37,6 +40,9 @@ export type {
   InitScriptEntry,
   KeyModifier,
   MouseButton,
+  PageActionReadyMeta,
+  PageActionTraceInput,
+  PageTraceHook,
   PdfOptions,
   ResolvedElement,
   ScreenshotOptions,
@@ -53,11 +59,32 @@ export class PageController {
   readonly snapshotEngine: SnapshotEngine
   private readonly input: PageInputDriver
   private initScripts: InitScriptEntry[] = []
+  private traceHook?: PageTraceHook
+  private traceDepth = 0
 
   constructor(session: TabCDPSession, snapshotEngine: SnapshotEngine) {
     this.session = session
     this.snapshotEngine = snapshotEngine
     this.input = new PageInputDriver(session)
+  }
+
+  setTraceHook(hook?: PageTraceHook): void {
+    this.traceHook = hook
+  }
+
+  private async runTraced<T>(
+    input: PageActionTraceInput,
+    fn: (markReady: (meta?: PageActionReadyMeta) => Promise<void>) => Promise<T>,
+  ): Promise<T> {
+    if (this.traceDepth > 0 || !this.traceHook?.isActive()) {
+      return await fn(async () => {})
+    }
+    this.traceDepth++
+    try {
+      return await this.traceHook.runStep(input, fn)
+    } finally {
+      this.traceDepth--
+    }
   }
 
   private get actionabilityDeps() {
@@ -107,65 +134,85 @@ export class PageController {
     url: string,
     options: { waitUntil?: 'none' | 'domcontentloaded' | 'load' | 'networkidle'; timeoutMs?: number } = {},
   ): Promise<{ url: string; title: string }> {
-    await this.session.ensureBaseDomains()
-    const waitUntil = options.waitUntil ?? 'domcontentloaded'
-    const timeoutMs = options.timeoutMs ?? 30_000
+    return await this.runTraced(
+      { action: 'navigate', title: `navigate ${url}`, value: url, captureBeforeImmediately: true },
+      async () => {
+        await this.session.ensureBaseDomains()
+        const waitUntil = options.waitUntil ?? 'domcontentloaded'
+        const timeoutMs = options.timeoutMs ?? 30_000
 
-    const domContentLoaded =
-      waitUntil === 'domcontentloaded' || waitUntil === 'load' || waitUntil === 'networkidle'
-        ? this.session.once('Page.domContentEventFired', undefined, timeoutMs).catch(() => null)
-        : null
-    const loadEvent =
-      waitUntil === 'load'
-        ? this.session.once('Page.loadEventFired', undefined, timeoutMs).catch(() => null)
-        : null
+        const domContentLoaded =
+          waitUntil === 'domcontentloaded' || waitUntil === 'load' || waitUntil === 'networkidle'
+            ? this.session.once('Page.domContentEventFired', undefined, timeoutMs).catch(() => null)
+            : null
+        const loadEvent =
+          waitUntil === 'load'
+            ? this.session.once('Page.loadEventFired', undefined, timeoutMs).catch(() => null)
+            : null
 
-    const navRes = await this.session.send<{ errorText?: string }>('Page.navigate', { url }, { timeoutMs })
-    if (navRes.errorText) {
-      throw new Error(`Navigation to "${url}" failed: ${navRes.errorText}`)
-    }
+        const navRes = await this.session.send<{ errorText?: string }>('Page.navigate', { url }, { timeoutMs })
+        if (navRes.errorText) {
+          throw new Error(`Navigation to "${url}" failed: ${navRes.errorText}`)
+        }
 
-    if (domContentLoaded) await domContentLoaded
-    if (loadEvent) await loadEvent
-    if (waitUntil === 'networkidle') {
-      await waitForPageLoad(this.session, { timeoutMs: Math.min(timeoutMs, 8_000) })
-    }
+        if (domContentLoaded) await domContentLoaded
+        if (loadEvent) await loadEvent
+        if (waitUntil === 'networkidle') {
+          await waitForPageLoad(this.session, { timeoutMs: Math.min(timeoutMs, 8_000) })
+        }
 
-    return await this.getUrlAndTitle()
+        return await this.getUrlAndTitle()
+      },
+    )
   }
 
   async reload(ignoreCache = false): Promise<{ url: string; title: string }> {
-    await this.session.ensureBaseDomains()
-    const loaded = this.session.once('Page.domContentEventFired', undefined, 20_000).catch(() => null)
-    await this.session.send('Page.reload', { ignoreCache })
-    await loaded
-    return await this.getUrlAndTitle()
+    return await this.runTraced(
+      { action: 'reload', title: 'reload page', captureBeforeImmediately: true },
+      async () => {
+        await this.session.ensureBaseDomains()
+        const loaded = this.session.once('Page.domContentEventFired', undefined, 20_000).catch(() => null)
+        await this.session.send('Page.reload', { ignoreCache })
+        await loaded
+        return await this.getUrlAndTitle()
+      },
+    )
   }
 
   async goBack(): Promise<{ url: string; title: string }> {
-    const hist = await this.session.send<{ currentIndex: number; entries: Array<{ id: number }> }>(
-      'Page.getNavigationHistory',
+    return await this.runTraced(
+      { action: 'goBack', title: 'goBack', captureBeforeImmediately: true },
+      async () => {
+        const hist = await this.session.send<{ currentIndex: number; entries: Array<{ id: number }> }>(
+          'Page.getNavigationHistory',
+        )
+        if (hist.currentIndex > 0) {
+          await this.session.send('Page.navigateToHistoryEntry', {
+            entryId: hist.entries[hist.currentIndex - 1].id,
+          })
+          await waitForPageLoad(this.session, { timeoutMs: 5_000 })
+        }
+        return await this.getUrlAndTitle()
+      },
     )
-    if (hist.currentIndex > 0) {
-      await this.session.send('Page.navigateToHistoryEntry', {
-        entryId: hist.entries[hist.currentIndex - 1].id,
-      })
-      await waitForPageLoad(this.session, { timeoutMs: 5_000 })
-    }
-    return await this.getUrlAndTitle()
   }
 
   async goForward(): Promise<{ url: string; title: string }> {
-    const hist = await this.session.send<{ currentIndex: number; entries: Array<{ id: number }> }>(
-      'Page.getNavigationHistory',
+    return await this.runTraced(
+      { action: 'goForward', title: 'goForward', captureBeforeImmediately: true },
+      async () => {
+        const hist = await this.session.send<{ currentIndex: number; entries: Array<{ id: number }> }>(
+          'Page.getNavigationHistory',
+        )
+        if (hist.currentIndex < hist.entries.length - 1) {
+          await this.session.send('Page.navigateToHistoryEntry', {
+            entryId: hist.entries[hist.currentIndex + 1].id,
+          })
+          await waitForPageLoad(this.session, { timeoutMs: 5_000 })
+        }
+        return await this.getUrlAndTitle()
+      },
     )
-    if (hist.currentIndex < hist.entries.length - 1) {
-      await this.session.send('Page.navigateToHistoryEntry', {
-        entryId: hist.entries[hist.currentIndex + 1].id,
-      })
-      await waitForPageLoad(this.session, { timeoutMs: 5_000 })
-    }
-    return await this.getUrlAndTitle()
   }
 
   // ============================================================================
@@ -202,42 +249,55 @@ export class PageController {
     const button = options.button ?? 'left'
     const clickCount = options.clickCount ?? 1
     const modifiers = modifierBitmask(options.modifiers)
+    const actionName = clickCount >= 2 ? 'dblclick' : button === 'right' ? 'rightClick' : 'click'
+    const label = typeof targetOrCoords === 'string' ? targetOrCoords : `(${Math.round(targetOrCoords.x)}, ${Math.round(targetOrCoords.y)})`
 
-    let x: number
-    let y: number
-    let underOwnPill = false
-    if (typeof targetOrCoords === 'string') {
-      const checked = await resolveActionableForClick(this.actionabilityDeps, targetOrCoords, {
-        timeoutMs: options.timeoutMs,
-        force: options.force,
-        strict: options.strict,
-      })
-      const el = checked.el
-      underOwnPill = checked.underOwnPill
-      x = el.center.x
-      y = el.center.y
-      await this.session.transport
-        .setControlBanner?.(this.tabId, { active: true, status: `Clicking ${targetOrCoords}`, mode: 'working' })
-        .catch(() => {})
-      await this.session.transport.highlightElement?.(this.tabId, el.box, `click ${targetOrCoords}`).catch(() => {})
-    } else {
-      x = targetOrCoords.x
-      y = targetOrCoords.y
-      await this.session.transport
-        .setControlBanner?.(this.tabId, { active: true, status: `Clicking (${Math.round(x)}, ${Math.round(y)})`, mode: 'working' })
-        .catch(() => {})
-    }
+    await this.runTraced(
+      {
+        action: actionName,
+        title: `${actionName} ${label}`,
+        ...(typeof targetOrCoords === 'string' ? { target: targetOrCoords } : { point: targetOrCoords }),
+      },
+      async (markReady) => {
+        let x: number
+        let y: number
+        let underOwnPill = false
+        if (typeof targetOrCoords === 'string') {
+          const checked = await resolveActionableForClick(this.actionabilityDeps, targetOrCoords, {
+            timeoutMs: options.timeoutMs,
+            force: options.force,
+            strict: options.strict,
+          })
+          const el = checked.el
+          underOwnPill = checked.underOwnPill
+          x = el.center.x
+          y = el.center.y
+          await markReady({ box: el.box, point: el.center })
+          await this.session.transport
+            .setControlBanner?.(this.tabId, { active: true, status: `Clicking ${targetOrCoords}`, mode: 'working' })
+            .catch(() => {})
+          await this.session.transport.highlightElement?.(this.tabId, el.box, `click ${targetOrCoords}`).catch(() => {})
+        } else {
+          x = targetOrCoords.x
+          y = targetOrCoords.y
+          await markReady({ point: { x, y } })
+          await this.session.transport
+            .setControlBanner?.(this.tabId, { active: true, status: `Clicking (${Math.round(x)}, ${Math.round(y)})`, mode: 'working' })
+            .catch(() => {})
+        }
 
-    if (underOwnPill) {
-      await this.evaluate(`(() => { const h = document.getElementById('__browserpilot_ui_host'); if (h) h.style.display = 'none'; })()`).catch(() => {})
-    }
-    try {
-      await this.mouseClick(x, y, { button, clickCount, modifiers })
-    } finally {
-      if (underOwnPill) {
-        await this.evaluate(`(() => { const h = document.getElementById('__browserpilot_ui_host'); if (h) h.style.display = ''; })()`).catch(() => {})
-      }
-    }
+        if (underOwnPill) {
+          await this.evaluate(`(() => { const h = document.getElementById('__browserpilot_ui_host'); if (h) h.style.display = 'none'; })()`).catch(() => {})
+        }
+        try {
+          await this.mouseClick(x, y, { button, clickCount, modifiers })
+        } finally {
+          if (underOwnPill) {
+            await this.evaluate(`(() => { const h = document.getElementById('__browserpilot_ui_host'); if (h) h.style.display = ''; })()`).catch(() => {})
+          }
+        }
+      },
+    )
   }
 
   async dblclick(targetOrCoords: string | { x: number; y: number }): Promise<void> {
@@ -249,18 +309,30 @@ export class PageController {
   }
 
   async hover(targetOrCoords: string | { x: number; y: number }, timeoutMs?: number): Promise<void> {
-    let x: number
-    let y: number
-    if (typeof targetOrCoords === 'string') {
-      const el = await this.resolveElement(targetOrCoords, timeoutMs)
-      x = el.center.x
-      y = el.center.y
-      await this.session.transport.highlightElement?.(this.tabId, el.box, `hover ${targetOrCoords}`).catch(() => {})
-    } else {
-      x = targetOrCoords.x
-      y = targetOrCoords.y
-    }
-    await this.mouseMove(x, y)
+    const label = typeof targetOrCoords === 'string' ? targetOrCoords : `(${Math.round(targetOrCoords.x)}, ${Math.round(targetOrCoords.y)})`
+    await this.runTraced(
+      {
+        action: 'hover',
+        title: `hover ${label}`,
+        ...(typeof targetOrCoords === 'string' ? { target: targetOrCoords } : { point: targetOrCoords }),
+      },
+      async (markReady) => {
+        let x: number
+        let y: number
+        if (typeof targetOrCoords === 'string') {
+          const el = await this.resolveElement(targetOrCoords, timeoutMs)
+          x = el.center.x
+          y = el.center.y
+          await markReady({ box: el.box, point: el.center })
+          await this.session.transport.highlightElement?.(this.tabId, el.box, `hover ${targetOrCoords}`).catch(() => {})
+        } else {
+          x = targetOrCoords.x
+          y = targetOrCoords.y
+          await markReady({ point: { x, y } })
+        }
+        await this.mouseMove(x, y)
+      },
+    )
   }
 
   mouseMove(x: number, y: number, options: { steps?: number } = {}): Promise<void> {
@@ -303,11 +375,16 @@ export class PageController {
     return this.input.mouseStroke(points, options)
   }
 
-  pressKey(
+  async pressKey(
     combo: string,
     options: { modifiers?: KeyModifier[]; action?: 'press' | 'down' | 'up'; repeat?: number } = {},
   ): Promise<void> {
-    return this.input.pressKey(combo, options)
+    await this.runTraced(
+      { action: 'pressKey', title: `pressKey ${combo}`, key: combo, captureBeforeImmediately: true },
+      async () => {
+        await this.input.pressKey(combo, options)
+      },
+    )
   }
 
   keyDown(keyName: string, modifiers = 0): Promise<void> {
@@ -427,195 +504,233 @@ export class PageController {
   }
 
   async fill(target: string, value: string, options: FillOptions = {}): Promise<void> {
-    const resolveBudget = options.timeoutMs ?? 8_000
-    const actionBudget = options.timeoutMs ?? 1_500
-    const start = Date.now()
-    let actionDeadline: number | null = null
+    const preview = /password|passwd|pwd|secret|token/i.test(target)
+      ? '<REDACTED>'
+      : value.length > 40
+        ? `${value.slice(0, 40)}…`
+        : value
+    await this.runTraced(
+      { action: 'fill', title: `fill ${target} = ${JSON.stringify(preview)}`, target, value },
+      async (markReady) => {
+        const resolveBudget = options.timeoutMs ?? 8_000
+        const actionBudget = options.timeoutMs ?? 1_500
+        const start = Date.now()
+        let actionDeadline: number | null = null
 
-    let el!: ResolvedElement
-    let editableCheck!: { ok: boolean; reason?: string; isContentEditable?: boolean }
+        let el!: ResolvedElement
+        let editableCheck!: { ok: boolean; reason?: string; isContentEditable?: boolean }
 
-    while (true) {
-      const remaining = Math.max(100, resolveBudget - (Date.now() - start))
-      el = await this.resolveElement(target, remaining, { strict: options.strict })
-      if (options.force) break
-      if (actionDeadline === null) actionDeadline = Date.now() + actionBudget
+        while (true) {
+          const remaining = Math.max(100, resolveBudget - (Date.now() - start))
+          el = await this.resolveElement(target, remaining, { strict: options.strict })
+          if (options.force) break
+          if (actionDeadline === null) actionDeadline = Date.now() + actionBudget
 
-      const stateRes = await this.session
-        .send<{ result?: { value?: { ok: boolean; reason?: string; isContentEditable?: boolean } } }>(
-          'Runtime.callFunctionOn',
-          {
-            objectId: el.objectId,
-            returnByValue: true,
-            functionDeclaration: `function() {
-              if (!this.isConnected) return { ok: false, reason: 'detached' };
-              if (this.disabled === true || this.getAttribute?.('aria-disabled') === 'true') {
-                return { ok: false, reason: 'disabled' };
-              }
-              if (this.readOnly === true || this.getAttribute?.('aria-readonly') === 'true') {
-                return { ok: false, reason: 'readonly' };
-              }
-              return { ok: true, isContentEditable: Boolean(this.isContentEditable) };
-            }`,
-          },
-          { sessionId: el.sessionId },
-        )
-        .catch(() => null)
+          const stateRes = await this.session
+            .send<{ result?: { value?: { ok: boolean; reason?: string; isContentEditable?: boolean } } }>(
+              'Runtime.callFunctionOn',
+              {
+                objectId: el.objectId,
+                returnByValue: true,
+                functionDeclaration: `function() {
+                  if (!this.isConnected) return { ok: false, reason: 'detached' };
+                  if (this.disabled === true || this.getAttribute?.('aria-disabled') === 'true') {
+                    return { ok: false, reason: 'disabled' };
+                  }
+                  if (this.readOnly === true || this.getAttribute?.('aria-readonly') === 'true') {
+                    return { ok: false, reason: 'readonly' };
+                  }
+                  return { ok: true, isContentEditable: Boolean(this.isContentEditable) };
+                }`,
+              },
+              { sessionId: el.sessionId },
+            )
+            .catch(() => null)
 
-      editableCheck = stateRes?.result?.value ?? { ok: false, reason: 'detached' }
-      if (editableCheck.ok) break
-      if (Date.now() >= actionDeadline) {
-        if (editableCheck.reason === 'disabled') {
-          throw new Error(`Element "${target}" is disabled and cannot be filled.`)
-        }
-        if (editableCheck.reason === 'readonly') {
-          throw new Error(`Element "${target}" is read-only and cannot be filled (pass force: true to override).`)
-        }
-        throw new Error(`Element "${target}" detached from DOM before fill.`)
-      }
-      await sleep(editableCheck.reason === 'detached' ? 35 : 80)
-    }
-
-    await this.session.transport
-      .setControlBanner?.(this.tabId, { active: true, status: `Filling ${target}`, mode: 'working' })
-      .catch(() => {})
-    await this.session.transport.highlightElement?.(this.tabId, el.box, `fill ${target}`).catch(() => {})
-
-    await this.mouseClick(el.center.x, el.center.y)
-
-    const selectAllFn = `function() {
-      if (!this.isConnected) return { hadContent: false, isContentEditable: false, connected: false };
-      const doc = this.ownerDocument || document;
-      const win = doc.defaultView || window;
-      if (typeof this.focus === 'function') this.focus();
-      const isCE = Boolean(this.isContentEditable);
-      let hadContent = false;
-      if (${options.clear !== false}) {
-        if (!isCE && typeof this.value === 'string') {
-          hadContent = this.value.length > 0;
-          if (hadContent) {
-            try {
-              if (typeof this.select === 'function') this.select();
-              if (typeof this.setSelectionRange === 'function') {
-                this.setSelectionRange(0, this.value.length);
-              }
-            } catch {}
-          }
-        } else if (isCE) {
-          const rawText = (this.innerText ?? this.textContent ?? '').replace(/\\u200B/g, '');
-          hadContent = rawText.replace(/\\n+$/, '').length > 0;
-          if (hadContent) {
-            const range = doc.createRange();
-            range.selectNodeContents(this);
-            const sel = win.getSelection();
-            sel?.removeAllRanges();
-            sel?.addRange(range);
-          }
-        }
-      }
-      return { hadContent, isContentEditable: isCE, connected: true };
-    }`
-
-    const selectRes = await this.session
-      .send<{ result?: { value?: { hadContent: boolean; isContentEditable: boolean; connected: boolean } } }>(
-        'Runtime.callFunctionOn',
-        { objectId: el.objectId, returnByValue: true, functionDeclaration: selectAllFn },
-        { sessionId: el.sessionId },
-      )
-      .catch(() => null)
-
-    let selState = selectRes?.result?.value
-    if (!selState || !selState.connected) {
-      el = await this.resolveElement(target, 2_000, { strict: options.strict })
-      const retrySel = await this.session
-        .send<{ result?: { value?: { hadContent: boolean; isContentEditable: boolean; connected: boolean } } }>(
-          'Runtime.callFunctionOn',
-          { objectId: el.objectId, returnByValue: true, functionDeclaration: selectAllFn },
-          { sessionId: el.sessionId },
-        )
-        .catch(() => null)
-      selState = retrySel?.result?.value ?? { hadContent: false, isContentEditable: false, connected: true }
-    }
-
-    if (options.clear !== false && selState.hadContent) {
-      await this.pressKey('Backspace')
-    }
-
-    if (value.length > 0) {
-      await this.session.send('Input.insertText', { text: value })
-    }
-
-    await this.session
-      .send(
-        'Runtime.callFunctionOn',
-        {
-          objectId: el.objectId,
-          arguments: [{ value }],
-          functionDeclaration: `function(expected) {
-            if (!this.isConnected) return;
-            const tag = this.tagName?.toLowerCase();
-            if ((tag === 'input' || tag === 'textarea') && this.value !== expected) {
-              const proto = tag === 'textarea' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-              const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-              if (setter) setter.call(this, expected);
-              else this.value = expected;
-              this.dispatchEvent(new Event('input', { bubbles: true }));
-              this.dispatchEvent(new Event('change', { bubbles: true }));
+          editableCheck = stateRes?.result?.value ?? { ok: false, reason: 'detached' }
+          if (editableCheck.ok) break
+          if (Date.now() >= actionDeadline) {
+            if (editableCheck.reason === 'disabled') {
+              throw new Error(`Element "${target}" is disabled and cannot be filled.`)
             }
-          }`,
-        },
-        { sessionId: el.sessionId },
-      )
-      .catch(() => {})
+            if (editableCheck.reason === 'readonly') {
+              throw new Error(`Element "${target}" is read-only and cannot be filled (pass force: true to override).`)
+            }
+            throw new Error(`Element "${target}" detached from DOM before fill.`)
+          }
+          await sleep(editableCheck.reason === 'detached' ? 35 : 80)
+        }
+
+        await markReady({ box: el.box, point: el.center })
+        await this.session.transport
+          .setControlBanner?.(this.tabId, { active: true, status: `Filling ${target}`, mode: 'working' })
+          .catch(() => {})
+        await this.session.transport.highlightElement?.(this.tabId, el.box, `fill ${target}`).catch(() => {})
+
+        await this.mouseClick(el.center.x, el.center.y)
+
+        const selectAllFn = `function() {
+          if (!this.isConnected) return { hadContent: false, isContentEditable: false, connected: false };
+          const doc = this.ownerDocument || document;
+          const win = doc.defaultView || window;
+          if (typeof this.focus === 'function') this.focus();
+          const isCE = Boolean(this.isContentEditable);
+          let hadContent = false;
+          if (${options.clear !== false}) {
+            if (!isCE && typeof this.value === 'string') {
+              hadContent = this.value.length > 0;
+              if (hadContent) {
+                try {
+                  if (typeof this.select === 'function') this.select();
+                  if (typeof this.setSelectionRange === 'function') {
+                    this.setSelectionRange(0, this.value.length);
+                  }
+                } catch {}
+              }
+            } else if (isCE) {
+              const rawText = (this.innerText ?? this.textContent ?? '').replace(/\\u200B/g, '');
+              hadContent = rawText.replace(/\\n+$/, '').length > 0;
+              if (hadContent) {
+                const range = doc.createRange();
+                range.selectNodeContents(this);
+                const sel = win.getSelection();
+                sel?.removeAllRanges();
+                sel?.addRange(range);
+              }
+            }
+          }
+          return { hadContent, isContentEditable: isCE, connected: true };
+        }`
+
+        const selectRes = await this.session
+          .send<{ result?: { value?: { hadContent: boolean; isContentEditable: boolean; connected: boolean } } }>(
+            'Runtime.callFunctionOn',
+            { objectId: el.objectId, returnByValue: true, functionDeclaration: selectAllFn },
+            { sessionId: el.sessionId },
+          )
+          .catch(() => null)
+
+        let selState = selectRes?.result?.value
+        if (!selState || !selState.connected) {
+          el = await this.resolveElement(target, 2_000, { strict: options.strict })
+          const retrySel = await this.session
+            .send<{ result?: { value?: { hadContent: boolean; isContentEditable: boolean; connected: boolean } } }>(
+              'Runtime.callFunctionOn',
+              { objectId: el.objectId, returnByValue: true, functionDeclaration: selectAllFn },
+              { sessionId: el.sessionId },
+            )
+            .catch(() => null)
+          selState = retrySel?.result?.value ?? { hadContent: false, isContentEditable: false, connected: true }
+        }
+
+        if (options.clear !== false && selState.hadContent) {
+          await this.pressKey('Backspace')
+        }
+
+        if (value.length > 0) {
+          await this.session.send('Input.insertText', { text: value })
+        }
+
+        await this.session
+          .send(
+            'Runtime.callFunctionOn',
+            {
+              objectId: el.objectId,
+              arguments: [{ value }],
+              functionDeclaration: `function(expected) {
+                if (!this.isConnected) return;
+                const tag = this.tagName?.toLowerCase();
+                if ((tag === 'input' || tag === 'textarea') && this.value !== expected) {
+                  const proto = tag === 'textarea' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+                  if (setter) setter.call(this, expected);
+                  else this.value = expected;
+                  this.dispatchEvent(new Event('input', { bubbles: true }));
+                  this.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+              }`,
+            },
+            { sessionId: el.sessionId },
+          )
+          .catch(() => {})
+      },
+    )
   }
 
   async type(target: string | null, text: string, options: { delayMs?: number } = {}): Promise<void> {
-    if (target) await this.click(target)
-    const delayMs = options.delayMs ?? 0
-    if (delayMs <= 0) {
-      await this.session.send('Input.insertText', { text })
-      return
-    }
-    for (const ch of text) {
-      await this.session.send('Input.insertText', { text: ch })
-      await sleep(delayMs)
-    }
+    await this.runTraced(
+      {
+        action: 'type',
+        title: target ? `type ${target}` : 'type keyboard',
+        ...(target ? { target } : {}),
+        value: text,
+        captureBeforeImmediately: !target,
+      },
+      async (markReady) => {
+        if (target) {
+          const el = await this.resolveElement(target)
+          await markReady({ box: el.box, point: el.center })
+          await this.click(target)
+        }
+        const delayMs = options.delayMs ?? 0
+        if (delayMs <= 0) {
+          await this.session.send('Input.insertText', { text })
+          return
+        }
+        for (const ch of text) {
+          await this.session.send('Input.insertText', { text: ch })
+          await sleep(delayMs)
+        }
+      },
+    )
   }
 
   async check(target: string, options: { timeoutMs?: number; force?: boolean } = {}): Promise<boolean> {
-    const el = await this.resolveElement(target, options.timeoutMs)
-    const res = await this.session
-      .send<{ result?: { value?: boolean } }>(
-        'Runtime.callFunctionOn',
-        {
-          objectId: el.objectId,
-          functionDeclaration: `function() { return Boolean(this.checked || this.getAttribute?.('aria-checked') === 'true'); }`,
-          returnByValue: true,
-        },
-        { sessionId: el.sessionId },
-      )
-      .catch(() => null)
-    if (res?.result?.value === true) return false
-    await this.click(target, { timeoutMs: options.timeoutMs, force: options.force })
-    return true
+    return await this.runTraced(
+      { action: 'check', title: `check ${target}`, target },
+      async (markReady) => {
+        const el = await this.resolveElement(target, options.timeoutMs)
+        await markReady({ box: el.box, point: el.center })
+        const res = await this.session
+          .send<{ result?: { value?: boolean } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId: el.objectId,
+              functionDeclaration: `function() { return Boolean(this.checked || this.getAttribute?.('aria-checked') === 'true'); }`,
+              returnByValue: true,
+            },
+            { sessionId: el.sessionId },
+          )
+          .catch(() => null)
+        if (res?.result?.value === true) return false
+        await this.click(target, { timeoutMs: options.timeoutMs, force: options.force })
+        return true
+      },
+    )
   }
 
   async uncheck(target: string, options: { timeoutMs?: number; force?: boolean } = {}): Promise<boolean> {
-    const el = await this.resolveElement(target, options.timeoutMs)
-    const res = await this.session
-      .send<{ result?: { value?: boolean } }>(
-        'Runtime.callFunctionOn',
-        {
-          objectId: el.objectId,
-          functionDeclaration: `function() { return Boolean(this.checked || this.getAttribute?.('aria-checked') === 'true'); }`,
-          returnByValue: true,
-        },
-        { sessionId: el.sessionId },
-      )
-      .catch(() => null)
-    if (res?.result?.value === false) return false
-    await this.click(target, { timeoutMs: options.timeoutMs, force: options.force })
-    return true
+    return await this.runTraced(
+      { action: 'uncheck', title: `uncheck ${target}`, target },
+      async (markReady) => {
+        const el = await this.resolveElement(target, options.timeoutMs)
+        await markReady({ box: el.box, point: el.center })
+        const res = await this.session
+          .send<{ result?: { value?: boolean } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId: el.objectId,
+              functionDeclaration: `function() { return Boolean(this.checked || this.getAttribute?.('aria-checked') === 'true'); }`,
+              returnByValue: true,
+            },
+            { sessionId: el.sessionId },
+          )
+          .catch(() => null)
+        if (res?.result?.value === false) return false
+        await this.click(target, { timeoutMs: options.timeoutMs, force: options.force })
+        return true
+      },
+    )
   }
 
   async setRangeValue(target: string, value: number | string, timeoutMs?: number): Promise<string> {
@@ -705,41 +820,47 @@ export class PageController {
   }
 
   async selectOption(target: string, valueOrLabels: string | string[]): Promise<string[]> {
-    const el = await this.resolveElement(target)
     const wanted = Array.isArray(valueOrLabels) ? valueOrLabels : [valueOrLabels]
-    const res = await this.session.send<{
-      result?: { value?: string[] }
-      exceptionDetails?: { exception?: { description?: string }; text?: string }
-    }>(
-      'Runtime.callFunctionOn',
-      {
-        objectId: el.objectId,
-        arguments: [{ value: wanted }],
-        returnByValue: true,
-        functionDeclaration: `function(vals) {
-          const opts = Array.from(this.options || []);
-          const selected = [];
-          if (this.multiple) {
-            for (const o of opts) o.selected = false;
-          }
-          for (const val of vals) {
-            const match = opts.find((o) => o.value === val || o.text.trim() === val);
-            if (!match) throw new Error('Option not found: ' + val);
-            match.selected = true;
-            if (!this.multiple) this.value = match.value;
-            selected.push(match.value);
-          }
-          this.dispatchEvent(new Event('input', { bubbles: true }));
-          this.dispatchEvent(new Event('change', { bubbles: true }));
-          return selected;
-        }`,
+    return await this.runTraced(
+      { action: 'selectOption', title: `selectOption ${target} = ${JSON.stringify(wanted.join(','))}`, target, value: wanted.join(',') },
+      async (markReady) => {
+        const el = await this.resolveElement(target)
+        await markReady({ box: el.box, point: el.center })
+        const res = await this.session.send<{
+          result?: { value?: string[] }
+          exceptionDetails?: { exception?: { description?: string }; text?: string }
+        }>(
+          'Runtime.callFunctionOn',
+          {
+            objectId: el.objectId,
+            arguments: [{ value: wanted }],
+            returnByValue: true,
+            functionDeclaration: `function(vals) {
+              const opts = Array.from(this.options || []);
+              const selected = [];
+              if (this.multiple) {
+                for (const o of opts) o.selected = false;
+              }
+              for (const val of vals) {
+                const match = opts.find((o) => o.value === val || o.text.trim() === val);
+                if (!match) throw new Error('Option not found: ' + val);
+                match.selected = true;
+                if (!this.multiple) this.value = match.value;
+                selected.push(match.value);
+              }
+              this.dispatchEvent(new Event('input', { bubbles: true }));
+              this.dispatchEvent(new Event('change', { bubbles: true }));
+              return selected;
+            }`,
+          },
+          { sessionId: el.sessionId },
+        )
+        if (res.exceptionDetails) {
+          throw new Error(res.exceptionDetails.exception?.description ?? res.exceptionDetails.text ?? 'selectOption failed')
+        }
+        return res.result?.value ?? wanted
       },
-      { sessionId: el.sessionId },
     )
-    if (res.exceptionDetails) {
-      throw new Error(res.exceptionDetails.exception?.description ?? res.exceptionDetails.text ?? 'selectOption failed')
-    }
-    return res.result?.value ?? wanted
   }
 
   // ============================================================================

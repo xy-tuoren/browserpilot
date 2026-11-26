@@ -403,17 +403,240 @@ function showToast(text: string): void {
   }, 2400)
 }
 
-function computeStableSelector(el: Element): string {
-  const testId = el.getAttribute('data-testid')
-  if (testId) return `[data-testid="${testId}"]`
-  if (el.id) return `#${CSS.escape(el.id)}`
+function isDynamicElementId(id: string): boolean {
+  if (!id) return true
+  return /^(:r|«r|radix-|headlessui-|mui-|el-id-|rc_select_|react-aria)/i.test(id) || /[0-9a-f]{8}-[0-9a-f]{4}/i.test(id)
+}
+
+function disambiguateCssInRoot(el: Element, css: string, root: ParentNode): string {
+  try {
+    const list = Array.from(root.querySelectorAll(css))
+    if (list.length <= 1) return css
+    const idx = list.indexOf(el)
+    return idx >= 0 ? `${css} >> nth=${idx}` : css
+  } catch {
+    return css
+  }
+}
+
+function computeLocalSelector(el: Element, root: ParentNode): string {
   const tag = el.tagName.toLowerCase()
+  const prefixTag = tag === 'iframe' ? 'iframe' : ''
+  for (const attr of ['data-testid', 'data-test', 'data-cy']) {
+    const val = el.getAttribute(attr)
+    if (val) return disambiguateCssInRoot(el, `${prefixTag}[${attr}="${val.replace(/"/g, '\\"')}"]`, root)
+  }
+  if (el.id && !isDynamicElementId(el.id)) {
+    return disambiguateCssInRoot(el, `${prefixTag}#${CSS.escape(el.id)}`, root)
+  }
   const name = el.getAttribute('name')
-  if (name) return `${tag}[name="${name}"]`
+  if (name) return disambiguateCssInRoot(el, `${tag}[name="${name.replace(/"/g, '\\"')}"]`, root)
+  const ph = el.getAttribute('placeholder')
+  if (ph && ph.length <= 60) {
+    const count = root.querySelectorAll(`[placeholder="${CSS.escape(ph)}"]`).length
+    return count <= 1 ? `placeholder=${ph}` : disambiguateCssInRoot(el, `${tag}[placeholder="${ph.replace(/"/g, '\\"')}"]`, root)
+  }
   const ariaLabel = el.getAttribute('aria-label')
-  if (ariaLabel) return `${tag}[aria-label="${ariaLabel}"]`
-  const classes = Array.from(el.classList).slice(0, 2).map((c) => `.${CSS.escape(c)}`).join('')
-  return `${tag}${classes}`
+  if (ariaLabel && ariaLabel.length <= 60) {
+    return disambiguateCssInRoot(el, `${tag}[aria-label="${ariaLabel.replace(/"/g, '\\"')}"]`, root)
+  }
+  const explicitRole = el.getAttribute('role')
+  const role = explicitRole || (tag === 'button' ? 'button' : tag === 'a' ? 'link' : '')
+  const text = ((el as HTMLElement).innerText || el.textContent || '').replace(/\s+/g, ' ').trim()
+  if (role && text && text.length <= 60) {
+    const base = `role=${role}[name="${text.replace(/"/g, '\\"')}"]`
+    const candidates = Array.from(root.querySelectorAll(explicitRole ? `[role="${CSS.escape(explicitRole)}"]` : tag)).filter(
+      (n) => (((n as HTMLElement).innerText || n.textContent || '').replace(/\s+/g, ' ').trim()) === text,
+    )
+    if (candidates.length <= 1) return base
+    const rIdx = candidates.indexOf(el)
+    return rIdx >= 0 ? `${base} >> nth=${rIdx}` : base
+  }
+  const classes = Array.from(el.classList)
+    .filter((c) => c && !/^(hover|focus|active|open|selected|checked|disabled)$/i.test(c) && !c.includes(':'))
+    .slice(0, 2)
+    .map((c) => `.${CSS.escape(c)}`)
+    .join('')
+  return disambiguateCssInRoot(el, `${tag}${classes}`, root)
+}
+
+function computeStableSelector(el: Element): string {
+  const parts: string[] = []
+  let cur: Element | null = el
+  while (cur) {
+    const root = cur.getRootNode()
+    if (root instanceof ShadowRoot) {
+      parts.unshift(computeLocalSelector(cur, root))
+      cur = root.host
+      continue
+    }
+    parts.unshift(computeLocalSelector(cur, cur.ownerDocument || document))
+    break
+  }
+  return parts.filter(Boolean).join(' >> ')
+}
+
+// ============================================================================
+// Live Side-Panel Codegen Recorder (Zero Debugger Banner Required)
+// ============================================================================
+
+let codegenActive = false
+let codegenAssertMode = false
+let codegenBound = false
+const pendingCodegenInputs = new Map<Element, ReturnType<typeof setTimeout>>()
+const lastCodegenEmittedValue = new WeakMap<Element, string>()
+
+function resolveInteractiveTarget(raw: EventTarget | null): Element | null {
+  if (!raw || typeof raw !== 'object' || (raw as Node).nodeType !== 1) return null
+  const el = raw as Element
+  if (el.closest('#__browserpilot_ui_host')) return null
+  return (
+    el.closest(
+      'button, a, input, textarea, select, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="switch"], [role="checkbox"], [contenteditable="true"], label',
+    ) || el
+  )
+}
+
+function emitCodegenStep(step: Record<string, unknown>): void {
+  void safeSendRuntimeMessage({
+    type: 'browserpilot:recorded-step',
+    step: { timestamp: Date.now(), url: location.href, ...step },
+  })
+}
+
+function recordCodegenInputNow(el: Element): void {
+  const tag = el.tagName.toLowerCase()
+  const sel = computeStableSelector(el)
+  if (tag === 'select') {
+    const v = (el as HTMLSelectElement).value
+    if (lastCodegenEmittedValue.get(el) === v) return
+    lastCodegenEmittedValue.set(el, v)
+    emitCodegenStep({ action: 'select_option', target: sel, value: v })
+    return
+  }
+  if (tag === 'input' && ((el as HTMLInputElement).type === 'checkbox' || (el as HTMLInputElement).type === 'radio')) {
+    return
+  }
+  const isPwd = tag === 'input' && (el as HTMLInputElement).type === 'password'
+  const val = (el as HTMLElement).isContentEditable
+    ? (el as HTMLElement).innerText || ''
+    : (el as HTMLInputElement).value || ''
+  const masked = isPwd ? '<REDACTED_PASSWORD>' : val
+  if (lastCodegenEmittedValue.get(el) === masked) return
+  lastCodegenEmittedValue.set(el, masked)
+  emitCodegenStep({ action: 'fill', target: sel, value: masked })
+}
+
+function flushCodegenInputs(): void {
+  for (const [el, timer] of pendingCodegenInputs.entries()) {
+    clearTimeout(timer)
+    pendingCodegenInputs.delete(el)
+    recordCodegenInputNow(el)
+  }
+}
+
+function ensureCodegenListeners(): void {
+  if (codegenBound) return
+  codegenBound = true
+
+  document.addEventListener(
+    'click',
+    (e) => {
+      if (!codegenActive) return
+      const raw = e.composedPath?.()[0] ?? e.target
+      const el = resolveInteractiveTarget(raw)
+      if (!el) return
+      flushCodegenInputs()
+
+      if ((e.altKey && e.shiftKey) || codegenAssertMode) {
+        e.preventDefault()
+        e.stopPropagation()
+        codegenAssertMode = false
+        const sel = computeStableSelector(el)
+        const tag = el.tagName.toLowerCase()
+        if ((tag === 'input' || tag === 'textarea' || tag === 'select') && typeof (el as HTMLInputElement).value === 'string') {
+          emitCodegenStep({ action: 'assert_value', target: sel, value: (el as HTMLInputElement).value })
+        } else {
+          const txt = ((el as HTMLElement).innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120)
+          if (txt) emitCodegenStep({ action: 'assert_text', target: sel, value: txt, text: txt })
+          else emitCodegenStep({ action: 'assert_visible', target: sel })
+        }
+        showToast(`BrowserPilot: + assert ${sel}`)
+        return
+      }
+
+      const tag = el.tagName.toLowerCase()
+      const role = (el.getAttribute('role') || '').toLowerCase()
+      const sel = computeStableSelector(el)
+      if ((tag === 'input' && (el as HTMLInputElement).type === 'checkbox') || role === 'checkbox' || role === 'switch') {
+        const checked = tag === 'input' ? Boolean((el as HTMLInputElement).checked) : el.getAttribute('aria-checked') !== 'true'
+        emitCodegenStep({ action: checked ? 'check' : 'uncheck', target: sel })
+        return
+      }
+      const txt = ((el as HTMLElement).innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80) || undefined
+      emitCodegenStep({ action: 'click', target: sel, text: txt, coordinates: { x: Math.round(e.clientX), y: Math.round(e.clientY) } })
+    },
+    true,
+  )
+
+  document.addEventListener(
+    'dblclick',
+    (e) => {
+      if (!codegenActive) return
+      const el = resolveInteractiveTarget(e.composedPath?.()[0] ?? e.target)
+      if (!el) return
+      flushCodegenInputs()
+      emitCodegenStep({ action: 'dblclick', target: computeStableSelector(el) })
+    },
+    true,
+  )
+
+  document.addEventListener(
+    'input',
+    (e) => {
+      if (!codegenActive) return
+      const raw = e.composedPath?.()[0] ?? e.target
+      if (!(raw instanceof Element) || raw.closest('#__browserpilot_ui_host')) return
+      const prev = pendingCodegenInputs.get(raw)
+      if (prev) clearTimeout(prev)
+      pendingCodegenInputs.set(
+        raw,
+        setTimeout(() => {
+          pendingCodegenInputs.delete(raw)
+          recordCodegenInputNow(raw)
+        }, 300),
+      )
+    },
+    true,
+  )
+
+  document.addEventListener(
+    'change',
+    (e) => {
+      if (!codegenActive) return
+      const raw = e.composedPath?.()[0] ?? e.target
+      if (!(raw instanceof Element) || raw.closest('#__browserpilot_ui_host')) return
+      const prev = pendingCodegenInputs.get(raw)
+      if (prev) {
+        clearTimeout(prev)
+        pendingCodegenInputs.delete(raw)
+      }
+      recordCodegenInputNow(raw)
+    },
+    true,
+  )
+
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      if (!codegenActive) return
+      if (e.key === 'Enter' || e.key === 'Escape') {
+        flushCodegenInputs()
+        emitCodegenStep({ action: 'press_key', key: e.key })
+      }
+    },
+    true,
+  )
 }
 
 function stopPicker(): void {
@@ -519,14 +742,37 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ ok: true, globalVar: `globalThis.${varName}`, selector })
     return false
   }
+  if (msg.type === 'browserpilot:set-codegen') {
+    if (!msg.active) flushCodegenInputs()
+    codegenActive = Boolean(msg.active)
+    codegenAssertMode = Boolean(msg.assertMode)
+    if (codegenActive) ensureCodegenListeners()
+    sendResponse({ ok: true })
+    return false
+  }
   return false
 })
 
-// Re-sync in-page control banner after navigation inside an attached tab
-void safeSendRuntimeMessage<{ active?: boolean; status?: string; paused?: boolean; theme?: 'dark' | 'light'; language?: 'zh' | 'en' }>({
+// Re-sync in-page control banner & live codegen state after navigation inside a tab
+void safeSendRuntimeMessage<{
+  active?: boolean
+  status?: string
+  paused?: boolean
+  theme?: 'dark' | 'light'
+  language?: 'zh' | 'en'
+  codegenActive?: boolean
+  codegenAssertMode?: boolean
+}>({
   type: 'browserpilot:get-tab-banner',
 }).then((res) => {
-  if (res && typeof res === 'object' && res.active) {
-    updateControlBanner({ ...res, active: true })
+  if (res && typeof res === 'object') {
+    if (res.active) {
+      updateControlBanner({ ...res, active: true })
+    }
+    if (res.codegenActive) {
+      codegenActive = true
+      codegenAssertMode = Boolean(res.codegenAssertMode)
+      ensureCodegenListeners()
+    }
   }
 })

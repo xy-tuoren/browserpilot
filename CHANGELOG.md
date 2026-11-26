@@ -2,11 +2,27 @@
 
 All notable changes to **BrowserPilot** (formerly DevPilot) are documented in this file.
 
-## [Unreleased]
+## [1.6.0] - 2026-11-25
+
+### Added
+- **Multi-Target Live Codegen (`@browserpilot/protocol/codegen`, `packages/core/src/action-recorder.ts`, `packages/extension/src/sidepanel.*`, `cli.ts`)**:
+  - Upgraded `ActionRecorder` and added `browserpilot codegen [url] --format playwright|browserpilot|skill|batch -o <file>` with live terminal step streaming.
+  - Compiles recorded browser interactions into 4 ready-to-use targets: **Playwright TypeScript (`@playwright/test`)** (idiomatic `getByTestId` / `getByPlaceholder` / `getByLabel` / `getByRole` / `.contentFrame()` / `.nth()` / `expect(...)`), **BrowserPilot JS** (`browserpilot exec` zero-edit replayable), **MCP `browser_batch` JSON**, and **Agent Skill Markdown**.
+  - Smart selector engine skips volatile React/Radix/MUI dynamic IDs (`:r0:`, `radix-`, UUIDs), pierces open **Shadow DOM** (`host >> inner`) and **same-origin `iframe`s** (`iframe#id >> inner`), disambiguates non-unique matches with `>> nth=K`, records `check`/`uncheck`/`dblclick`, flushes debounced inputs synchronously before `click`/`Enter` while deduplicating blur `change` echoes, and supports live assertion capture (`Alt+Shift+Click` or `+ Assert` button -> `assert_text` / `assert_value` / `assert_visible`).
+  - Added a dedicated **`录制 / Record`** tab in the Chrome Companion Side Panel with live code preview, 4-format switching, one-click Copy, `+ Assert` picker, step deletion, and automatic `content-script.js` on-demand injection so already-open tabs record immediately without reloading.
+- **Interactive Single-File HTML Trace Viewer (`packages/core/src/trace-recorder.ts`, `trace-viewer.ts`, `daemon.ts`, `tools/context.ts`, `cli.ts`)**:
+  - Added zero-overhead action trace hooks on `PageController` + `BrowserPilotTab.trace` (`TraceRecorder`), new MCP tool `browser_trace` (bringing total native MCP tools to **52**), CLI `browserpilot trace <start|stop|status|open>`, and `browserpilot exec --trace <report.html>` (automatically saving visual traces even when a script throws mid-execution).
+  - Exports a zero-dependency, XSS-safe (`\u003c`-escaped) single-file `.html` Trace Viewer (bilingual `中文 / EN` + Dark/Light themes) featuring:
+    - Top Filmstrip thumbnail timeline with keyboard `←` / `→` / `↑` / `↓` scrubbing and one-click jump to first error;
+    - `动作前 (Before)` / `动作后 (After)` / `并排对比 (Side-by-Side)` viewport stage with scaled SVG element bounding box + pulsing red click reticle;
+    - Synchronized `步骤详情 (Call)`, `网络 (Network)` (with pretty-printed Request Body & XHR/Fetch Response Preview), and `控制台 (Console)` panes, plus built-in Playwright TS / BrowserPilot JS Codegen export;
+    - Capability-URL hosting on the local Daemon (`http://127.0.0.1:<port>/trace/<32-hex-token>`) so `browserpilot trace open <file>` opens instantly inside Chrome without requiring extension `file://` permissions.
 
 ### Fixed
 - **2-Frame `requestAnimationFrame` Click Stability Check (`packages/core/src/page/actionability.ts`)**:
-  - Replaced wall-clock `sleep(30)` stability sampling with two consecutive browser `requestAnimationFrame` samples (with a 150ms safety fallback), preventing false "stable" clicks on animating elements under heavy CPU load (caught by the new `macos-latest` CI matrix runner).
+  - Replaced wall-clock `sleep(30)` stability sampling with two consecutive browser `requestAnimationFrame` samples (150ms safety cap), preventing false "stable" clicks on animating elements under heavy CPU load.
+- **Clean Daemon Shutdown with Active HTTP Keep-Alive Sockets (`packages/server/src/daemon.ts`)**:
+  - Calls `httpServer.closeAllConnections()` during `BrowserPilotDaemon.stop()` so browser keep-alive sockets (e.g. open `/trace/...` viewer tabs) never delay daemon restarts.
 
 ## [1.5.3] - 2026-11-25
 

@@ -1,11 +1,13 @@
 import {
   BROWSERPILOT_VERSION,
+  compressRecordedSteps,
   DEFAULT_DAEMON_HOST,
   DEFAULT_DAEMON_PORT,
   MAX_ACTIVITY_BUFFER,
   type ActivityLogEntry,
   type ExtensionConfig,
   type ExtensionState,
+  type RecordedStep,
   type TabGroupColor,
   type TabInfo,
 } from '@browserpilot/protocol'
@@ -67,6 +69,12 @@ export const bgState = {
   }>,
   pendingRequestsByTab: new Map<string, { url: string; method: string }>(),
   tabGroupIds: new Map<string, number>(),
+  codegen: {
+    active: false,
+    tabId: undefined as number | undefined,
+    assertMode: false,
+    steps: [] as RecordedStep[],
+  },
 }
 
 let eventEmitter: ((event: string, params?: Record<string, unknown>) => void) | null = null
@@ -115,6 +123,12 @@ export async function getExtensionState(): Promise<ExtensionState> {
     recentActivity: bgState.recentActivity.slice(-80),
     recentErrors: bgState.recentErrors.slice(-50),
     recentFailedRequests: bgState.recentFailedRequests.slice(-50),
+    codegen: {
+      active: bgState.codegen.active,
+      tabId: bgState.codegen.tabId,
+      assertMode: bgState.codegen.assertMode,
+      steps: compressRecordedSteps(bgState.codegen.steps),
+    },
   }
 }
 

@@ -14,12 +14,13 @@ import { ScreenRecorder } from './recorder.js'
 import { SnapshotEngine } from './snapshot.js'
 import { captureLabeledScreenshot } from './som-screenshot.js'
 import { StylesInspector } from './styles-inspector.js'
+import { TraceRecorder } from './trace-recorder.js'
 import type { CDPTransport } from './transport.js'
 import { sleep } from './wait.js'
 
 /**
  * Unified per-tab controller bundling automation, perception, debugging,
- * performance profiling, recording, and automatic post-action feedback.
+ * performance profiling, recording, trace viewer capture, and automatic post-action feedback.
  */
 export class BrowserPilotTab {
   readonly tabId: number
@@ -36,6 +37,7 @@ export class BrowserPilotTab {
   readonly recorder: ScreenRecorder
   readonly downloads: DownloadManager
   readonly actionRecorder: ActionRecorder
+  readonly trace: TraceRecorder
   private initialized = false
 
   constructor(transport: CDPTransport, tabId: number) {
@@ -53,6 +55,13 @@ export class BrowserPilotTab {
     this.recorder = new ScreenRecorder(this.session)
     this.downloads = new DownloadManager(this.session)
     this.actionRecorder = new ActionRecorder(this.session)
+    this.trace = new TraceRecorder({
+      session: this.session,
+      consoleCollector: this.console,
+      networkInspector: this.network,
+      snapshotEngine: this.snapshots,
+    })
+    this.page.setTraceHook(this.trace)
   }
 
   async ensureInitialized(): Promise<void> {
@@ -150,6 +159,7 @@ export class BrowserPilotTab {
 
   dispose(): void {
     void this.recorder.cancel().catch(() => {})
+    this.trace.dispose()
     this.downloads.dispose()
     this.actionRecorder.dispose()
     this.console.dispose()

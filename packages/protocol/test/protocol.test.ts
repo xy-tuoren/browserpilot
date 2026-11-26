@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   BridgeChunkReassembler,
+  compileRecordingArtifacts,
+  compressRecordedSteps,
   encodeNativeMessage,
   encodeNativeMessageFrames,
   NATIVE_INCOMING_MAX_BYTES,
@@ -10,6 +12,7 @@ import {
   isRestrictedUrl,
   isUrlAllowedByDomainRules,
   matchesDomainPattern,
+  translateLocatorToPlaywright,
   type BridgeChunkMessage,
 } from '../src/index.js'
 
@@ -214,6 +217,49 @@ describe('@browserpilot/protocol', () => {
           allowedDomains: ['localhost'],
         }),
       ).toBe(false)
+    })
+  })
+
+  describe('Codegen locator & artifact compiler', () => {
+    it('translates BrowserPilot semantic, Shadow DOM & iframe locators into idiomatic Playwright TS', () => {
+      expect(translateLocatorToPlaywright('[data-testid="login-btn"]')).toBe('page.getByTestId("login-btn")')
+      expect(translateLocatorToPlaywright('placeholder=Search docs')).toBe('page.getByPlaceholder("Search docs")')
+      expect(translateLocatorToPlaywright('label=Email address')).toBe('page.getByLabel("Email address")')
+      expect(translateLocatorToPlaywright('role=button[name="Save Changes"] >> nth=1')).toBe(
+        'page.getByRole("button", { name: "Save Changes" }).nth(1)',
+      )
+      expect(translateLocatorToPlaywright('iframe#checkout >> [data-testid="pay-now"]')).toBe(
+        'page.locator("iframe#checkout").contentFrame().getByTestId("pay-now")',
+      )
+    })
+
+    it('compresses noisy click/fill/dblclick events and compiles Playwright, BrowserPilot, Batch & Skill outputs', () => {
+      const t0 = 1_000_000
+      const compressed = compressRecordedSteps([
+        { timestamp: t0, action: 'navigate', url: 'https://app.example.com' },
+        { timestamp: t0 + 10, action: 'navigate', url: 'https://app.example.com' },
+        { timestamp: t0 + 50, action: 'click', url: 'https://app.example.com', target: 'placeholder=Email' },
+        { timestamp: t0 + 90, action: 'fill', url: 'https://app.example.com', target: 'placeholder=Email', value: 'a@b' },
+        { timestamp: t0 + 140, action: 'fill', url: 'https://app.example.com', target: 'placeholder=Email', value: 'a@b.com' },
+        { timestamp: t0 + 200, action: 'click', url: 'https://app.example.com', target: '#agree' },
+        { timestamp: t0 + 210, action: 'check', url: 'https://app.example.com', target: '#agree' },
+        { timestamp: t0 + 300, action: 'click', url: 'https://app.example.com', target: '#row-1' },
+        { timestamp: t0 + 340, action: 'click', url: 'https://app.example.com', target: '#row-1' },
+        { timestamp: t0 + 350, action: 'dblclick', url: 'https://app.example.com', target: '#row-1' },
+        { timestamp: t0 + 400, action: 'assert_text', url: 'https://app.example.com', target: '#status', value: 'Saved' },
+      ])
+
+      expect(compressed.map((s) => s.action)).toEqual(['navigate', 'fill', 'check', 'dblclick', 'assert_text'])
+      expect(compressed[1].value).toBe('a@b.com')
+
+      const compiled = compileRecordingArtifacts(compressed, 450)
+      expect(compiled.playwrightScript).toContain('await page.getByPlaceholder("Email").fill("a@b.com");')
+      expect(compiled.playwrightScript).toContain('await page.locator("#agree").check();')
+      expect(compiled.playwrightScript).toContain('await page.locator("#row-1").dblclick();')
+      expect(compiled.playwrightScript).toContain('await expect(page.locator("#status")).toContainText("Saved");')
+      expect(compiled.execScript).toContain('await t.page.check("#agree");')
+      expect(compiled.execScript).toContain('await waitForText("Saved", { tab: t });')
+      expect(compiled.skillMarkdown).toContain('## Playwright Test')
     })
   })
 })

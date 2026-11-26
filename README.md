@@ -21,8 +21,8 @@
 | Zero Playwright / Puppeteer runtime dependency | No | No (Puppeteer) | Yes | **Yes (100% Pure CDP)** |
 | Chrome Native Messaging + Auth Token Daemon | No | No | Yes | **Yes (Dual Transport)** |
 | Stateful JS Sandbox (`session new` / `exec -s 1 -e`) | Yes | No | No | **Yes** |
-| First-class MCP Server (51 tools + image blocks) | Partial (1-tool execute) | Yes | Yes | **Yes** |
-| Companion Side Panel + Action Highlights + Ghost Cursor | Partial | No | Yes | **Yes** |
+| First-class MCP Server (52 tools + image blocks) | Partial (1-tool execute) | Yes | Yes | **Yes** |
+| Companion Side Panel + Live Codegen + Visual Trace Viewer | Partial | No | Partial | **Yes** |
 | Deep DevTools (Console, Network, Fetch Mock, CSS Rules, Debugger, Live Edit, React Fiber, Web Vitals, Tracing, Video Recording) | Yes (most) | Yes (most) | Partial | **Yes (All Built-in)** |
 | Direct CDP Mode (`--remote-debugging-port` for CI/Headless) | Yes | Yes | No | **Yes** |
 
@@ -32,7 +32,7 @@
 
 ```text
 AI Coding Agents (Claude Code / Cursor / Codex / Antigravity / Custom SDK)
-        │   MCP stdio (51 tools + images)   /   CLI (`browserpilot`)   /   TypeScript SDK
+        │   MCP stdio (52 tools + images)   /   CLI (`browserpilot`)   /   TypeScript SDK
         ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │  @browserpilot/server   Authenticated Local Daemon (127.0.0.1 + 256-bit token)   │
@@ -82,7 +82,7 @@ browserpilot setup
   ```
   Or copy `skills/browserpilot/SKILL.md` (or the output of `browserpilot skill`) into a single project's `.claude/skills/browserpilot/`, `.agents/skills/browserpilot/`, etc. No MCP configuration required.
 
-- **Option B — MCP Server (51 native `browser_*` tools + direct multimodal screenshot blocks):**  
+- **Option B — MCP Server (52 native `browser_*` tools + direct multimodal screenshot blocks):**  
   Add this snippet to the MCP config of whichever agent you want (Claude Code, Cursor, Codex, Antigravity):
   ```json
   {
@@ -157,12 +157,15 @@ browserpilot network --failed                        # Failed HTTP requests + in
 browserpilot styles "#submit-btn"                    # DevTools Styles cascade (file:line)
 browserpilot react "#submit-btn"                     # React Fiber component + _debugSource
 browserpilot perf metrics                            # Core Web Vitals + CDP metrics
+browserpilot codegen https://example.com -o flow.spec.ts  # Live Playwright TS / BrowserPilot JS recorder
+browserpilot exec --trace trace.html -e '...'        # Auto-record interactive HTML Trace Viewer report
+browserpilot trace open trace.html                   # Open interactive Trace Viewer in Chrome
 browserpilot skill                                   # Print full Agent Skill instructions
 ```
 
 ---
 
-## Complete MCP Tool Matrix (51 Tools)
+## Complete MCP Tool Matrix (52 Tools)
 
 | Category | Tools |
 | :--- | :--- |
@@ -171,7 +174,7 @@ browserpilot skill                                   # Print full Agent Skill in
 | **Trusted Interaction & Waits** | `browser_click` (occlusion/stability guard), `browser_check`, `browser_fill`, `browser_fill_form` (text/select/multi-select/checkbox/radio/range/file), `browser_type`, `browser_press_key` (`down`/`up`/`repeat` + native commands), `browser_hover`, `browser_scroll`, `browser_drag` (2-point & multi-point `points` stroke), `browser_select_option`, `browser_upload_file`, `browser_handle_dialog`, `browser_wait` (`selector`+`state`, `text`+`gone`, `url`, `responseUrl`, `fn`, `popup`), `browser_batch`, `browser_handoff` |
 | **Context & System Control** | `browser_clipboard` (`read`/`write`), `browser_pdf`, `browser_init_script`, `browser_permissions`, `browser_emulate`, `browser_cookies`, `browser_storage` |
 | **DevTools Debugging** | `browser_evaluate` (`frame`), `browser_console`, `browser_network`, `browser_network_intercept`, `browser_styles`, `browser_react_info`, `browser_debugger`, `browser_live_edit`, `browser_performance`, `browser_cdp` |
-| **Downloads, Media & Sandbox** | `browser_downloads`, `browser_action_recorder`, `browser_record`, `browser_exec` (fluent `locator()`, `onResponse`, `mouse`/`keyboard`) |
+| **Downloads, Codegen, Trace & Sandbox** | `browser_downloads`, `browser_action_recorder` (Playwright TS / BrowserPilot JS / Skill / Batch), `browser_trace` (interactive HTML Trace Viewer), `browser_record`, `browser_exec` (`locator()`, `route()`, `waitForFileChooser()`, `trace`, `mouse`/`keyboard`) |
 
 ---
 

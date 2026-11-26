@@ -1,9 +1,15 @@
-import type { ExtensionLanguage, ExtensionState } from '@browserpilot/protocol'
+import {
+  formatStepsAsCode,
+  type CodegenFormat,
+  type ExtensionLanguage,
+  type ExtensionState,
+} from '@browserpilot/protocol'
 import { MESSAGES, resolveLang } from './i18n.js'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 let state: ExtensionState | null = null
-let activeTab: 'activity' | 'errors' | 'network' = 'activity'
+let activeTab: 'activity' | 'record' | 'errors' | 'network' = 'activity'
+let codeFormat: CodegenFormat = 'playwright'
 
 function fmtTime(ts: number): string {
   return new Date(ts).toTimeString().slice(0, 8)
@@ -11,6 +17,78 @@ function fmtTime(ts: number): string {
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function safeSendMessage<T = unknown>(message: unknown): Promise<T | null> {
+  try {
+    return Promise.resolve(chrome.runtime.sendMessage(message) as Promise<T>).catch(() => null)
+  } catch {
+    return Promise.resolve(null)
+  }
+}
+
+function renderRecordPanel(next: ExtensionState): void {
+  const lang = resolveLang(next.config.language)
+  const t = MESSAGES[lang]
+  const cg = next.codegen ?? { active: false, assertMode: false, steps: [] }
+
+  const toggleBtn = $('rec-toggle')
+  toggleBtn.textContent = cg.active ? t.recordStop : t.recordStart
+  toggleBtn.className = cg.active ? 'danger' : 'primary'
+
+  const assertBtn = $('rec-assert') as HTMLButtonElement
+  assertBtn.disabled = !cg.active
+  assertBtn.textContent = cg.assertMode ? t.recordAssertWait : t.recordAssert
+  assertBtn.classList.toggle('active-pill', Boolean(cg.assertMode))
+
+  $('rec-clear').textContent = t.recordClear
+  $('rec-code-heading').textContent = t.recordCodeHeading
+  $('rec-steps-heading').textContent = `${t.recordHeading} (${cg.steps.length})`
+  $('rec-copy').textContent = t.recordCopy
+
+  $('fmt-pw').classList.toggle('active-pill', codeFormat === 'playwright')
+  $('fmt-bp').classList.toggle('active-pill', codeFormat === 'browserpilot')
+  $('fmt-skill').classList.toggle('active-pill', codeFormat === 'skill')
+  $('fmt-batch').classList.toggle('active-pill', codeFormat === 'batch')
+
+  const codeEl = $('rec-code')
+  const stepsEl = $('rec-steps')
+  stepsEl.innerHTML = ''
+
+  if (cg.steps.length === 0) {
+    codeEl.style.display = 'none'
+    stepsEl.textContent = t.recordEmpty
+    return
+  }
+
+  codeEl.style.display = 'block'
+  codeEl.textContent = formatStepsAsCode(cg.steps, codeFormat)
+
+  cg.steps.forEach((step, idx) => {
+    const card = document.createElement('div')
+    card.className = 'card'
+    const summary =
+      step.action === 'navigate'
+        ? step.url
+        : step.action === 'press_key'
+          ? step.key || ''
+          : step.value !== undefined
+            ? `${step.target || ''} = "${step.value}"`
+            : step.target || ''
+    card.innerHTML =
+      `<div class="entry-head"><span class="ok">#${idx + 1} ${escapeHtml(step.action)}</span>` +
+      `<button class="step-del" data-del="${idx}" title="Delete">×</button></div>` +
+      (summary ? `<div class="detail">${escapeHtml(summary)}</div>` : '')
+    stepsEl.appendChild(card)
+  })
+
+  stepsEl.querySelectorAll<HTMLButtonElement>('.step-del').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      void safeSendMessage({ type: 'browserpilot:codegen-delete-step', index: Number(btn.dataset.del) }).then(() =>
+        refresh(),
+      )
+    })
+  })
 }
 
 function render(next: ExtensionState): void {
@@ -31,6 +109,7 @@ function render(next: ExtensionState): void {
   $('sp-pick').textContent = t.pickElement
   $('sp-detach-all').textContent = t.detachAll
   $('tab-activity').textContent = t.tabActivity
+  $('tab-record').textContent = next.codegen?.active ? `● ${t.tabRecord}` : t.tabRecord
   $('lbl-tab-errors').textContent = t.tabErrors
   $('lbl-tab-network').textContent = t.tabNetwork
   $('tabs-heading').textContent = t.activeTabsHeading
@@ -56,8 +135,19 @@ function render(next: ExtensionState): void {
   $('net-count').textContent = String(nets.length)
 
   $('tab-activity').classList.toggle('active', activeTab === 'activity')
+  $('tab-record').classList.toggle('active', activeTab === 'record')
   $('tab-errors').classList.toggle('active', activeTab === 'errors')
   $('tab-network').classList.toggle('active', activeTab === 'network')
+
+  const isRecordTab = activeTab === 'record'
+  $('tabs-section').style.display = isRecordTab ? 'none' : ''
+  $('feed-section').style.display = isRecordTab ? 'none' : ''
+  $('record-section').style.display = isRecordTab ? '' : 'none'
+
+  if (isRecordTab) {
+    renderRecordPanel(next)
+    return
+  }
 
   const tabsEl = $('sp-tabs')
   tabsEl.innerHTML = ''
@@ -126,14 +216,6 @@ function render(next: ExtensionState): void {
   }
 }
 
-function safeSendMessage<T = unknown>(message: unknown): Promise<T | null> {
-  try {
-    return Promise.resolve(chrome.runtime.sendMessage(message) as Promise<T>).catch(() => null)
-  } catch {
-    return Promise.resolve(null)
-  }
-}
-
 async function refresh(): Promise<void> {
   const s = await safeSendMessage<ExtensionState>({ type: 'browserpilot:get-state' })
   if (s) render(s)
@@ -143,6 +225,10 @@ $('tab-activity').addEventListener('click', () => {
   activeTab = 'activity'
   if (state) render(state)
 })
+$('tab-record').addEventListener('click', () => {
+  activeTab = 'record'
+  if (state) render(state)
+})
 $('tab-errors').addEventListener('click', () => {
   activeTab = 'errors'
   if (state) render(state)
@@ -150,6 +236,46 @@ $('tab-errors').addEventListener('click', () => {
 $('tab-network').addEventListener('click', () => {
   activeTab = 'network'
   if (state) render(state)
+})
+
+$('rec-toggle').addEventListener('click', () => {
+  const active = Boolean(state?.codegen?.active)
+  void safeSendMessage({ type: active ? 'browserpilot:codegen-stop' : 'browserpilot:codegen-start' }).then(() =>
+    refresh(),
+  )
+})
+$('rec-assert').addEventListener('click', () => {
+  void safeSendMessage({ type: 'browserpilot:codegen-assert' }).then(() => refresh())
+})
+$('rec-clear').addEventListener('click', () => {
+  void safeSendMessage({ type: 'browserpilot:codegen-clear' }).then(() => refresh())
+})
+$('fmt-pw').addEventListener('click', () => {
+  codeFormat = 'playwright'
+  if (state) render(state)
+})
+$('fmt-bp').addEventListener('click', () => {
+  codeFormat = 'browserpilot'
+  if (state) render(state)
+})
+$('fmt-skill').addEventListener('click', () => {
+  codeFormat = 'skill'
+  if (state) render(state)
+})
+$('fmt-batch').addEventListener('click', () => {
+  codeFormat = 'batch'
+  if (state) render(state)
+})
+$('rec-copy').addEventListener('click', () => {
+  const steps = state?.codegen?.steps ?? []
+  if (!steps.length) return
+  const code = formatStepsAsCode(steps, codeFormat)
+  void navigator.clipboard?.writeText(code)
+  const lang = resolveLang(state?.config.language)
+  $('rec-copy').textContent = MESSAGES[lang].copied
+  setTimeout(() => {
+    if (state) $('rec-copy').textContent = MESSAGES[resolveLang(state.config.language)].recordCopy
+  }, 1100)
 })
 
 $('sp-lang').addEventListener('click', () => {

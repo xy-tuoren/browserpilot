@@ -42,6 +42,7 @@ export interface ExtensionMessages {
   tabActivity: string
   tabErrors: string
   tabNetwork: string
+  tabRecord: string
   activeTabsHeading: string
   noTabsShort: string
   activityHeading: string
@@ -52,6 +53,15 @@ export interface ExtensionMessages {
   noFailedRequests: string
   untitled: string
   tabPrefix: string
+  recordStart: string
+  recordStop: string
+  recordAssert: string
+  recordAssertWait: string
+  recordClear: string
+  recordCopy: string
+  recordHeading: string
+  recordCodeHeading: string
+  recordEmpty: string
 }
 
 export const MESSAGES: Record<ExtensionLanguage, ExtensionMessages> = {
@@ -96,6 +106,7 @@ export const MESSAGES: Record<ExtensionLanguage, ExtensionMessages> = {
     tabActivity: '动态',
     tabErrors: '报错',
     tabNetwork: '失败请求',
+    tabRecord: '录制',
     activeTabsHeading: '当前受控标签页',
     noTabsShort: '暂无受控标签页',
     activityHeading: 'AI 实时操作动态',
@@ -106,6 +117,15 @@ export const MESSAGES: Record<ExtensionLanguage, ExtensionMessages> = {
     noFailedRequests: '暂无失败请求',
     untitled: '未命名标签页',
     tabPrefix: '标签页 #',
+    recordStart: '开始录制',
+    recordStop: '停止录制',
+    recordAssert: '+ 断言',
+    recordAssertWait: '请点击元素…',
+    recordClear: '清空',
+    recordCopy: '复制代码',
+    recordHeading: '已录制步骤',
+    recordCodeHeading: '生成代码',
+    recordEmpty: '点击「开始录制」，在当前标签页操作即可实时生成回放代码。',
   },
   en: {
     statusNative: 'NATIVE',
@@ -148,6 +168,7 @@ export const MESSAGES: Record<ExtensionLanguage, ExtensionMessages> = {
     tabActivity: 'Activity',
     tabErrors: 'Errors',
     tabNetwork: 'Network',
+    tabRecord: 'Record',
     activeTabsHeading: 'Active Controlled Tabs',
     noTabsShort: 'No tabs attached yet.',
     activityHeading: 'Live AI Activity',
@@ -158,6 +179,15 @@ export const MESSAGES: Record<ExtensionLanguage, ExtensionMessages> = {
     noFailedRequests: 'No failed requests captured.',
     untitled: 'Untitled',
     tabPrefix: 'Tab #',
+    recordStart: 'Record',
+    recordStop: 'Stop',
+    recordAssert: '+ Assert',
+    recordAssertWait: 'Click element…',
+    recordClear: 'Clear',
+    recordCopy: 'Copy Code',
+    recordHeading: 'Recorded Steps',
+    recordCodeHeading: 'Generated Code',
+    recordEmpty: 'Click "Record" and interact with the active tab to generate code live.',
   },
 }
 

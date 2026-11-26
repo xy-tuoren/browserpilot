@@ -4,7 +4,12 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { BROWSERPILOT_VERSION, type TabGroupColor } from '@browserpilot/protocol'
+import {
+  BROWSERPILOT_VERSION,
+  describeRecordedStep,
+  type RecordedStep,
+  type TabGroupColor,
+} from '@browserpilot/protocol'
 import { DaemonClient } from './client.js'
 import { isDaemonReachable, loadOrCreateDaemonConfig, readDaemonConfig } from './config.js'
 import { BrowserPilotDaemon } from './daemon.js'
@@ -148,10 +153,12 @@ Usage:
   browserpilot connect-cdp <url>                         Attach daemon directly to a --remote-debugging-port Chrome
   browserpilot browser start [--headless] [--cdp-port N] Launch Chrome/Chrome for Testing with BrowserPilot ready
 
-Stateful Sessions (Playwriter replacement):
+Stateful Sessions, Codegen & Visual Trace:
   browserpilot session new [--tab-group <name>] [--tab-group-color <color>]
   browserpilot session list | update <id> [--tab-group <name>] [--tab-group-color <color>] | reset <id> | close <id>
-  browserpilot exec -s <id> -e '<js>' | -f <script.js> [--timeout <ms>]
+  browserpilot exec -s <id> -e '<js>' | -f <script.js> [--timeout <ms>] [--trace <report.html>]
+  browserpilot codegen [url] [--format playwright|browserpilot|skill|batch] [-o <file>] [--duration <sec>] [--tab <id>]
+  browserpilot trace <start|stop|status|open> [path] [--title <str>] [--open] [--json] [--tab <id>]
 
 Direct Quick Commands:
   browserpilot status
@@ -190,7 +197,7 @@ Direct Quick Commands:
   browserpilot eval '<js>' [--frame <frame>] [--tab <id>]
   browserpilot perf [metrics|heap|trace_start|trace_stop|cpu_start|cpu_stop] [--tab <id>]
   browserpilot downloads [list|wait|clear] [--dir <path>] [--tab <id>]
-  browserpilot record-actions [start|stop|status] [--format all|skill|script|batch] [--tab <id>]
+  browserpilot record-actions [start|stop|status|clear|assert_next] [--format all|playwright|browserpilot|skill|batch] [-o <file>] [--tab <id>]
   browserpilot skill                                     Output complete AI agent skill documentation
 `)
 }
@@ -592,8 +599,102 @@ async function main(): Promise<void> {
       sessionId: sessionId ?? '1',
       tabId,
       timeoutMs: typeof flags.timeout === 'string' ? Number(flags.timeout) : undefined,
+      tracePath: typeof flags.trace === 'string' ? flags.trace : undefined,
     })
     printToolOutput(res)
+    return
+  }
+
+  if (cmd === 'codegen') {
+    const targetUrl = positional[1]
+    const format = typeof flags.format === 'string' ? flags.format : 'playwright'
+    const outFile = typeof flags.o === 'string' ? flags.o : typeof flags.output === 'string' ? flags.output : undefined
+    const durationSec = typeof flags.duration === 'string' ? Number(flags.duration) : undefined
+    const maskPasswords = flags['no-mask-passwords'] ? false : true
+
+    if (targetUrl) {
+      await client.callTool('browser_navigate', { url: targetUrl, tabId, sessionId, clientId })
+    }
+    await client.callTool('browser_action_recorder', {
+      action: 'start',
+      maskPasswords,
+      tabId,
+      sessionId,
+      clientId,
+    })
+
+    console.error(
+      `Recording browser interactions (format=${format}${outFile ? `, output=${outFile}` : ''}). Tip: Alt+Shift+Click any element to record an assertion. Press Ctrl+C to finish…`,
+    )
+
+    let printedSteps = 0
+    let finished = false
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        if (finished) return
+        finished = true
+        clearInterval(poller)
+        if (durationTimer) clearTimeout(durationTimer)
+        process.off('SIGINT', finish)
+        process.off('SIGTERM', finish)
+        resolve()
+      }
+
+      process.on('SIGINT', finish)
+      process.on('SIGTERM', finish)
+
+      const durationTimer =
+        durationSec && Number.isFinite(durationSec) && durationSec > 0
+          ? setTimeout(finish, durationSec * 1000)
+          : null
+
+      const poller = setInterval(() => {
+        void client
+          .callTool('browser_action_recorder', { action: 'status', tabId, sessionId, clientId })
+          .then((st) => {
+            const steps = (st.meta?.steps as RecordedStep[] | undefined) ?? []
+            while (printedSteps < steps.length) {
+              const s = steps[printedSteps]
+              console.error(`  ${printedSteps + 1}. ${describeRecordedStep(s)}`)
+              printedSteps++
+            }
+          })
+          .catch(() => {})
+      }, 350)
+    })
+
+    const stopped = await client.callTool('browser_action_recorder', {
+      action: 'stop',
+      format,
+      outputPath: outFile,
+      tabId,
+      sessionId,
+      clientId,
+    })
+    printToolOutput(stopped)
+    return
+  }
+
+  if (cmd === 'trace') {
+    const sub = (positional[1] || 'status').toLowerCase()
+    const pathArg =
+      positional[2] ||
+      (typeof flags.o === 'string' ? flags.o : typeof flags.output === 'string' ? flags.output : undefined)
+    printToolOutput(
+      await client.callTool('browser_trace', {
+        action: sub,
+        path: pathArg,
+        title: typeof flags.title === 'string' ? flags.title : undefined,
+        format: flags.json ? 'json' : undefined,
+        screenshots: flags['no-screenshots'] ? false : undefined,
+        snapshots: flags['no-snapshots'] ? false : undefined,
+        networkBodies: flags['no-network-bodies'] ? false : undefined,
+        openViewer: Boolean(flags.open),
+        tabId,
+        sessionId,
+        clientId,
+      }),
+    )
     return
   }
 
@@ -1024,8 +1125,10 @@ async function main(): Promise<void> {
         await client.callTool('browser_action_recorder', {
           action: positional[1] || 'status',
           format: typeof flags.format === 'string' ? flags.format : undefined,
+          outputPath: typeof flags.o === 'string' ? flags.o : typeof flags.output === 'string' ? flags.output : undefined,
           tabId,
           sessionId,
+          clientId,
         }),
       )
       return

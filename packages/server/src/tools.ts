@@ -56,6 +56,7 @@ export async function executeTool(
       sessionId,
       explicitTabId,
       resolveTab: () => manager.resolveActiveTab({ tabId: explicitTabId, sessionId }),
+      registerTraceHtml: ctx.registerTraceHtml,
     }
 
     const result =

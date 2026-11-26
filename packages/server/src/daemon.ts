@@ -46,6 +46,7 @@ export class BrowserPilotDaemon {
   private primaryClientId: string | null = null
   private config: DaemonConfigFile | null = null
   private startedAt = 0
+  private hostedTraces = new Map<string, { html: string; createdAt: number }>()
 
   async start(options: DaemonOptions = {}): Promise<DaemonConfigFile> {
     const cfg =
@@ -230,23 +231,53 @@ export class BrowserPilotDaemon {
     return backend.manager
   }
 
+  registerTraceHtml(html: string): string {
+    const cfg = this.getConfig()
+    const shareId = crypto.randomBytes(16).toString('hex')
+    this.hostedTraces.set(shareId, { html, createdAt: Date.now() })
+    while (this.hostedTraces.size > 10) {
+      const oldestKey = this.hostedTraces.keys().next().value
+      if (!oldestKey) break
+      this.hostedTraces.delete(oldestKey)
+    }
+    return `http://${cfg.host}:${cfg.port}/trace/${shareId}`
+  }
+
   createToolContext(): ToolRuntimeContext {
     return {
       getManager: (clientId?: string) => this.getManager(clientId),
       listClients: () => this.listClients(),
+      registerTraceHtml: (html: string) => this.registerTraceHtml(html),
     }
   }
 
   private async handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const cfg = this.config!
+    const url = new URL(req.url || '/', `http://${cfg.host}:${cfg.port}`)
+    const method = req.method || 'GET'
+
+    // Capability-URL route for interactive Trace Viewer tabs opened directly in Chrome
+    if (method === 'GET' && url.pathname.startsWith('/trace/')) {
+      const shareId = url.pathname.slice('/trace/'.length).trim()
+      const entry = /^[0-9a-f]{32}$/.test(shareId) ? this.hostedTraces.get(shareId) : undefined
+      if (!entry) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+        res.end('Trace report expired or not found.')
+        return
+      }
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+      })
+      res.end(entry.html)
+      return
+    }
+
     const auth = (req.headers.authorization || '').replace(/^Bearer\s+/i, '')
     if (cfg.token && auth !== cfg.token) {
       this.sendJson(res, 401, { error: 'Unauthorized' })
       return
     }
-
-    const url = new URL(req.url || '/', `http://${cfg.host}:${cfg.port}`)
-    const method = req.method || 'GET'
 
     try {
       if (method === 'GET' && url.pathname === '/api/health') {
@@ -359,8 +390,10 @@ export class BrowserPilotDaemon {
     this.primaryClientId = null
     this.wss?.close()
     if (this.httpServer) {
-      await new Promise<void>((r) => this.httpServer!.close(() => r()))
+      const srv = this.httpServer
       this.httpServer = null
+      srv.closeAllConnections?.()
+      await new Promise<void>((r) => srv.close(() => r()))
     }
   }
 }

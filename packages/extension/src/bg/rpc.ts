@@ -1,4 +1,5 @@
 import {
+  compressRecordedSteps,
   DEFAULT_TAB_GROUP_TITLE,
   isBlockedProfileWideCommand,
   isRestrictedUrl,
@@ -7,6 +8,7 @@ import {
 } from '@browserpilot/protocol'
 import {
   bgState,
+  broadcastUiUpdate,
   getExtensionState,
   listAllTabs,
   logActivity,
@@ -168,6 +170,65 @@ export async function executeBridgeMethod(method: string, params: Record<string,
       const rec = bgState.attachedTabs.get(tabId)
       const tab = await chrome.tabs.get(tabId).catch(() => null)
       return rec?.lastPinnedVar ? { globalVar: rec.lastPinnedVar, url: tab?.url } : null
+    }
+
+    case 'extension.codegen': {
+      const action = String(params.action ?? 'status')
+      if (action === 'start') {
+        const tabId = Number(params.tabId)
+        const tab = await chrome.tabs.get(tabId)
+        if (!tab.id || isRestrictedUrl(tab.url)) {
+          throw new Error('Cannot start codegen on restricted tab')
+        }
+        bgState.codegen.active = true
+        bgState.codegen.tabId = tab.id
+        bgState.codegen.assertMode = false
+        bgState.codegen.steps =
+          tab.url && tab.url !== 'about:blank'
+            ? [{ timestamp: Date.now(), action: 'navigate', url: tab.url }]
+            : []
+        try {
+          await chrome.tabs.sendMessage(tab.id, { type: 'browserpilot:set-codegen', active: true, assertMode: false })
+        } catch {
+          await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content-script.js'] }).catch(() => {})
+          await chrome.tabs
+            .sendMessage(tab.id, { type: 'browserpilot:set-codegen', active: true, assertMode: false })
+            .catch(() => {})
+        }
+        broadcastUiUpdate()
+        return { active: true, tabId: tab.id }
+      }
+      if (action === 'assert') {
+        if (bgState.codegen.active && bgState.codegen.tabId !== undefined) {
+          bgState.codegen.assertMode = Boolean(params.enabled ?? !bgState.codegen.assertMode)
+          await chrome.tabs
+            .sendMessage(bgState.codegen.tabId, {
+              type: 'browserpilot:set-codegen',
+              active: true,
+              assertMode: bgState.codegen.assertMode,
+            })
+            .catch(() => {})
+          broadcastUiUpdate()
+        }
+        return { assertMode: bgState.codegen.assertMode }
+      }
+      if (action === 'stop') {
+        const prevTab = bgState.codegen.tabId
+        bgState.codegen.active = false
+        bgState.codegen.assertMode = false
+        if (prevTab !== undefined) {
+          await chrome.tabs
+            .sendMessage(prevTab, { type: 'browserpilot:set-codegen', active: false, assertMode: false })
+            .catch(() => {})
+        }
+        broadcastUiUpdate()
+        return { active: false, steps: compressRecordedSteps(bgState.codegen.steps) }
+      }
+      return {
+        active: bgState.codegen.active,
+        tabId: bgState.codegen.tabId,
+        steps: compressRecordedSteps(bgState.codegen.steps),
+      }
     }
 
     case 'downloads.list': {

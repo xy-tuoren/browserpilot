@@ -51,6 +51,7 @@ export interface SessionExecResult {
   error?: string
   durationMs: number
   uncaughtBrowserErrors: string[]
+  tracePath?: string
 }
 
 interface InternalSession {
@@ -299,7 +300,7 @@ export class SessionManager {
   async exec(
     sessionId: string,
     code: string,
-    options: { timeoutMs?: number; tabId?: number } = {},
+    options: { timeoutMs?: number; tabId?: number; tracePath?: string } = {},
   ): Promise<SessionExecResult> {
     const start = Date.now()
     const timeoutMs = options.timeoutMs ?? 30_000
@@ -310,14 +311,28 @@ export class SessionManager {
       logs.push(args.map((a) => (typeof a === 'string' ? a : util.inspect(a, { depth: 4, maxArrayLength: 50 }))).join(' '))
     }
 
+    let autoTracedTab: BrowserPilotTab | null = null
+    const maybeAttachTrace = async (t: BrowserPilotTab): Promise<BrowserPilotTab> => {
+      if (options.tracePath && !autoTracedTab && !t.trace.isActive()) {
+        autoTracedTab = t
+        await t.trace.start({ title: `exec (${sessionId})` }).catch(() => {})
+      }
+      return t
+    }
+
     const getTab = async (tabOrId?: BrowserPilotTab | number): Promise<BrowserPilotTab> => {
-      if (tabOrId instanceof BrowserPilotTab) return tabOrId
-      if (typeof tabOrId === 'number') return await this.resolveActiveTab({ tabId: tabOrId, sessionId })
-      return await this.resolveActiveTab({ tabId: options.tabId, sessionId })
+      if (tabOrId instanceof BrowserPilotTab) return await maybeAttachTrace(tabOrId)
+      if (typeof tabOrId === 'number') {
+        return await maybeAttachTrace(await this.resolveActiveTab({ tabId: tabOrId, sessionId }))
+      }
+      return await maybeAttachTrace(await this.resolveActiveTab({ tabId: options.tabId, sessionId }))
     }
 
     // Track initial error cursor on current tab (if any)
     const trackedTab = sess.activeTabId !== undefined ? this.tabs.get(sess.activeTabId) : undefined
+    if (trackedTab && options.tracePath) {
+      await maybeAttachTrace(trackedTab)
+    }
     const beforeErrorId = trackedTab?.console.getLatestId() ?? 0
 
     const helpers = {
@@ -342,20 +357,20 @@ export class SessionManager {
         open: async (url?: string) => {
           const t = await this.openTab({ url: url ?? 'about:blank', tabGroup: sess.tabGroup, tabGroupColor: sess.tabGroupColor })
           sess.activeTabId = t.tabId
-          return t
+          return await maybeAttachTrace(t)
         },
         use: async (tabIdOrUrl: number | string) => {
           if (typeof tabIdOrUrl === 'number') {
             const t = await this.resolveActiveTab({ tabId: tabIdOrUrl, sessionId })
             sess.activeTabId = t.tabId
-            return t
+            return await maybeAttachTrace(t)
           }
           const all = await this.listTabs()
           const match = [...all].reverse().find((t) => t.url.includes(tabIdOrUrl) || t.title.includes(tabIdOrUrl))
           if (!match) throw new Error(`No tab matching "${tabIdOrUrl}"`)
           const t = await this.resolveActiveTab({ tabId: match.tabId, sessionId })
           sess.activeTabId = t.tabId
-          return t
+          return await maybeAttachTrace(t)
         },
         current: () => getTab(),
         close: (tabId?: number) => this.closeTab(tabId ?? sess.activeTabId ?? -1),
@@ -619,12 +634,30 @@ export class SessionManager {
           (await getTab(opts?.tab)).actionRecorder.start(opts),
         stop: async (tab?: BrowserPilotTab) => (await getTab(tab)).actionRecorder.stop(),
         steps: async (tab?: BrowserPilotTab) => (await getTab(tab)).actionRecorder.getSteps(),
+        setAssertMode: async (enabled: boolean, tab?: BrowserPilotTab) =>
+          (await getTab(tab)).actionRecorder.setAssertMode(enabled),
+      },
+      trace: {
+        start: async (opts?: { title?: string; screenshots?: boolean; snapshots?: boolean; networkBodies?: boolean; tab?: BrowserPilotTab }) =>
+          (await getTab(opts?.tab)).trace.start(opts),
+        stop: async (opts?: { path?: string; format?: 'html' | 'json'; tab?: BrowserPilotTab }) =>
+          (await getTab(opts?.tab)).trace.stop(opts),
+        status: async (tab?: BrowserPilotTab) => (await getTab(tab)).trace.getStatus(),
       },
       createDemoVideo,
     }
 
     const context = vm.createContext(helpers)
     const wrapped = `(async () => {\n${code}\n})()`
+
+    let savedTracePath: string | undefined
+    const finalizeAutoTrace = async () => {
+      const targetTab: BrowserPilotTab | null = autoTracedTab
+      if (options.tracePath && targetTab && targetTab.trace.isActive()) {
+        const stopped = await targetTab.trace.stop({ path: options.tracePath }).catch(() => null)
+        savedTracePath = stopped?.summary.path
+      }
+    }
 
     try {
       const script = new vm.Script(wrapped, { filename: `browserpilot-session-${sessionId}.js` })
@@ -636,6 +669,8 @@ export class SessionManager {
         ),
       ])
 
+      await finalizeAutoTrace()
+
       const activeTabAfter = sess.activeTabId !== undefined ? this.tabs.get(sess.activeTabId) : trackedTab
       const uncaughtBrowserErrors = activeTabAfter
         ? activeTabAfter.console.getErrorsSince(activeTabAfter === trackedTab ? beforeErrorId : 0).map((e) => e.text)
@@ -646,13 +681,16 @@ export class SessionManager {
         returnValue,
         durationMs: Date.now() - start,
         uncaughtBrowserErrors,
+        ...(savedTracePath ? { tracePath: savedTracePath } : {}),
       }
     } catch (err) {
+      await finalizeAutoTrace()
       return {
         stdout: logs.join('\n'),
         error: err instanceof Error ? err.stack || err.message : String(err),
         durationMs: Date.now() - start,
         uncaughtBrowserErrors: [],
+        ...(savedTracePath ? { tracePath: savedTracePath } : {}),
       }
     }
   }

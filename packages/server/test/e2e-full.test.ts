@@ -297,7 +297,7 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
     await new Promise<void>((r) => proc.once('close', () => r()))
   }, 15_000)
 
-  it('exposes all 51 tools over real MCP stdio server and executes full browser workflow + v1.4 control tools + screenshot image blocks', async () => {
+  it('exposes all 52 tools over real MCP stdio server and executes full browser workflow + v1.6 trace/codegen tools + screenshot image blocks', async () => {
     if (!chromeOk) return
 
     const cliBin = path.resolve(import.meta.dirname, '..', 'dist', 'cli.js')
@@ -311,10 +311,11 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
     try {
       const { tools } = await client.listTools()
       expect(tools.length).toBe(TOOL_DEFINITIONS.length)
-      expect(tools.length).toBe(51)
+      expect(tools.length).toBe(52)
       expect(tools.some((t) => t.name === 'browser_snapshot')).toBe(true)
       expect(tools.some((t) => t.name === 'browser_debugger')).toBe(true)
       expect(tools.some((t) => t.name === 'browser_exec')).toBe(true)
+      expect(tools.some((t) => t.name === 'browser_trace')).toBe(true)
       expect(tools.some((t) => t.name === 'browser_frames')).toBe(true)
       expect(tools.some((t) => t.name === 'browser_check')).toBe(true)
       expect(tools.some((t) => t.name === 'browser_clipboard')).toBe(true)
@@ -418,6 +419,17 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
 
       const pdfRes = await client.callTool({ name: 'browser_pdf', arguments: {} })
       expect((pdfRes.content as Array<{ text?: string }>)[0]?.text).toContain('Generated PDF')
+
+      // v1.6 browser_trace over MCP
+      const traceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'browserpilot-mcp-trace-'))
+      tmpDirs.push(traceDir)
+      const traceFile = path.join(traceDir, 'mcp-trace.html')
+      await client.callTool({ name: 'browser_trace', arguments: { action: 'start', title: 'MCP Trace Check' } })
+      await client.callTool({ name: 'browser_fill', arguments: { target: '#query', value: 'traced-mcp' } })
+      await client.callTool({ name: 'browser_click', arguments: { target: '#go-btn' } })
+      const traceStopRes = await client.callTool({ name: 'browser_trace', arguments: { action: 'stop', path: traceFile } })
+      expect((traceStopRes.content as Array<{ text?: string }>)[0]?.text).toContain('Saved Trace report')
+      expect((await fs.stat(traceFile)).size).toBeGreaterThan(5_000)
     } finally {
       await client.close()
     }
@@ -523,5 +535,29 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
     expect(setupOut).toContain('com.browserpilot.bridge')
     expect(setupOut).toContain('Expected Chrome Extension ID')
     expect(setupOut).toContain('mcpServers')
+
+    // v1.6 CLI trace + Daemon capability-URL Trace Viewer hosting verification
+    const cliTraceFile = path.join(cliHome, 'cli-e2e-trace.html')
+    const execTraceOut = await runCli(
+      'exec',
+      '-s',
+      sid,
+      '--trace',
+      cliTraceFile,
+      '-e',
+      `const t = await tabs.current(); await t.page.fill('#query', 'cli-traced'); await t.page.click('#go-btn'); await waitForText('ok:cli-traced', { tab: t, timeoutMs: 5000 });`,
+    )
+    expect(execTraceOut).toContain('Saved Trace report')
+    expect((await fs.stat(cliTraceFile)).size).toBeGreaterThan(5_000)
+
+    const traceOpenOut = await runCli('trace', 'open', cliTraceFile)
+    const viewerUrlMatch = /http:\/\/127\.0\.0\.1:\d+\/trace\/[0-9a-f]{32}/.exec(traceOpenOut)
+    expect(viewerUrlMatch).toBeTruthy()
+    // Capability URL serves HTML directly without Bearer header, while invalid token 404s
+    const viewerResp = await fetch(viewerUrlMatch![0])
+    expect(viewerResp.status).toBe(200)
+    expect(await viewerResp.text()).toContain('BrowserPilot Trace Viewer')
+    const badResp = await fetch(`http://127.0.0.1:${daemonPort}/trace/00000000000000000000000000000000`)
+    expect(badResp.status).toBe(404)
   }, 35_000)
 })

@@ -60,6 +60,12 @@ export interface ExtensionState {
   recentActivity: ActivityLogEntry[]
   recentErrors?: Array<{ timestamp: number; tabId: number; text: string; url?: string }>
   recentFailedRequests?: Array<{ timestamp: number; tabId: number; method: string; status?: number; url: string; errorText?: string }>
+  codegen?: {
+    active: boolean
+    tabId?: number
+    assertMode?: boolean
+    steps: RecordedStep[]
+  }
 }
 
 export interface ActivityLogEntry {
@@ -424,9 +430,25 @@ export interface DownloadEntry {
   completedAt?: number
 }
 
+export type RecordedActionType =
+  | 'navigate'
+  | 'click'
+  | 'dblclick'
+  | 'check'
+  | 'uncheck'
+  | 'fill'
+  | 'select_option'
+  | 'press_key'
+  | 'scroll'
+  | 'assert_visible'
+  | 'assert_text'
+  | 'assert_value'
+
+export type CodegenFormat = 'browserpilot' | 'playwright' | 'batch' | 'skill'
+
 export interface RecordedStep {
   timestamp: number
-  action: 'navigate' | 'click' | 'fill' | 'select_option' | 'press_key' | 'scroll'
+  action: RecordedActionType
   url: string
   target?: string
   value?: string
@@ -442,5 +464,68 @@ export interface ActionRecordingResult {
   errors?: Array<{ timestamp: number; kind: 'console' | 'exception' | 'dialog'; text: string }>
   batchSteps: Array<Record<string, unknown>>
   execScript: string
+  playwrightScript: string
   skillMarkdown: string
+}
+
+// ============================================================================
+// Execution Trace Recorder & Interactive Trace Viewer
+// ============================================================================
+
+export interface TraceNetworkEntry extends NetworkEntry {
+  responseBodyPreview?: string
+}
+
+export interface TraceStep {
+  index: number
+  id: string
+  action: string
+  title: string
+  startedAt: number
+  endedAt: number
+  durationMs: number
+  status: 'ok' | 'error'
+  error?: string
+  urlBefore: string
+  urlAfter: string
+  pageTitle?: string
+  target?: string
+  value?: string
+  key?: string
+  point?: { x: number; y: number }
+  box?: BoundingBox
+  viewport?: { width: number; height: number }
+  beforeScreenshot?: string
+  afterScreenshot?: string
+  domSummary?: string
+  consoleEntries: ConsoleEntry[]
+  networkEntries: TraceNetworkEntry[]
+}
+
+export interface TraceData {
+  version: 1
+  browserPilotVersion: string
+  title: string
+  startedAt: number
+  endedAt: number
+  durationMs: number
+  initialUrl: string
+  finalUrl: string
+  tabId: number
+  viewport?: { width: number; height: number }
+  steps: TraceStep[]
+  totalErrors: number
+  totalNetworkRequests: number
+  playwrightScript: string
+  execScript: string
+}
+
+export interface TraceStopResult {
+  path?: string
+  viewerUrl?: string
+  durationMs: number
+  stepCount: number
+  errorCount: number
+  networkCount: number
+  sizeBytes: number
 }

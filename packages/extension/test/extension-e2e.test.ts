@@ -275,7 +275,20 @@ describe('@browserpilot/extension real Chrome MV3 zero-click E2E', () => {
     await expect(transport.rpc('tabs.create', { url: `${baseUrl}/blocked` })).rejects.toThrow(/paused/i)
     await transport.rpc('extension.setConfig', { paused: false })
 
-    // 9. Detaching a managed tab automatically ungroups it so Chrome doesn't leave Saved Tab Groups behind
+    // 9. Standalone MV3 Side-Panel Codegen recorder works even on pre-existing tabs (auto-injects content-script if needed)
+    await transport.rpc('extension.codegen', { action: 'start', tabId: existing!.tabId })
+    await tab.page.fill('#note', 'recorded-in-extension')
+    await tab.page.click('#action-btn')
+    await transport.rpc('extension.codegen', { action: 'assert', enabled: true })
+    await tab.page.click('#result')
+    const cgStop = (await transport.rpc('extension.codegen', { action: 'stop' })) as {
+      steps: Array<{ action: string; target?: string; value?: string }>
+    }
+    expect(cgStop.steps.some((s) => s.action === 'fill' && s.value === 'recorded-in-extension')).toBe(true)
+    expect(cgStop.steps.some((s) => s.action === 'click' && s.target === '#action-btn')).toBe(true)
+    expect(cgStop.steps.some((s) => s.action === 'assert_text' && s.target === '#result')).toBe(true)
+
+    // 10. Detaching a managed tab automatically ungroups it so Chrome doesn't leave Saved Tab Groups behind
     await transport.detachTab(existing!.tabId)
     const afterDetach = await transport.listTabs()
     const detachedTab = afterDetach.find((t) => t.tabId === existing!.tabId)

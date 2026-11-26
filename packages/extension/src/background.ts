@@ -1,4 +1,9 @@
-import type { ExtensionConfig } from '@browserpilot/protocol'
+import {
+  compressRecordedSteps,
+  isRestrictedUrl,
+  type ExtensionConfig,
+  type RecordedStep,
+} from '@browserpilot/protocol'
 import {
   connectBridge,
   disconnectTransport,
@@ -39,6 +44,34 @@ registerStateHooks({
   },
 })
 setBridgeRpcExecutor(executeBridgeMethod)
+
+/**
+ * Resolves the best target content tab (preferring the active tab in the last focused window,
+ * skipping chrome:// or chrome-extension:// pages when Side Panel is open in its own tab/pane).
+ */
+async function resolveTargetContentTab(): Promise<chrome.tabs.Tab | undefined> {
+  const focused = await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => [])
+  const primary = focused.find((t) => t.id !== undefined && !isRestrictedUrl(t.url))
+  if (primary) return primary
+  const all = await chrome.tabs.query({}).catch(() => [])
+  return (
+    all.find((t) => t.active && t.id !== undefined && !isRestrictedUrl(t.url)) ??
+    all.find((t) => t.id !== undefined && !isRestrictedUrl(t.url))
+  )
+}
+
+/**
+ * Sends a message to a tab's content script, automatically injecting `content-script.js`
+ * on the fly if the tab was already open before the extension was installed or reloaded.
+ */
+async function sendTabMessageEnsureInjected(tabId: number, payload: Record<string, unknown>): Promise<void> {
+  try {
+    await chrome.tabs.sendMessage(tabId, payload)
+  } catch {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content-script.js'] }).catch(() => {})
+    await chrome.tabs.sendMessage(tabId, payload).catch(() => {})
+  }
+}
 
 // ============================================================================
 // Chrome Event Listeners (CDP events, Detach, Popups, Context Menu, Downloads, UI IPC)
@@ -140,7 +173,33 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     updateBadge()
     broadcastUiUpdate()
   }
+  if (bgState.codegen.active && bgState.codegen.tabId === tabId) {
+    bgState.codegen.active = false
+    bgState.codegen.assertMode = false
+    broadcastUiUpdate()
+  }
   sendEvent('tab.removed', { tabId })
+})
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!bgState.codegen.active || bgState.codegen.tabId !== tabId) return
+  if (changeInfo.url && !isRestrictedUrl(changeInfo.url) && changeInfo.url !== 'about:blank') {
+    bgState.codegen.steps.push({
+      timestamp: Date.now(),
+      action: 'navigate',
+      url: changeInfo.url,
+    })
+    broadcastUiUpdate()
+  }
+  if (changeInfo.status === 'complete' && tab.url && !isRestrictedUrl(tab.url)) {
+    void chrome.tabs
+      .sendMessage(tabId, {
+        type: 'browserpilot:set-codegen',
+        active: true,
+        assertMode: bgState.codegen.assertMode,
+      })
+      .catch(() => {})
+  }
 })
 
 chrome.webNavigation.onCreatedNavigationTarget.addListener((details) => {
@@ -237,12 +296,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'browserpilot:get-tab-banner') {
     const tid = _sender.tab?.id
     const active = Boolean(tid !== undefined && bgState.attachedTabs.has(tid) && bgState.config.showHighlights)
+    const isCodegenTab = Boolean(tid !== undefined && bgState.codegen.active && bgState.codegen.tabId === tid)
     safeRespond({
       active,
       paused: bgState.config.paused,
       theme: bgState.config.theme,
       language: bgState.config.language ?? 'zh',
       status: (bgState.config.language ?? 'zh') === 'en' ? 'Active' : '运行中',
+      codegenActive: isCodegenTab,
+      codegenAssertMode: isCodegenTab ? bgState.codegen.assertMode : false,
     })
     return false
   }
@@ -308,11 +370,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true
   }
   if (msg.type === 'browserpilot:start-picker') {
-    void chrome.tabs
-      .query({ active: true, currentWindow: true })
-      .then(([tab]) => {
-        if (tab?.id) {
-          return chrome.tabs.sendMessage(tab.id, { type: 'browserpilot:start-picker' })
+    void resolveTargetContentTab()
+      .then((tab) => {
+        if (tab?.id !== undefined) {
+          return sendTabMessageEnsureInjected(tab.id, { type: 'browserpilot:start-picker' })
         }
       })
       .then(() => safeRespond({ ok: true }))
@@ -322,6 +383,88 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'browserpilot:picked-element') {
     logActivity('element.picked', 'ok', `${msg.selector} (${msg.text ?? ''})`, _sender.tab?.id)
     sendEvent('element.picked', { tabId: _sender.tab?.id, ...msg })
+    safeRespond({ ok: true })
+    return false
+  }
+  if (msg.type === 'browserpilot:codegen-start') {
+    void resolveTargetContentTab()
+      .then(async (tab) => {
+        if (!tab?.id || isRestrictedUrl(tab.url)) {
+          safeRespond({ ok: false, error: 'Cannot record on restricted page' })
+          return
+        }
+        bgState.codegen.active = true
+        bgState.codegen.tabId = tab.id
+        bgState.codegen.assertMode = false
+        bgState.codegen.steps =
+          tab.url && tab.url !== 'about:blank'
+            ? [{ timestamp: Date.now(), action: 'navigate', url: tab.url }]
+            : []
+        await sendTabMessageEnsureInjected(tab.id, { type: 'browserpilot:set-codegen', active: true, assertMode: false })
+        logActivity('codegen.start', 'info', tab.title || tab.url, tab.id)
+        broadcastUiUpdate()
+        safeRespond({ ok: true, tabId: tab.id })
+      })
+      .catch(() => safeRespond({ ok: false }))
+    return true
+  }
+  if (msg.type === 'browserpilot:codegen-stop') {
+    const prevTabId = bgState.codegen.tabId
+    bgState.codegen.active = false
+    bgState.codegen.assertMode = false
+    if (prevTabId !== undefined) {
+      void chrome.tabs
+        .sendMessage(prevTabId, { type: 'browserpilot:set-codegen', active: false, assertMode: false })
+        .catch(() => {})
+    }
+    logActivity('codegen.stop', 'ok', `${compressRecordedSteps(bgState.codegen.steps).length} steps`, prevTabId)
+    broadcastUiUpdate()
+    safeRespond({ ok: true })
+    return false
+  }
+  if (msg.type === 'browserpilot:codegen-assert') {
+    if (bgState.codegen.active && bgState.codegen.tabId !== undefined) {
+      bgState.codegen.assertMode = !bgState.codegen.assertMode
+      void chrome.tabs
+        .sendMessage(bgState.codegen.tabId, {
+          type: 'browserpilot:set-codegen',
+          active: true,
+          assertMode: bgState.codegen.assertMode,
+        })
+        .catch(() => {})
+      broadcastUiUpdate()
+    }
+    safeRespond({ ok: true, assertMode: bgState.codegen.assertMode })
+    return false
+  }
+  if (msg.type === 'browserpilot:codegen-delete-step') {
+    const idx = Number(msg.index)
+    const compressed = compressRecordedSteps(bgState.codegen.steps)
+    if (Number.isInteger(idx) && idx >= 0 && idx < compressed.length) {
+      compressed.splice(idx, 1)
+      bgState.codegen.steps = compressed
+      broadcastUiUpdate()
+    }
+    safeRespond({ ok: true })
+    return false
+  }
+  if (msg.type === 'browserpilot:codegen-clear') {
+    bgState.codegen.steps = []
+    bgState.codegen.assertMode = false
+    broadcastUiUpdate()
+    safeRespond({ ok: true })
+    return false
+  }
+  if (msg.type === 'browserpilot:recorded-step' && msg.step) {
+    const tid = _sender.tab?.id
+    if (bgState.codegen.active && tid !== undefined && tid === bgState.codegen.tabId) {
+      const step = msg.step as RecordedStep
+      bgState.codegen.steps.push(step)
+      if (String(step.action).startsWith('assert_')) {
+        bgState.codegen.assertMode = false
+      }
+      broadcastUiUpdate()
+    }
     safeRespond({ ok: true })
     return false
   }

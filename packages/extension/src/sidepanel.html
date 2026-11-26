@@ -125,7 +125,33 @@
       color: var(--muted-strong);
     }
     button.primary { background: #0d9488; border-color: #14b8a6; color: #fff; }
+    button.danger { background: rgba(248, 113, 113, 0.16); border-color: rgba(248, 113, 113, 0.55); color: var(--err); }
+    button.active-pill { background: var(--pill-on-bg); border-color: var(--accent); color: var(--pill-on-text); }
     button:hover { opacity: 0.92; }
+    .rec-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .fmt-row { display: flex; align-items: center; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
+    .fmt-btn { padding: 4px 8px; font-size: 11px; border-radius: 6px; }
+    pre.code-out {
+      margin: 0 0 12px;
+      padding: 9px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-strong);
+      font: 11.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow-x: auto;
+      max-height: 240px;
+      white-space: pre;
+    }
+    .step-del {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 0 4px;
+      font-size: 14px;
+      line-height: 1;
+    }
+    .step-del:hover { color: var(--err); }
     main {
       flex: 1;
       overflow-y: auto;
@@ -186,19 +212,39 @@
 
   <div class="tabs">
     <button id="tab-activity" class="tab-btn active">动态</button>
+    <button id="tab-record" class="tab-btn">录制</button>
     <button id="tab-errors" class="tab-btn"><span id="lbl-tab-errors">报错</span> (<span id="err-count">0</span>)</button>
     <button id="tab-network" class="tab-btn"><span id="lbl-tab-network">失败请求</span> (<span id="net-count">0</span>)</button>
   </div>
 
   <main>
-    <section>
+    <section id="tabs-section">
       <h2 id="tabs-heading">当前受控标签页</h2>
       <div id="sp-tabs" class="muted">暂无受控标签页</div>
     </section>
 
-    <section>
+    <section id="feed-section">
       <h2 id="feed-heading">AI 实时操作动态</h2>
       <div id="sp-feed" class="muted">等待 AI 指令…</div>
+    </section>
+
+    <section id="record-section" style="display:none">
+      <div class="rec-bar">
+        <button id="rec-toggle" class="primary">开始录制</button>
+        <button id="rec-assert">+ 断言</button>
+        <button id="rec-clear">清空</button>
+      </div>
+      <h2 id="rec-code-heading">生成代码</h2>
+      <div class="fmt-row">
+        <button id="fmt-pw" class="fmt-btn active-pill">Playwright</button>
+        <button id="fmt-bp" class="fmt-btn">BrowserPilot</button>
+        <button id="fmt-skill" class="fmt-btn">Skill</button>
+        <button id="fmt-batch" class="fmt-btn">Batch</button>
+        <button id="rec-copy" class="fmt-btn" style="margin-left:auto">复制代码</button>
+      </div>
+      <pre id="rec-code" class="code-out"></pre>
+      <h2 id="rec-steps-heading">已录制步骤</h2>
+      <div id="rec-steps" class="muted"></div>
     </section>
   </main>
 

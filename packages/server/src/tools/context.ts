@@ -1,4 +1,7 @@
-import { createDemoVideo, type PdfOptions } from '@browserpilot/core'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { createDemoVideo, renderTraceViewerHtml, type PdfOptions } from '@browserpilot/core'
+import type { TraceData } from '@browserpilot/protocol'
 import { textResult, type ToolDefinition, type ToolDispatchContext, type ToolExecutionResult } from './types.js'
 
 export const CONTEXT_TOOL_DEFINITIONS: ToolDefinition[] = [
@@ -167,13 +170,39 @@ export const CONTEXT_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'browser_action_recorder',
     description:
-      'Record live user interactions (clicks, fills, selects, keys, scrolls, navigations) across page loads and generate reusable browser_batch steps, exec JS script, and Agent Skill Markdown.',
+      'Record live user interactions (clicks, dblclicks, checks, fills, selects, keys, scrolls, navigations, and Alt+Shift+Click assertions) across Shadow DOM & iframes, and generate Playwright TS, BrowserPilot JS, browser_batch JSON, or Agent Skill Markdown.',
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['start', 'stop', 'status'] },
+        action: { type: 'string', enum: ['start', 'stop', 'status', 'clear', 'assert_next'] },
         maskPasswords: { type: 'boolean', description: 'Mask password inputs as <REDACTED_PASSWORD> (default true)' },
-        format: { type: 'string', enum: ['all', 'batch', 'script', 'skill'] },
+        format: {
+          type: 'string',
+          enum: ['all', 'playwright', 'browserpilot', 'script', 'batch', 'skill'],
+          description: 'Output format on stop (default "all")',
+        },
+        outputPath: { type: 'string', description: 'Optional file path to save generated code on stop' },
+        tabId: { type: 'number' },
+        sessionId: { type: 'string' },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'browser_trace',
+    description:
+      'Start, stop, check status of, or open an interactive Playwright-style HTML Trace Viewer capturing Before/After screenshots, click reticle & bounding boxes, DOM snapshots, Console logs, and Network requests (+ API response previews) for every browser action.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['start', 'stop', 'status', 'open'] },
+        title: { type: 'string', description: 'Optional trace report title when action=start' },
+        path: { type: 'string', description: 'Output .html / .json file path on stop, or input file path on open' },
+        format: { type: 'string', enum: ['html', 'json'] },
+        screenshots: { type: 'boolean', description: 'Capture Before/After screenshots per step (default true)' },
+        snapshots: { type: 'boolean', description: 'Capture compact AX/DOM summary per step (default true)' },
+        networkBodies: { type: 'boolean', description: 'Capture XHR/Fetch response body previews (default true)' },
+        openViewer: { type: 'boolean', description: 'Automatically open the interactive Trace Viewer in Chrome on stop' },
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
       },
@@ -183,7 +212,7 @@ export const CONTEXT_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'browser_exec',
     description:
-      'Execute a multi-step async JavaScript snippet inside an isolated stateful session sandbox with helpers (state, tabs, locator, route, waitForFileChooser, snapshot, screenshot, cleanHTML, markdown, inspect, getLatestLogs, getNetwork, getStyles, getReactInfo, cdp).',
+      'Execute a multi-step async JavaScript snippet inside an isolated stateful session sandbox with helpers (state, tabs, locator, route, waitForFileChooser, trace, actionRecorder, snapshot, screenshot, cleanHTML, markdown, inspect, getLatestLogs, getNetwork, getStyles, getReactInfo, cdp).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -191,6 +220,10 @@ export const CONTEXT_TOOL_DEFINITIONS: ToolDefinition[] = [
         sessionId: { type: 'string', description: 'Session ID (default "default")' },
         tabId: { type: 'number' },
         timeoutMs: { type: 'number' },
+        tracePath: {
+          type: 'string',
+          description: 'Optional .html or .json file path to automatically record a visual Trace Viewer report for this execution (saved even on error)',
+        },
       },
       required: ['code'],
     },
@@ -407,35 +440,121 @@ export async function executeContextTool(
         const res = await tab.actionRecorder.start({
           maskPasswords: args.maskPasswords as boolean | undefined,
         })
-        return textResult(`Action recording started on ${res.url || `tab [${tab.tabId}]`}`)
+        return textResult(`Action recording started on ${res.url || `tab [${tab.tabId}]`}`, res)
+      }
+      if (action === 'clear') {
+        tab.actionRecorder.clearSteps()
+        return textResult('Cleared recorded steps')
+      }
+      if (action === 'assert_next') {
+        await tab.actionRecorder.setAssertMode(true)
+        return textResult('Assertion mode armed: click any element in Chrome (or Alt+Shift+Click) to record an assertion')
       }
       if (action === 'status') {
+        const steps = tab.actionRecorder.getSteps()
         return textResult(
           JSON.stringify(
             {
               recording: tab.actionRecorder.isRecording(),
-              recordedSteps: tab.actionRecorder.getSteps().length,
+              recordedSteps: steps.length,
+              steps,
             },
             null,
             2,
           ),
+          { recording: tab.actionRecorder.isRecording(), steps },
         )
       }
       if (action === 'stop') {
         const res = await tab.actionRecorder.stop()
         const fmt = String(args.format ?? 'all')
-        if (fmt === 'skill') return textResult(res.skillMarkdown)
-        if (fmt === 'script') return textResult(res.execScript)
-        if (fmt === 'batch') return textResult(JSON.stringify(res.batchSteps, null, 2))
-        return textResult(JSON.stringify(res, null, 2))
+        const rendered =
+          fmt === 'playwright'
+            ? res.playwrightScript
+            : fmt === 'skill'
+              ? res.skillMarkdown
+              : fmt === 'script' || fmt === 'browserpilot'
+                ? res.execScript
+                : fmt === 'batch'
+                  ? JSON.stringify(res.batchSteps, null, 2)
+                  : JSON.stringify(res, null, 2)
+
+        if (typeof args.outputPath === 'string' && args.outputPath.trim()) {
+          const outPath = path.resolve(args.outputPath)
+          await fs.mkdir(path.dirname(outPath), { recursive: true })
+          await fs.writeFile(outPath, rendered, 'utf8')
+          return textResult(`${rendered}\n\n// Saved to ${outPath}`, { outputPath: outPath, stepCount: res.steps.length })
+        }
+        return textResult(rendered, { stepCount: res.steps.length })
       }
       throw new Error(`Unknown action_recorder action: ${action}`)
+    }
+
+    case 'browser_trace': {
+      const action = String(args.action)
+      if (action === 'open') {
+        const rawPath = String(args.path ?? '').trim()
+        if (!rawPath) throw new Error('Provide path to a .html or .json trace file')
+        const resolved = path.resolve(rawPath)
+        const rawContent = await fs.readFile(resolved, 'utf8')
+        const html = resolved.endsWith('.json')
+          ? renderTraceViewerHtml(JSON.parse(rawContent) as TraceData)
+          : rawContent
+        const viewerUrl = ctx.registerTraceHtml?.(html)
+        if (viewerUrl) {
+          await manager.openTab({ url: viewerUrl, tabGroup: 'trace', tabGroupColor: 'cyan' })
+          return textResult(`Opened Trace Viewer in Chrome -> ${viewerUrl}`, { viewerUrl, path: resolved })
+        }
+        return textResult(`Loaded trace report (${resolved}, ${(Buffer.byteLength(html, 'utf8') / 1024).toFixed(1)} KB)`, {
+          path: resolved,
+        })
+      }
+
+      const tab = await resolveTab()
+      if (action === 'start') {
+        const started = await tab.trace.start({
+          title: args.title as string | undefined,
+          screenshots: args.screenshots as boolean | undefined,
+          snapshots: args.snapshots as boolean | undefined,
+          networkBodies: args.networkBodies as boolean | undefined,
+        })
+        return textResult(`Trace recording started on ${started.url || `tab [${tab.tabId}]`} ("${started.title}")`, started)
+      }
+      if (action === 'status') {
+        const st = tab.trace.getStatus()
+        return textResult(JSON.stringify(st, null, 2), st)
+      }
+      if (action === 'stop') {
+        const fmt = args.format === 'json' ? 'json' : 'html'
+        const outPath =
+          typeof args.path === 'string' && args.path.trim()
+            ? args.path
+            : `./browserpilot-trace-${Date.now()}.${fmt}`
+        const stopped = await tab.trace.stop({ path: outPath, format: fmt })
+        const viewerUrl = ctx.registerTraceHtml?.(stopped.html)
+        if (viewerUrl) {
+          stopped.summary.viewerUrl = viewerUrl
+          if (args.openViewer) {
+            await manager.openTab({ url: viewerUrl, tabGroup: 'trace', tabGroupColor: 'cyan' }).catch(() => {})
+          }
+        }
+        const lines = [
+          `Saved Trace report -> ${stopped.summary.path} (${(stopped.summary.sizeBytes / 1024).toFixed(1)} KB)`,
+          `Steps: ${stopped.summary.stepCount} | Network: ${stopped.summary.networkCount} | Errors: ${stopped.summary.errorCount} | Duration: ${(stopped.summary.durationMs / 1000).toFixed(2)}s`,
+        ]
+        if (viewerUrl) {
+          lines.push(`Viewer URL: ${viewerUrl}${args.openViewer ? ' (opened in Chrome)' : ''}`)
+        }
+        return textResult(lines.join('\n'), { ...stopped.summary })
+      }
+      throw new Error(`Unknown browser_trace action: ${action}`)
     }
 
     case 'browser_exec': {
       const res = await manager.exec(sessionId ?? 'default', String(args.code), {
         timeoutMs: args.timeoutMs as number | undefined,
         tabId: explicitTabId,
+        tracePath: typeof args.tracePath === 'string' && args.tracePath.trim() ? args.tracePath : undefined,
       })
       const chunks: string[] = []
       if (res.stdout) chunks.push(res.stdout)
@@ -445,10 +564,13 @@ export async function executeContextTool(
       if (res.uncaughtBrowserErrors.length > 0) {
         chunks.push(`Uncaught browser errors:\n${res.uncaughtBrowserErrors.join('\n')}`)
       }
+      if (res.tracePath) {
+        chunks.push(`Saved Trace report -> ${res.tracePath}`)
+      }
       if (res.error) {
         return { content: [{ type: 'text', text: `${chunks.join('\n')}\nERROR: ${res.error}`.trim() }], isError: true }
       }
-      return textResult(chunks.join('\n') || '(ok)')
+      return textResult(chunks.join('\n') || '(ok)', res.tracePath ? { tracePath: res.tracePath } : undefined)
     }
 
     default:
