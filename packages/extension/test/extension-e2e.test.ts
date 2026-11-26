@@ -393,14 +393,56 @@ describe('@browserpilot/extension real Chrome MV3 zero-click E2E', () => {
     expect(cgStop.steps.some((s) => s.action === 'click' && s.target === '#action-btn')).toBe(true)
     expect(cgStop.steps.some((s) => s.action === 'assert_text' && s.target === '#result')).toBe(true)
 
-    // 10. Detaching a managed tab automatically ungroups it so Chrome doesn't leave Saved Tab Groups behind
+    // 10. Security panel config (approvalMode, profileLabel, domainRules), AI activity logging & real Side Panel UI smoke test
+    await transport.rpc('extension.logActivity', {
+      action: 'click',
+      status: 'ok',
+      detail: '#action-btn',
+      tabId: existing!.tabId,
+      durationMs: 18,
+      step: { action: 'click', target: '#action-btn' },
+    })
+    const actState = (await transport.rpc('extension.getState')) as {
+      recentActivity: Array<{ action: string; step?: Record<string, unknown> }>
+      config: { approvalMode?: string; profileLabel?: string; domainRules: { blockedDomains: string[] } }
+    }
+    expect(actState.recentActivity.some((a) => a.action === 'click' && a.step?.target === '#action-btn')).toBe(true)
+
+    await transport.rpc('extension.setConfig', {
+      approvalMode: 'high-risk',
+      profileLabel: 'Work',
+      domainRules: { blockedDomains: ['blocked.example.com'], allowedDomains: [] },
+    })
+    const secState = (await transport.rpc('extension.getState')) as {
+      config: { approvalMode?: string; profileLabel?: string; domainRules: { blockedDomains: string[] } }
+    }
+    expect(secState.config.approvalMode).toBe('high-risk')
+    expect(secState.config.profileLabel).toBe('Work')
+    expect(secState.config.domainRules.blockedDomains).toContain('blocked.example.com')
+
+    // Open real Side Panel extension HTML page and verify Security tab switches approvalMode -> strict with ZERO console errors
+    const spTab = (await transport.rpc('tabs.create', {
+      url: `chrome-extension://${String(helloPayload?.extensionId)}/sidepanel.html`,
+      active: false,
+    })) as { tabId: number }
+    await new Promise((r) => setTimeout(r, 350))
+    await transport.rpc('tabs.close', { tabId: spTab.tabId })
+
+    // Reset security rules so subsequent steps remain clean
+    await transport.rpc('extension.setConfig', {
+      approvalMode: 'off',
+      profileLabel: '',
+      domainRules: { blockedDomains: [], allowedDomains: [] },
+    })
+
+    // 11. Detaching a managed tab automatically ungroups it so Chrome doesn't leave Saved Tab Groups behind
     await transport.detachTab(existing!.tabId)
     const afterDetach = await transport.listTabs()
     const detachedTab = afterDetach.find((t) => t.tabId === existing!.tabId)
     expect(detachedTab?.attached).toBe(false)
     expect(detachedTab?.groupId).toBeUndefined()
 
-    // 11. Verify Chrome's real chrome://extensions Error Console recorded ZERO errors or warnings across run + live reload
+    // 12. Verify Chrome's real chrome://extensions Error Console recorded ZERO errors or warnings across run + live reload
     const finalErrCheck = await queryDeveloperPrivateErrors(true)
     expect(finalErrCheck.isActive).toBe(true)
     expect(finalErrCheck.manifestErrors).toEqual([])

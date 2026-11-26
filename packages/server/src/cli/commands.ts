@@ -60,6 +60,8 @@ export async function runDirectToolShortcutCommand(
           sessionId,
           clientId,
           interactiveOnly: Boolean(flags.i || flags.interactive),
+          viewportOnly: Boolean(flags.viewport || flags['viewport-only']),
+          maxChars: typeof flags['max-chars'] === 'string' ? Number(flags['max-chars']) : undefined,
           wrapUntrusted: Boolean(flags['wrap-untrusted']),
           search: typeof flags.search === 'string' ? flags.search : undefined,
           scope: typeof flags.scope === 'string' ? flags.scope : undefined,

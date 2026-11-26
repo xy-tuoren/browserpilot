@@ -81,6 +81,8 @@ export interface ActivityLogEntry {
   detail?: string
   status: 'ok' | 'error' | 'info'
   durationMs?: number
+  /** Optional replayable workflow step payload for one-click flow.json export */
+  step?: Record<string, unknown>
 }
 
 // ============================================================================
@@ -110,6 +112,10 @@ export interface SnapshotOptions {
   includeText?: boolean
   /** Return only interactive elements ([e1], [e2]...) and their enclosing landmarks (~70% fewer tokens) */
   interactiveOnly?: boolean
+  /** Restrict snapshot to elements intersecting the visible viewport (+120px lookahead margin) */
+  viewportOnly?: boolean
+  /** Soft character budget for large pages (0 disables truncation) */
+  maxChars?: number
   /** Maximum depth to traverse (default 40) */
   maxDepth?: number
   /** Include iframe subtrees (default true) */
@@ -132,6 +138,8 @@ export interface SnapshotResult {
   isDiff: boolean
   totalRefs: number
   refs: Record<string, RefTarget>
+  truncated?: boolean
+  omittedLines?: number
 }
 
 export interface BoundingBox {

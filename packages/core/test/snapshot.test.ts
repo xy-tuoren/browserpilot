@@ -115,6 +115,23 @@ describe('Snapshot & Wait helpers', () => {
     expect(diff.text).toContain('- [e15] button "Item 15 (Updated)"')
   })
 
+  it('flattens LayoutTable/LayoutTableRow/LayoutTableCell transparently so table-layout sites (e.g. Hacker News) expose all child links and inputs', () => {
+    const nodes: RawAXNode[] = [
+      { nodeId: '1', role: { value: 'RootWebArea' }, name: { value: 'HN' }, childIds: ['2'] },
+      { nodeId: '2', role: { value: 'LayoutTable' }, childIds: ['3'] },
+      { nodeId: '3', role: { value: 'LayoutTableRow' }, childIds: ['4'] },
+      { nodeId: '4', role: { value: 'LayoutTableCell' }, childIds: ['5', '6'] },
+      { nodeId: '5', role: { value: 'link' }, name: { value: 'Show HN: BrowserPilot' }, backendDOMNodeId: 501 },
+      { nodeId: '6', role: { value: 'textbox' }, name: { value: 'Search' }, backendDOMNodeId: 502 },
+    ]
+    const result = formatAXTree(nodes)
+    expect(result.lines).toEqual([
+      '- [e1] link "Show HN: BrowserPilot"',
+      '- [e2] textbox "Search"',
+    ])
+    expect(Object.keys(result.refs)).toEqual(['e1', 'e2'])
+  })
+
   it('identifies ignored analytics/ad and long-polling URLs for smart waitForPageLoad', () => {
     expect(isIgnoredAnalyticsUrl('https://www.google-analytics.com/g/collect?v=2')).toBe(true)
     expect(isIgnoredAnalyticsUrl('https://cdn.sentry.io/api/1/envelope')).toBe(true)

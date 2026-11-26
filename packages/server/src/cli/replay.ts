@@ -1,7 +1,13 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import type { DaemonClient } from '../client.js'
+import { DirectCDPTransport, SessionManager } from '@browserpilot/core'
+import { executeTool, type ToolExecutionResult, type ToolRuntimeContext } from '../tools.js'
 import type { CliFlags } from './args.js'
+import { launchManagedBrowser, type LaunchedBrowserHandle } from './launch.js'
+
+export interface ReplayToolCaller {
+  callTool: (name: string, args: Record<string, unknown>) => Promise<ToolExecutionResult>
+}
 
 export interface ReplayFlowStep {
   action: string
@@ -41,7 +47,7 @@ export function parseWorkflowPayload(rawJson: string): ReplayFlowFile {
 }
 
 async function runSingleReplayStep(
-  client: DaemonClient,
+  client: ReplayToolCaller,
   step: ReplayFlowStep,
   base: { tabId?: number; sessionId?: string; clientId?: string },
 ): Promise<void> {
@@ -171,13 +177,13 @@ async function runSingleReplayStep(
 }
 
 export async function runReplayCommand(
-  client: DaemonClient,
+  client: ReplayToolCaller | null,
   fileArg: string | undefined,
   flags: CliFlags,
   opts: { tabId?: number; sessionId?: string; clientId?: string },
 ): Promise<void> {
   if (!fileArg) {
-    throw new Error('Usage: browserpilot run <flow.json> [--trace [report.html]] [--open] [--tab <id>]')
+    throw new Error('Usage: browserpilot run <flow.json> [--headless] [--cdp <url>] [--trace [report.html]] [--open] [--tab <id>]')
   }
   const resolvedPath = path.resolve(fileArg)
   const raw = await fs.readFile(resolvedPath, 'utf8')
@@ -185,6 +191,45 @@ export async function runReplayCommand(
   if (!flow.steps.length) {
     console.log('Workflow has 0 steps; nothing to execute.')
     return
+  }
+
+  let launched: LaunchedBrowserHandle | null = null
+  let directTransport: DirectCDPTransport | null = null
+  let directManager: SessionManager | null = null
+  let caller: ReplayToolCaller
+
+  if (flags.headless || typeof flags.cdp === 'string') {
+    let endpoint = typeof flags.cdp === 'string' ? flags.cdp : ''
+    if (flags.headless && !endpoint) {
+      launched = await launchManagedBrowser({
+        headless: true,
+        ephemeral: true,
+        windowSize: typeof flags['window-size'] === 'string' ? flags['window-size'] : undefined,
+      })
+      endpoint = launched.endpoint
+    }
+    directTransport = await DirectCDPTransport.connect(endpoint)
+    directManager = new SessionManager(directTransport)
+    const runtimeCtx: ToolRuntimeContext = {
+      getManager: () => directManager!,
+      listClients: () => [
+        {
+          clientId: 'direct-replay',
+          transport: 'direct-cdp',
+          browser: `Chromium (${endpoint})`,
+          connectedAt: Date.now(),
+          lastSeenAt: Date.now(),
+          attachedTabCount: directManager!.getAttachedTabCount(),
+        },
+      ],
+    }
+    caller = {
+      callTool: (name, args) => executeTool(runtimeCtx, name, args),
+    }
+  } else if (client) {
+    caller = client
+  } else {
+    throw new Error('No browser client available. Connect extension, pass --headless, or pass --cdp <url>.')
   }
 
   const title = flow.title || flow.name || path.basename(resolvedPath)
@@ -197,7 +242,7 @@ export async function runReplayCommand(
 
   let traceStarted = false
   if (tracePath) {
-    const startRes = await client.callTool('browser_trace', { action: 'start', title, ...opts })
+    const startRes = await caller.callTool('browser_trace', { action: 'start', title, ...opts })
     traceStarted = !startRes.isError
   }
 
@@ -206,13 +251,15 @@ export async function runReplayCommand(
   let failure: Error | null = null
 
   try {
-    console.log(`Running workflow "${title}" (${flow.steps.length} step(s))…`)
+    console.log(
+      `Running workflow "${title}" (${flow.steps.length} step(s)${launched ? ', headless Chrome' : ''})…`,
+    )
     for (let i = 0; i < flow.steps.length; i++) {
       const step = flow.steps[i]
       const stepStart = Date.now()
       const label = step.url || step.target || step.key || step.text || ''
       try {
-        await runSingleReplayStep(client, step, opts)
+        await runSingleReplayStep(caller, step, opts)
         passed++
         console.log(`  ✓ [${i + 1}/${flow.steps.length}] ${step.action}${label ? ` ${label}` : ''} (${Date.now() - stepStart}ms)`)
       } catch (err) {
@@ -223,11 +270,11 @@ export async function runReplayCommand(
     }
   } finally {
     if (traceStarted && tracePath) {
-      const stopRes = await client
+      const stopRes = await caller
         .callTool('browser_trace', {
           action: 'stop',
           path: tracePath,
-          openViewer: Boolean(flags.open),
+          openViewer: Boolean(flags.open) && !launched,
           ...opts,
         })
         .catch(() => null)
@@ -237,6 +284,9 @@ export async function runReplayCommand(
         }
       }
     }
+    directManager?.dispose()
+    await directTransport?.close().catch(() => {})
+    await launched?.close().catch(() => {})
   }
 
   const elapsed = ((Date.now() - startedAt) / 1000).toFixed(2)

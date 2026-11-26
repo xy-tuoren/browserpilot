@@ -491,6 +491,28 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     safeRespond({ ok: true })
     return false
   }
+  if (msg.type === 'browserpilot:clear-activity') {
+    bgState.recentActivity = []
+    broadcastUiUpdate()
+    safeRespond({ ok: true })
+    return false
+  }
+  if (msg.type === 'browserpilot:get-active-domain') {
+    void resolveTargetContentTab()
+      .then((tab) => {
+        if (!tab?.url) {
+          safeRespond({ hostname: null })
+          return
+        }
+        try {
+          safeRespond({ hostname: new URL(tab.url).hostname.toLowerCase() })
+        } catch {
+          safeRespond({ hostname: null })
+        }
+      })
+      .catch(() => safeRespond({ hostname: null }))
+    return true
+  }
   if (msg.type === 'browserpilot:recorded-step' && msg.step) {
     const tid = _sender.tab?.id
     if (bgState.codegen.active && tid !== undefined && tid === bgState.codegen.tabId) {

@@ -90,25 +90,33 @@ export const NAVIGATION_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'browser_snapshot',
     description:
-      'Capture a compact semantic Accessibility Tree snapshot with short element refs (e1, e2...). Supports incremental diffing, regex search, subtree scoping, and single-frame targeting.',
+      'Capture semantic AXTree snapshot with short refs (e1, e2...). Supports diff, search, scope, viewportOnly, maxChars & frame.',
     inputSchema: {
       type: 'object',
       properties: {
         tabId: { type: 'number' },
         sessionId: { type: 'string' },
-        search: { type: 'string', description: 'Filter lines matching substring/regex' },
-        scope: { type: 'string', description: 'CSS selector or ref to scope snapshot to a subtree' },
-        frame: { type: 'string', description: 'Iframe CSS selector, frameId, name, or URL substring/regex to snapshot a single frame' },
+        search: { type: 'string', description: 'Filter lines by substring/regex' },
+        scope: { type: 'string', description: 'Selector or ref to scope subtree' },
+        frame: { type: 'string', description: 'Iframe selector, frameId, name, or URL' },
         interactiveOnly: {
           type: 'boolean',
-          description: 'Return only interactive elements ([e1], [e2]...) and enclosing landmarks (~70% fewer tokens)',
+          description: 'Interactive elements & landmarks only (~70% fewer tokens)',
         },
-        showDiffSinceLastCall: { type: 'boolean', description: 'Return concise diff since last snapshot (default true)' },
+        viewportOnly: {
+          type: 'boolean',
+          description: 'Viewport-intersecting elements only (best for huge tables/feeds)',
+        },
+        maxChars: {
+          type: 'number',
+          description: 'Soft char budget (default 32000; 0 disables)',
+        },
+        showDiffSinceLastCall: { type: 'boolean', description: 'Diff since last snapshot (default true)' },
         includeText: { type: 'boolean' },
         includeIframes: { type: 'boolean' },
         wrapUntrusted: {
           type: 'boolean',
-          description: 'Wrap webpage content in <untrusted_page_content> prompt-injection boundaries',
+          description: 'Wrap output in <untrusted_page_content> boundary',
         },
       },
     },
@@ -317,18 +325,32 @@ export async function executeNavigationTool(
 
     case 'browser_snapshot': {
       const tab = await resolveTab()
+      const maxChars =
+        typeof args.maxChars === 'number'
+          ? args.maxChars
+          : args.search !== undefined
+            ? 0
+            : 32_000
       const snap = await tab.snapshots.capture(tab.session, {
         search: args.search as string | undefined,
         scope: args.scope as string | undefined,
         frame: args.frame as string | undefined,
         interactiveOnly: args.interactiveOnly as boolean | undefined,
+        viewportOnly: args.viewportOnly as boolean | undefined,
+        maxChars,
         showDiffSinceLastCall: args.showDiffSinceLastCall as boolean | undefined,
         includeText: args.includeText as boolean | undefined,
         includeIframes: args.includeIframes as boolean | undefined,
       })
       const shouldWrap = args.wrapUntrusted === true || process.env.BROWSERPILOT_UNTRUSTED_BOUNDARY === '1'
       const body = shouldWrap ? wrapUntrustedPageContent(snap.text, { url: snap.url, kind: 'snapshot' }) : snap.text
-      return textResult(body, { totalRefs: snap.totalRefs, isDiff: snap.isDiff, tabId: tab.tabId })
+      return textResult(body, {
+        totalRefs: snap.totalRefs,
+        isDiff: snap.isDiff,
+        truncated: snap.truncated,
+        omittedLines: snap.omittedLines,
+        tabId: tab.tabId,
+      })
     }
 
     case 'browser_screenshot': {

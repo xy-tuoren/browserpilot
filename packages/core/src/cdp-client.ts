@@ -7,6 +7,7 @@ export interface ChildFrameSession {
   targetId: string
   url: string
   type: string
+  parentSessionId?: string
 }
 
 export interface DialogEventInfo {
@@ -60,7 +61,14 @@ export class TabCDPSession {
               targetId: info.targetId ?? '',
               url: info.url ?? '',
               type: info.type ?? 'iframe',
+              ...(packet.sessionId ? { parentSessionId: packet.sessionId } : {}),
             })
+            // Enable recursive OOPIF auto-attach inside child iframe targets (2+ level cross-origin frames)
+            void this.send(
+              'Target.setAutoAttach',
+              { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
+              { sessionId: sid },
+            ).catch(() => {})
           }
         } else if (packet.method === 'Target.targetInfoChanged' && packet.params.targetInfo) {
           const info = packet.params.targetInfo as { targetId?: string; url?: string }
@@ -343,7 +351,7 @@ export class TabCDPSession {
       const world = await this.send<{ executionContextId?: number }>('Page.createIsolatedWorld', {
         frameId: frame.frameId,
         worldName: 'browserpilot-frame',
-        grantUniveralAccess: true,
+        grantUniversalAccess: true,
       }).catch(() => null)
       contextId = world?.executionContextId
     }

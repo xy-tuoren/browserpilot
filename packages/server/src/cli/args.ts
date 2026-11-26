@@ -25,6 +25,46 @@ export async function getExtensionDistPath(metaUrl = import.meta.url): Promise<s
   }
 }
 
+const BOOLEAN_FLAGS = new Set([
+  'headless',
+  'ephemeral',
+  'json',
+  'open',
+  'viewport',
+  'viewport-only',
+  'interactive',
+  'full',
+  'diff',
+  'wrap-untrusted',
+  'no-connect',
+  'dry-run',
+  'http',
+  'force',
+  'strict',
+  'double',
+  'auto',
+  'gone',
+  'popup',
+  'landscape',
+  'full-page',
+  'grid',
+  'failed',
+  'since-last',
+  'run-now',
+  'restricted-sandbox',
+  'ignore-cache',
+  'no-extension',
+  'no-background',
+  'no-screenshots',
+  'no-snapshots',
+  'no-network-bodies',
+  'no-mask-passwords',
+  'down',
+  'up',
+  'help',
+  'version',
+])
+
 export function parseFlags(argv: string[]): { positional: string[]; flags: CliFlags } {
   const positional: string[] = []
   const flags: CliFlags = {}
@@ -37,7 +77,7 @@ export function parseFlags(argv: string[]): { positional: string[]; flags: CliFl
       } else {
         const key = arg.slice(2)
         const next = argv[i + 1]
-        if (next && !next.startsWith('-')) {
+        if (!BOOLEAN_FLAGS.has(key) && next && !next.startsWith('-')) {
           flags[key] = next
           i++
         } else {
@@ -47,7 +87,7 @@ export function parseFlags(argv: string[]): { positional: string[]; flags: CliFl
     } else if (arg.startsWith('-') && arg.length === 2) {
       const key = arg.slice(1)
       const next = argv[i + 1]
-      if (next && !next.startsWith('-')) {
+      if (key !== 'i' && key !== 'h' && key !== 'v' && next && !next.startsWith('-')) {
         flags[key] = next
         i++
       } else {
@@ -94,13 +134,14 @@ Usage:
   browserpilot clients                                   List connected browsers/profiles (* = active default)
   browserpilot mcp [--full] [--caps <groups>] [--http [--port 19889]] [--cdp <url>]  Start MCP server (stdio or Streamable HTTP)
   browserpilot connect-cdp <url>                         Attach daemon directly to a --remote-debugging-port Chrome
+  browserpilot launch [--headless] [--port N] [--profile <dir>|--ephemeral] | status | stop  Launch/manage isolated Chrome for CI & local dev
   browserpilot browser start [--headless] [--cdp-port N] Launch Chrome/Chrome for Testing with BrowserPilot ready
 
 Stateful Sessions, Replay, Codegen & Visual Trace:
   browserpilot session new [--tab-group <name>] [--tab-group-color <color>]
   browserpilot session list | update <id> [--tab-group <name>] [--tab-group-color <color>] | reset <id> | close <id>
   browserpilot exec -s <id> -e '<js>' | -f <script.js> [--restricted-sandbox] [--timeout <ms>] [--trace <report.html>]
-  browserpilot run <flow.json> [--trace [report.html]] [--open] [--tab <id>]
+  browserpilot run <flow.json> [--headless] [--cdp <url>] [--trace [report.html]] [--open] [--tab <id>]
   browserpilot codegen [url] [--format playwright|browserpilot|skill|batch] [-o <file>] [--duration <sec>] [--tab <id>]
   browserpilot trace <start|stop|status|open> [path] [--title <str>] [--open] [--json] [--tab <id>]
 
@@ -111,7 +152,7 @@ Direct Quick Commands (pass --browser <name> | --profile <label> | --client <id>
   browserpilot close <tabId>
   browserpilot navigate <url> [--tab <id>]
   browserpilot back | forward | reload [--ignore-cache] [--tab <id>]
-  browserpilot snapshot [-i|--interactive] [--wrap-untrusted] [--tab <id>] [--search <regex>] [--scope <css>] [--frame <frame>] [--full]
+  browserpilot snapshot [-i|--interactive] [--viewport] [--max-chars <N>] [--wrap-untrusted] [--tab <id>] [--search <regex>] [--scope <css>] [--frame <frame>] [--full]
   browserpilot markdown [--search <regex>] [--wrap-untrusted] [--full] [--tab <id>]
   browserpilot html [--selector <css>] [--search <regex>] [--wrap-untrusted] [--full] [--tab <id>]
   browserpilot click <ref|locator> [--diff] [--force] [--double] [--button left|right|middle] [--modifiers Meta,Shift] [--tab <id>]

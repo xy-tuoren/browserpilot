@@ -27,14 +27,15 @@
 | 安全护栏（高危操作页内确认、敏感头/密码自动脱敏、网页 Prompt Injection 边界隔离） | 否 | 否 | 部分 | **全部内置** |
 | Direct CDP 直连模式 & macOS / Linux / Windows 三端 CI 验证 | 是 | 是 | 否 | **是** |
 
-### 实测效率与体积数据
+### 实测效率与体积数据（可通过 `node scripts/agent-eval.mjs` 一键复现）
 
 | 指标 | 优化前 / 全量基线 | BrowserPilot 默认配置 | 降幅 |
 | :--- | :---: | :---: | :---: |
-| MCP 启动加载的工具 Schema（`tools/list`） | 53 工具（`--full`）：`30.8 KB`（约 7,711 tokens） | 19 核心工具（含 `browser_exec`）：`12.2 KB`（约 3,038 tokens） | **-60.6% Token** |
-| 复杂内容页 AXTree 感知 | 全量无障碍树快照 | `snapshot -i` 精简交互快照 + 增量 Diff | **约省 65%–75% Token** |
-| 点击/填表后的状态确认轮次 | `click` + 单独 `snapshot`（2 轮对话） | `click --diff` / `returnDiff: true`（单轮返回） | **-50% 往返轮次** |
-| npm 安装包解压体积（`browserpilot-cdp`） | `3.2 MB` | `~840 KB`（ESM 拆包 + 完整 `.d.ts` TypeScript SDK） | **-74% 体积** |
+| MCP 启动加载的工具 Schema（`tools/list`） | 53 工具（`--full`）：`30.1 KB`（约 7,711 tokens） | 19 核心工具（含 `browser_exec`）：`11.9 KB`（约 3,038 tokens） | **-60.6% Token** |
+| 11,000+ DOM 节点企业级大表快照 | 全量 AXTree：`20,517` tokens | `snapshot -i --viewport`：`257` tokens（`scope` 仅 `53` tokens） | **-98.7% Token** |
+| 真实公网站点实测（`GitHub` / `Wikipedia` / `MDN`） | 全量：`10.8k` / `22.4k` / `6.0k` tokens | `snapshot -i --viewport`：`1.4k` / `1.7k` / `1.3k` tokens | **实测省 78%–92% Token** |
+| 点击/填表后的状态确认轮次 | `click` + 单独 `snapshot`（2 轮对话） | `click --diff` / `returnDiff: true`（单轮返回状态+控件变化） | **-50% 往返轮次** |
+| npm 安装包解压体积（`browserpilot-cdp`） | `3.2 MB` | `~930 KB`（ESM 拆包 + 完整 `.d.ts` TypeScript SDK） | **-71% 体积** |
 
 ---
 
@@ -164,8 +165,9 @@ browserpilot clients                                 # 查看所有已连接的�
 browserpilot daemon use edge                         # 固定默认路由到指定浏览器或 Profile
 browserpilot tabs --browser chrome                   # 指定浏览器列出已打开标签页
 browserpilot open example.com                        # 打开标签页并零点击自动附加
-browserpilot snapshot -i                             # 精简交互无障碍树快照（约省 70% Token）
-browserpilot click e3 --diff                         # 可信点击并单轮附带页面精简变化 Diff
+browserpilot snapshot -i --viewport                  # 精简交互 + 视口内快照（实测省 78%–98.7% Token）
+browserpilot snapshot --scope "#modal" --max-chars 8000 # 穿透 Shadow DOM 区域抓取 + 字符预算截断
+browserpilot click e3 --diff                         # 可信点击并单轮附带页面变化 Diff（含状态文案与控件）
 browserpilot fill e4 "hello world" --diff            # 富文本 & SPA 安全输入并附带 Diff
 browserpilot scroll down --until 'text="加载更多"'   # 虚拟滚动列表自动边滚边找目标
 browserpilot drag "#card" "#column" --mode auto      # Pointer 或 HTML5 DataTransfer 拖拽
@@ -179,7 +181,9 @@ browserpilot styles "#submit-btn"                    # 查看 DevTools 命中样
 browserpilot react "#submit-btn"                     # 检查 React Fiber 组件名与源码位置
 browserpilot perf metrics                            # 采集 Core Web Vitals（LCP/CLS/FCP/TTFB）与内存指标
 browserpilot codegen example.com --format batch -o flow.json  # 实时录制操作步骤为 JSON
-browserpilot run flow.json --trace replay.html --open         # 一键回放录制脚本并自动生成可视化 Trace
+browserpilot run flow.json --trace replay.html --open         # 在本机已登录 Chrome 回放并生成 Trace
+browserpilot run flow.json --headless --trace ci-replay.html  # 零 Daemon 独立无头 Chrome 跑 CI 回归并出 Trace
+browserpilot launch --headless && browserpilot launch status && browserpilot launch stop  # 托管隔离 Chrome 生命周期
 browserpilot trace open replay.html                           # 在 Chrome 中直接打开交互式 Trace 查看器
 ```
 
@@ -202,7 +206,8 @@ browserpilot trace open replay.html                           # 在 Chrome 中�
 
 ## 安全与内置护栏
 
-1. **高危动作页内确认（`BROWSERPILOT_APPROVAL_MODE=high-risk|strict`）**：自动识别付款、转账、下单、删除账号、发布、支付/网银域名等高危操作，在页面底部弹出红色确认卡片（**「允许本次」 / 「拒绝」**），用户点头后才继续执行。
+1. **侧边栏可视化安全面板 & 高危动作页内确认**：直接在扩展侧边栏 **「安全」** 页签配置确认模式（`关闭` / `仅高危` / `严格`）、浏览器 Profile 标签与域名黑/白名单标签（含一键 **「禁止当前站点」**），也支持环境变量 `BROWSERPILOT_APPROVAL_MODE=high-risk|strict`。触发高危操作时在页面内弹出双语关闭式 Shadow DOM 确认卡片（**「允许本次」 / 「拒绝」**），用户点头后才执行。
+2. **AI 实时操作流 & 一键导出 `flow.json`**：所有 MCP/CLI 工具动作实时推送到侧边栏 **「动态」** 页签（带耗时与状态），支持直接从「动态」或「录制」页签一键导出 `flow.json`，配合 `browserpilot run`（本机或 `--headless` CI）随时复跑。
 2. **敏感信息默认脱敏**：HTML Trace 报告与 `browser_network` 详情接口默认自动对 `Authorization`、`Cookie`、`Set-Cookie`、`X-API-Key`、密码字段、Bearer Token 和 URL 中的敏感参数做 `<REDACTED>` 脱敏（确需排障时可显式传 `includeSensitive: true`）。
 3. **网页 Prompt Injection 边界隔离**：在 `snapshot` / `markdown` / `html` 传 `--wrap-untrusted`（或设置 `BROWSERPILOT_UNTRUSTED_BOUNDARY=1`），即可将不可信外部网页数据包裹在 `<untrusted_page_content>` 边界标签中。
 4. **可选受限沙盒（`--restricted-sandbox` / `BROWSERPILOT_SANDBOX_MODE=restricted`）**：在 `browser_exec` 中拦截 `child_process`、`fs`、`net`、`http` 等系统级模块，同时保留全部纯 CDP 浏览器能力。

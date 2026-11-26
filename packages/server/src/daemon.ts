@@ -210,9 +210,20 @@ export class BrowserPilotDaemon {
       register()
     })
 
-    ws.on('message', () => {
+    ws.on('message', (raw) => {
       const b = this.backends.get(clientId)
-      if (b) b.info.lastSeenAt = Date.now()
+      if (!b) return
+      b.info.lastSeenAt = Date.now()
+      try {
+        const parsed = JSON.parse(raw.toString('utf8')) as {
+          type?: string
+          event?: string
+          params?: { profileLabel?: string }
+        }
+        if (parsed.type === 'event' && parsed.event === 'config.updated' && parsed.params) {
+          b.info.profileLabel = parsed.params.profileLabel || undefined
+        }
+      } catch {}
     })
   }
 

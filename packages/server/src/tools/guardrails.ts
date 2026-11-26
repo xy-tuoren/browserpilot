@@ -90,7 +90,7 @@ export async function appendPostActionDiff(
 ): Promise<string> {
   if (!returnDiff) return baseText
   const snap = await tab.snapshots
-    .capture(tab.session, { interactiveOnly: true, showDiffSinceLastCall: true })
+    .capture(tab.session, { viewportOnly: true, showDiffSinceLastCall: true, maxChars: 6_000 })
     .catch(() => null)
   if (!snap?.text) return baseText
   return `${baseText}\n\n--- Page Diff ---\n${snap.text}`

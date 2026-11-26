@@ -92,24 +92,25 @@ export async function scrollChildIframeIntoView(
   }
 }
 
-export async function getIframeOffset(
+async function getSingleFrameOffsetInParent(
   deps: ActionabilityDeps,
-  frameId?: string,
-  childSessionId?: string,
-): Promise<{ x: number; y: number }> {
-  const child = childSessionId
-    ? deps.session.getChildSessions().find((c) => c.sessionId === childSessionId)
-    : undefined
-  const effectiveFrameId = frameId || child?.targetId
-  if (effectiveFrameId) {
+  frameId: string | undefined,
+  childUrl: string | undefined,
+  parentSessionId: string | undefined,
+): Promise<{ x: number; y: number } | null> {
+  if (frameId) {
     try {
-      const owner = await deps.session.send<{ backendNodeId?: number }>('DOM.getFrameOwner', {
-        frameId: effectiveFrameId,
-      })
+      const owner = await deps.session.send<{ backendNodeId?: number }>(
+        'DOM.getFrameOwner',
+        { frameId },
+        { sessionId: parentSessionId },
+      )
       if (owner.backendNodeId) {
-        const box = await deps.session.send<{ model?: { content?: number[] } }>('DOM.getBoxModel', {
-          backendNodeId: owner.backendNodeId,
-        })
+        const box = await deps.session.send<{ model?: { content?: number[] } }>(
+          'DOM.getBoxModel',
+          { backendNodeId: owner.backendNodeId },
+          { sessionId: parentSessionId },
+        )
         const c = box.model?.content
         if (c && c.length >= 2) return { x: c[0], y: c[1] }
       }
@@ -118,25 +119,79 @@ export async function getIframeOffset(
     }
   }
 
-  if (child?.url) {
+  if (childUrl) {
     try {
-      const rect = await deps.evaluate<{ x: number; y: number } | null>(`(() => {
-        const targetUrl = ${JSON.stringify(child.url)};
-        for (const f of document.querySelectorAll('iframe')) {
-          const src = f.src || f.getAttribute('src') || '';
-          if (src && (src === targetUrl || targetUrl.startsWith(src) || src.startsWith(targetUrl))) {
-            const r = f.getBoundingClientRect();
-            return { x: r.left, y: r.top };
-          }
-        }
-        return null;
-      })()`)
-      if (rect) return rect
+      const evalRes = await deps.session.send<{ result?: { value?: { x: number; y: number } | null } }>(
+        'Runtime.evaluate',
+        {
+          expression: `(() => {
+            const targetUrl = ${JSON.stringify(childUrl)};
+            for (const f of document.querySelectorAll('iframe')) {
+              const src = f.src || f.getAttribute('src') || '';
+              if (src && (src === targetUrl || targetUrl.startsWith(src) || src.startsWith(targetUrl))) {
+                const r = f.getBoundingClientRect();
+                return { x: r.left, y: r.top };
+              }
+            }
+            return null;
+          })()`,
+          returnByValue: true,
+        },
+        { sessionId: parentSessionId },
+      )
+      if (evalRes.result?.value) return evalRes.result.value
     } catch {
       // ignore
     }
   }
-  return { x: 0, y: 0 }
+  return null
+}
+
+export async function getIframeOffset(
+  deps: ActionabilityDeps,
+  frameId?: string,
+  childSessionId?: string,
+): Promise<{ x: number; y: number }> {
+  const allChildren = deps.session.getChildSessions()
+  const child = childSessionId ? allChildren.find((c) => c.sessionId === childSessionId) : undefined
+
+  // Walk up nested OOPIF parent chain (supports 1-level, 2-level, and N-level cross-origin iframes)
+  if (child) {
+    let totalX = 0
+    let totalY = 0
+    let cur: typeof child | undefined = child
+    const seen = new Set<string>()
+    while (cur && !seen.has(cur.sessionId)) {
+      seen.add(cur.sessionId)
+      const effectiveFrameId = cur === child ? frameId || cur.targetId : cur.targetId
+      let off = await getSingleFrameOffsetInParent(deps, effectiveFrameId, cur.url, cur.parentSessionId)
+      if (!off && !cur.parentSessionId) {
+        // Fallback: if Chrome attached nested OOPIF directly under tab without parentSessionId, search sibling child sessions
+        for (const candidate of allChildren) {
+          if (candidate.sessionId === cur.sessionId) continue
+          const hit = await getSingleFrameOffsetInParent(deps, effectiveFrameId, cur.url, candidate.sessionId)
+          if (hit) {
+            off = hit
+            totalX += off.x
+            totalY += off.y
+            cur = candidate
+            off = null
+            break
+          }
+        }
+        if (cur !== child && !off) continue
+      }
+      if (off) {
+        totalX += off.x
+        totalY += off.y
+      }
+      cur = cur.parentSessionId ? allChildren.find((c) => c.sessionId === cur!.parentSessionId) : undefined
+    }
+    return { x: totalX, y: totalY }
+  }
+
+  const off = await getSingleFrameOffsetInParent(deps, frameId, undefined, undefined)
+  return off ?? { x: 0, y: 0 }
 }
 
 /**

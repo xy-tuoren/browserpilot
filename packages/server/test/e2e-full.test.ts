@@ -339,6 +339,15 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
       const snapText = (snapRes.content as Array<{ text?: string }>)[0]?.text ?? ''
       expect(snapText).toContain('BrowserPilot Full Stack')
 
+      // Viewport-only + maxChars snapshot budgeting over MCP
+      const vpSnapRes = await client.callTool({
+        name: 'browser_snapshot',
+        arguments: { showDiffSinceLastCall: false, interactiveOnly: true, viewportOnly: true, maxChars: 8000 },
+      })
+      const vpSnapText = (vpSnapRes.content as Array<{ text?: string }>)[0]?.text ?? ''
+      expect(vpSnapText).toContain('Mode: interactive,viewport')
+      expect(vpSnapText).toContain('Search Now')
+
       await client.callTool({ name: 'browser_fill', arguments: { target: '#query', value: 'mcp-power' } })
       const clickRes = await client.callTool({ name: 'browser_click', arguments: { target: '#go-btn', returnDiff: true } })
       const clickText = (clickRes.content as Array<{ text?: string }>)[0]?.text ?? ''
@@ -604,5 +613,29 @@ describe('@browserpilot/server full stack: Daemon, Native Host, MCP stdio, CLI &
     expect(runOut).toContain('Workflow passed: 6/6 step(s)')
     expect(runOut).toContain('Saved Trace report')
     expect((await fs.stat(replayTraceFile)).size).toBeGreaterThan(5_000)
-  }, 35_000)
+
+    // Standalone CI headless workflow replay (`browserpilot run flow.json --headless --trace`) with ZERO daemon dependency!
+    const headlessTraceFile = path.join(cliHome, 'headless-replay-trace.html')
+    const headlessRunOut = await runCli('run', '--headless', flowFile, '--trace', headlessTraceFile)
+    expect(headlessRunOut).toContain('headless Chrome')
+    expect(headlessRunOut).toContain('Workflow passed: 6/6 step(s)')
+    expect((await fs.stat(headlessTraceFile)).size).toBeGreaterThan(5_000)
+
+    // Managed Chrome launcher (`browserpilot launch --headless --no-connect --json` -> `status` -> `stop`)
+    const launchOut = await runCli('launch', '--headless', '--no-connect', '--json')
+    const launched = JSON.parse(launchOut) as { pid: number; endpoint: string; profileDir: string; headless: boolean }
+    expect(launched.pid).toBeGreaterThan(0)
+    expect(launched.headless).toBe(true)
+    expect(launched.endpoint).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
+
+    const launchStatusOut = await runCli('launch', 'status', '--json')
+    const launchStatus = JSON.parse(launchStatusOut) as { running: boolean; state: { pid: number } }
+    expect(launchStatus.running).toBe(true)
+    expect(launchStatus.state.pid).toBe(launched.pid)
+
+    const launchStopOut = await runCli('launch', 'stop', '--json')
+    const launchStopped = JSON.parse(launchStopOut) as { stopped: boolean; cleanedProfile: boolean }
+    expect(launchStopped.stopped).toBe(true)
+    expect(launchStopped.cleanedProfile).toBe(true)
+  }, 50_000)
 })

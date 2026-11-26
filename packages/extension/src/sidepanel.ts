@@ -1,5 +1,6 @@
 import {
   formatStepsAsCode,
+  type ApprovalMode,
   type CodegenFormat,
   type ExtensionLanguage,
   type ExtensionState,
@@ -8,8 +9,21 @@ import { MESSAGES, resolveLang } from './i18n.js'
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 let state: ExtensionState | null = null
-let activeTab: 'activity' | 'record' | 'errors' | 'network' = 'activity'
+let activeTab: 'activity' | 'record' | 'security' | 'errors' | 'network' = 'activity'
 let codeFormat: CodegenFormat = 'playwright'
+
+function downloadFlowJson(name: string, steps: Array<Record<string, unknown>>): void {
+  const payload = JSON.stringify({ name, steps }, null, 2) + '\n'
+  const blob = new Blob([payload], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `browserpilot-flow-${Date.now()}.json`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
 
 function fmtTime(ts: number): string {
   return new Date(ts).toTimeString().slice(0, 8)
@@ -42,6 +56,7 @@ function renderRecordPanel(next: ExtensionState): void {
   assertBtn.classList.toggle('active-pill', Boolean(cg.assertMode))
 
   $('rec-clear').textContent = t.recordClear
+  $('rec-export').textContent = t.exportFlow
   $('rec-code-heading').textContent = t.recordCodeHeading
   $('rec-steps-heading').textContent = `${t.recordHeading} (${cg.steps.length})`
   $('rec-copy').textContent = t.recordCopy
@@ -91,6 +106,76 @@ function renderRecordPanel(next: ExtensionState): void {
   })
 }
 
+function renderDomainChips(
+  containerId: string,
+  domains: string[],
+  kind: 'blocked' | 'allowed',
+  emptyText: string,
+): void {
+  const box = $(containerId)
+  box.innerHTML = ''
+  if (!domains.length) {
+    box.innerHTML = `<span class="muted">${escapeHtml(emptyText)}</span>`
+    return
+  }
+  for (const domain of domains) {
+    const chip = document.createElement('span')
+    chip.className = `chip ${kind}`
+    chip.innerHTML = `${escapeHtml(domain)}<button data-remove="${escapeHtml(domain)}" title="Remove">×</button>`
+    box.appendChild(chip)
+  }
+  box.querySelectorAll<HTMLButtonElement>('button[data-remove]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!state) return
+      const target = btn.dataset.remove
+      const current = state.config.domainRules
+      const nextRules =
+        kind === 'blocked'
+          ? { ...current, blockedDomains: current.blockedDomains.filter((d) => d !== target) }
+          : { ...current, allowedDomains: current.allowedDomains.filter((d) => d !== target) }
+      void safeSendMessage({ type: 'browserpilot:update-config', patch: { domainRules: nextRules } }).then(() =>
+        refresh(),
+      )
+    })
+  })
+}
+
+function renderSecurityPanel(next: ExtensionState): void {
+  const lang = resolveLang(next.config.language)
+  const t = MESSAGES[lang]
+  const mode: ApprovalMode = next.config.approvalMode ?? 'off'
+
+  $('sec-approval-heading').textContent = t.securityApprovalHeading
+  $('appr-off').textContent = t.approvalOff
+  $('appr-high').textContent = t.approvalHighRisk
+  $('appr-strict').textContent = t.approvalStrict
+  $('appr-off').classList.toggle('active-pill', mode === 'off')
+  $('appr-high').classList.toggle('active-pill', mode === 'high-risk')
+  $('appr-strict').classList.toggle('active-pill', mode === 'strict')
+  $('sec-approval-desc').textContent =
+    mode === 'strict' ? t.approvalDescStrict : mode === 'high-risk' ? t.approvalDescHighRisk : t.approvalDescOff
+
+  $('sec-profile-heading').textContent = t.profileLabelHeading
+  const profInput = $<HTMLInputElement>('sec-profile-input')
+  profInput.placeholder = t.profileLabelPlaceholder
+  if (document.activeElement !== profInput) {
+    profInput.value = next.config.profileLabel ?? ''
+  }
+  $('sec-profile-save').textContent = t.save
+
+  $('sec-blocked-heading').textContent = t.blockedHeading
+  $('sec-allowed-heading').textContent = t.allowedHeading
+  $<HTMLInputElement>('sec-blocked-input').placeholder = t.domainInputPlaceholder
+  $<HTMLInputElement>('sec-allowed-input').placeholder = t.domainInputPlaceholder
+  $('sec-blocked-add').textContent = t.addDomain
+  $('sec-allowed-add').textContent = t.addDomain
+  $('sec-block-current').textContent = t.blockCurrentSite
+  $('sec-allowed-hint').textContent = t.allowedDomainsHint
+
+  renderDomainChips('sec-blocked-chips', next.config.domainRules.blockedDomains, 'blocked', t.noDomainsConfigured)
+  renderDomainChips('sec-allowed-chips', next.config.domainRules.allowedDomains, 'allowed', t.noDomainsConfigured)
+}
+
 function render(next: ExtensionState): void {
   state = next
   const lang = resolveLang(next.config.language)
@@ -110,9 +195,17 @@ function render(next: ExtensionState): void {
   $('sp-detach-all').textContent = t.detachAll
   $('tab-activity').textContent = t.tabActivity
   $('tab-record').textContent = next.codegen?.active ? `● ${t.tabRecord}` : t.tabRecord
+  $('tab-security').textContent =
+    (next.config.approvalMode && next.config.approvalMode !== 'off') ||
+    next.config.domainRules.blockedDomains.length > 0 ||
+    next.config.domainRules.allowedDomains.length > 0
+      ? `● ${t.tabSecurity}`
+      : t.tabSecurity
   $('lbl-tab-errors').textContent = t.tabErrors
   $('lbl-tab-network').textContent = t.tabNetwork
   $('tabs-heading').textContent = t.activeTabsHeading
+  $('act-export').textContent = t.exportFlow
+  $('act-clear').textContent = t.clearActivity
 
   const statusEl = $('sp-status')
   if (next.config.paused) {
@@ -136,16 +229,24 @@ function render(next: ExtensionState): void {
 
   $('tab-activity').classList.toggle('active', activeTab === 'activity')
   $('tab-record').classList.toggle('active', activeTab === 'record')
+  $('tab-security').classList.toggle('active', activeTab === 'security')
   $('tab-errors').classList.toggle('active', activeTab === 'errors')
   $('tab-network').classList.toggle('active', activeTab === 'network')
 
   const isRecordTab = activeTab === 'record'
-  $('tabs-section').style.display = isRecordTab ? 'none' : ''
-  $('feed-section').style.display = isRecordTab ? 'none' : ''
+  const isSecurityTab = activeTab === 'security'
+  $('tabs-section').style.display = isRecordTab || isSecurityTab ? 'none' : ''
+  $('feed-section').style.display = isRecordTab || isSecurityTab ? 'none' : ''
   $('record-section').style.display = isRecordTab ? '' : 'none'
+  $('security-section').style.display = isSecurityTab ? '' : 'none'
+  $('activity-actions').style.display = activeTab === 'activity' ? 'flex' : 'none'
 
   if (isRecordTab) {
     renderRecordPanel(next)
+    return
+  }
+  if (isSecurityTab) {
+    renderSecurityPanel(next)
     return
   }
 
@@ -229,6 +330,10 @@ $('tab-record').addEventListener('click', () => {
   activeTab = 'record'
   if (state) render(state)
 })
+$('tab-security').addEventListener('click', () => {
+  activeTab = 'security'
+  if (state) render(state)
+})
 $('tab-errors').addEventListener('click', () => {
   activeTab = 'errors'
   if (state) render(state)
@@ -276,6 +381,102 @@ $('rec-copy').addEventListener('click', () => {
   setTimeout(() => {
     if (state) $('rec-copy').textContent = MESSAGES[resolveLang(state.config.language)].recordCopy
   }, 1100)
+})
+
+$('rec-export').addEventListener('click', () => {
+  const steps = state?.codegen?.steps ?? []
+  const lang = resolveLang(state?.config.language)
+  if (!steps.length) {
+    $('rec-export').textContent = MESSAGES[lang].noExportableSteps
+    setTimeout(() => {
+      if (state) $('rec-export').textContent = MESSAGES[resolveLang(state.config.language)].exportFlow
+    }, 1200)
+    return
+  }
+  const replaySteps = steps.map((s) => ({
+    action: s.action,
+    ...(s.action === 'navigate' ? { url: s.url } : {}),
+    ...(s.target ? { target: s.target } : {}),
+    ...(s.value !== undefined ? { value: s.value } : {}),
+    ...(s.key ? { key: s.key } : {}),
+  }))
+  downloadFlowJson('BrowserPilot Recorded Workflow', replaySteps)
+  $('rec-export').textContent = MESSAGES[lang].exported
+  setTimeout(() => {
+    if (state) $('rec-export').textContent = MESSAGES[resolveLang(state.config.language)].exportFlow
+  }, 1200)
+})
+
+$('act-clear').addEventListener('click', () => {
+  void safeSendMessage({ type: 'browserpilot:clear-activity' }).then(() => refresh())
+})
+
+$('act-export').addEventListener('click', () => {
+  const lang = resolveLang(state?.config.language)
+  const steps = (state?.recentActivity ?? [])
+    .filter((entry) => entry.status === 'ok' && entry.step && typeof entry.step === 'object')
+    .map((entry) => entry.step as Record<string, unknown>)
+  if (!steps.length) {
+    $('act-export').textContent = MESSAGES[lang].noExportableSteps
+    setTimeout(() => {
+      if (state) $('act-export').textContent = MESSAGES[resolveLang(state.config.language)].exportFlow
+    }, 1200)
+    return
+  }
+  downloadFlowJson('BrowserPilot AI Session Flow', steps)
+  $('act-export').textContent = MESSAGES[lang].exported
+  setTimeout(() => {
+    if (state) $('act-export').textContent = MESSAGES[resolveLang(state.config.language)].exportFlow
+  }, 1200)
+})
+
+function setApprovalMode(mode: ApprovalMode): void {
+  void safeSendMessage({ type: 'browserpilot:update-config', patch: { approvalMode: mode } }).then(() => refresh())
+}
+$('appr-off').addEventListener('click', () => setApprovalMode('off'))
+$('appr-high').addEventListener('click', () => setApprovalMode('high-risk'))
+$('appr-strict').addEventListener('click', () => setApprovalMode('strict'))
+
+$('sec-profile-save').addEventListener('click', () => {
+  const val = $<HTMLInputElement>('sec-profile-input').value.trim()
+  const lang = resolveLang(state?.config.language)
+  void safeSendMessage({ type: 'browserpilot:update-config', patch: { profileLabel: val } }).then(() => {
+    $('sec-profile-save').textContent = MESSAGES[lang].saved
+    setTimeout(() => {
+      if (state) $('sec-profile-save').textContent = MESSAGES[resolveLang(state.config.language)].save
+    }, 1000)
+    void refresh()
+  })
+})
+
+function addDomainRule(kind: 'blocked' | 'allowed', rawInput: string): void {
+  if (!state) return
+  const normalized = rawInput.trim().toLowerCase().replace(/^https?:\/\//, '').split('/')[0]
+  if (!normalized) return
+  const rules = state.config.domainRules
+  const list = kind === 'blocked' ? rules.blockedDomains : rules.allowedDomains
+  if (list.includes(normalized)) return
+  const nextRules =
+    kind === 'blocked'
+      ? { ...rules, blockedDomains: [...rules.blockedDomains, normalized] }
+      : { ...rules, allowedDomains: [...rules.allowedDomains, normalized] }
+  void safeSendMessage({ type: 'browserpilot:update-config', patch: { domainRules: nextRules } }).then(() => refresh())
+}
+
+$('sec-blocked-add').addEventListener('click', () => {
+  const inp = $<HTMLInputElement>('sec-blocked-input')
+  addDomainRule('blocked', inp.value)
+  inp.value = ''
+})
+$('sec-allowed-add').addEventListener('click', () => {
+  const inp = $<HTMLInputElement>('sec-allowed-input')
+  addDomainRule('allowed', inp.value)
+  inp.value = ''
+})
+$('sec-block-current').addEventListener('click', () => {
+  void safeSendMessage<{ hostname?: string | null }>({ type: 'browserpilot:get-active-domain' }).then((res) => {
+    if (res?.hostname) addDomainRule('blocked', res.hostname)
+  })
 })
 
 $('sp-lang').addEventListener('click', () => {

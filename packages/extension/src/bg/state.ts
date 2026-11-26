@@ -23,6 +23,8 @@ export const CONTEXT_MENU_PIN_ID = 'browserpilot-pin-element'
 export const DEFAULT_CONFIG: ExtensionConfig = {
   theme: 'dark',
   language: 'zh',
+  profileLabel: '',
+  approvalMode: 'off',
   autoAttach: true,
   paused: false,
   showHighlights: true,
@@ -161,6 +163,7 @@ export function logActivity(
   detail?: string,
   tabId?: number,
   durationMs?: number,
+  step?: Record<string, unknown>,
 ): void {
   const entry: ActivityLogEntry = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -170,6 +173,7 @@ export function logActivity(
     detail,
     status,
     durationMs,
+    ...(step ? { step } : {}),
   }
   bgState.recentActivity.push(entry)
   if (bgState.recentActivity.length > MAX_ACTIVITY_BUFFER) {
@@ -222,10 +226,14 @@ export function loadConfig(): Promise<void> {
       const stored = await chrome.storage.local.get(STORAGE_CONFIG_KEY)
       const saved = stored[STORAGE_CONFIG_KEY] as Partial<ExtensionConfig> | undefined
       if (saved) {
+        const approvalMode =
+          saved.approvalMode === 'high-risk' || saved.approvalMode === 'strict' ? saved.approvalMode : 'off'
         bgState.config = {
           ...DEFAULT_CONFIG,
           ...saved,
           language: saved.language === 'en' ? 'en' : 'zh',
+          approvalMode,
+          profileLabel: typeof saved.profileLabel === 'string' ? saved.profileLabel : '',
           domainRules: {
             blockedDomains: saved.domainRules?.blockedDomains ?? [],
             allowedDomains: saved.domainRules?.allowedDomains ?? [],
@@ -291,12 +299,20 @@ export async function saveConfig(patch: Partial<ExtensionConfig>): Promise<Exten
       : bgState.config.domainRules,
   }
   next.language = next.language === 'en' ? 'en' : 'zh'
+  next.approvalMode =
+    next.approvalMode === 'high-risk' || next.approvalMode === 'strict' ? next.approvalMode : 'off'
+  next.profileLabel = typeof next.profileLabel === 'string' ? next.profileLabel.trim() : ''
   bgState.config = next
   await chrome.storage.local.set({ [STORAGE_CONFIG_KEY]: bgState.config })
   updateBadge()
   syncContextMenuLanguage()
   broadcastUiUpdate()
   broadcastBannerToAttachedTabs()
+  eventEmitter?.('config.updated', {
+    approvalMode: bgState.config.approvalMode,
+    profileLabel: bgState.config.profileLabel || undefined,
+    paused: bgState.config.paused,
+  })
 
   if (bgState.config.daemonUrl !== prevUrl || bgState.config.authToken !== prevToken) {
     reconnectTrigger?.()

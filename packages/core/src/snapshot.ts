@@ -105,7 +105,11 @@ const CONTAINER_LANDMARK_ROLES = new Set([
   'iframe',
 ])
 
-const SKIPPED_ROLES = new Set(['InlineTextBox', 'LineBreak', 'LayoutTable', 'LayoutTableRow', 'LayoutTableCell'])
+// Leaf-only text layout artifacts that never contain semantic descendants.
+// LayoutTable / LayoutTableRow / LayoutTableCell are intentionally NOT skipped here —
+// they flatten transparently via the non-meaningful wrapper branch so table-layout sites
+// (e.g. Hacker News, legacy enterprise ERPs, email portals) still expose all child controls.
+const SKIPPED_ROLES = new Set(['InlineTextBox', 'LineBreak'])
 
 const LEAF_LABELED_ROLES = new Set([
   'link',
@@ -148,12 +152,15 @@ export interface FormatAXTreeOptions {
   maxDepth?: number
   startingRefIndex?: number
   scopeBackendNodeId?: number
+  scopeBackendNodeIds?: Set<number>
+  visibleBackendNodeIds?: Set<number>
 }
 
 export interface FormattedAXTree {
   lines: string[]
   refs: Record<string, RefTarget>
   nextRefIndex: number
+  skippedOffscreen?: number
 }
 
 /**
@@ -164,12 +171,14 @@ export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = 
   const interactiveOnly = options.interactiveOnly === true
   const includeText = interactiveOnly ? false : (options.includeText ?? true)
   const maxDepth = options.maxDepth ?? 40
+  const visibleSet = options.visibleBackendNodeIds
   let refCounter = options.startingRefIndex ?? 1
+  let skippedOffscreen = 0
   const refs: Record<string, RefTarget> = {}
   const lines: string[] = []
 
   if (!nodes.length) {
-    return { lines, refs, nextRefIndex: refCounter }
+    return { lines, refs, nextRefIndex: refCounter, skippedOffscreen }
   }
 
   const nodeMap = new Map<string, RawAXNode>()
@@ -177,17 +186,32 @@ export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = 
     nodeMap.set(n.nodeId, n)
   }
 
-  let rootNode: RawAXNode | undefined = nodes[0]
+  let startNodes: RawAXNode[] = [nodes[0]]
   if (options.scopeBackendNodeId !== undefined) {
-    rootNode = nodes.find((n) => n.backendDOMNodeId === options.scopeBackendNodeId)
-    if (!rootNode) {
-      return { lines, refs, nextRefIndex: refCounter }
+    const direct = nodes.find((n) => n.backendDOMNodeId === options.scopeBackendNodeId)
+    if (direct) {
+      startNodes = [direct]
+    } else if (options.scopeBackendNodeIds && options.scopeBackendNodeIds.size > 0) {
+      startNodes = nodes.filter(
+        (n) => n.backendDOMNodeId !== undefined && options.scopeBackendNodeIds!.has(n.backendDOMNodeId),
+      )
+      if (!startNodes.length) {
+        return { lines, refs, nextRefIndex: refCounter, skippedOffscreen }
+      }
+    } else {
+      return { lines, refs, nextRefIndex: refCounter, skippedOffscreen }
     }
   }
 
   const visited = new Set<string>()
 
-  function renderNode(node: RawAXNode, depth: number, parentName: string, parentLeafText: string): void {
+  function renderNode(
+    node: RawAXNode,
+    depth: number,
+    parentName: string,
+    parentLeafText: string,
+    ancestorVisible: boolean,
+  ): void {
     if (depth > maxDepth || visited.has(node.nodeId)) return
     visited.add(node.nodeId)
 
@@ -198,8 +222,14 @@ export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = 
       .map((id) => nodeMap.get(id))
       .filter((c): c is RawAXNode => Boolean(c))
 
+    const selfVisible = !visibleSet
+      ? true
+      : node.backendDOMNodeId !== undefined
+        ? visibleSet.has(node.backendDOMNodeId)
+        : ancestorVisible
+
     if (node.ignored) {
-      for (const child of children) renderNode(child, depth, parentName, parentLeafText)
+      for (const child of children) renderNode(child, depth, parentName, parentLeafText, selfVisible)
       return
     }
 
@@ -210,7 +240,7 @@ export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = 
 
     // Root container: recurse transparently
     if (role === 'RootWebArea' || role === 'WebArea') {
-      for (const child of children) renderNode(child, depth, name, '')
+      for (const child of children) renderNode(child, depth, name, '', false)
       return
     }
 
@@ -218,6 +248,10 @@ export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = 
     if (role === 'StaticText') {
       if (!includeText || !name || name === parentName) return
       if (parentLeafText && parentLeafText.includes(fullRawName)) return
+      if (visibleSet && !selfVisible && !ancestorVisible) {
+        skippedOffscreen++
+        return
+      }
       lines.push(`${'  '.repeat(depth)}- text: "${name}"`)
       return
     }
@@ -227,7 +261,14 @@ export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = 
       ? isInteractive || CONTAINER_LANDMARK_ROLES.has(role)
       : isInteractive || LANDMARK_AND_STRUCTURE_ROLES.has(role)
     if (!isMeaningful) {
-      for (const child of children) renderNode(child, depth, parentName, parentLeafText)
+      for (const child of children) renderNode(child, depth, parentName, parentLeafText, selfVisible)
+      return
+    }
+
+    // In viewportOnly mode, leaf interactive/content nodes outside viewport are skipped (unless they have visible descendants)
+    const isLeafLike = isInteractive || LEAF_LABELED_ROLES.has(role) || role === 'img' || role === 'cell' || role === 'row'
+    if (visibleSet && isLeafLike && !selfVisible && children.length === 0) {
+      skippedOffscreen++
       return
     }
 
@@ -236,9 +277,11 @@ export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = 
     const refsStartIndex = refCounter
     const indent = '  '.repeat(depth)
 
+    let assignedRef: string | null = null
     let refPrefix = ''
-    if (isInteractive && node.backendDOMNodeId) {
+    if (isInteractive && node.backendDOMNodeId && (!visibleSet || selfVisible)) {
       const ref = `e${refCounter++}`
+      assignedRef = ref
       refs[ref] = {
         ref,
         backendDOMNodeId: node.backendDOMNodeId,
@@ -284,7 +327,18 @@ export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = 
     // Recurse children (suppress duplicate/split StaticText fragments already covered by leaf-labeled ancestor)
     const nextLeafText = fullRawName && LEAF_LABELED_ROLES.has(role) ? fullRawName : parentLeafText
     for (const child of children) {
-      renderNode(child, depth + 1, name || parentName, nextLeafText)
+      renderNode(child, depth + 1, name || parentName, nextLeafText, selfVisible)
+    }
+
+    // In viewportOnly mode, drop offscreen nodes that ended up with no rendered visible descendants
+    if (visibleSet && !selfVisible && lines.length === lineStartIndex + 1) {
+      lines.pop()
+      if (assignedRef) {
+        delete refs[assignedRef]
+        refCounter = refsStartIndex
+      }
+      skippedOffscreen++
+      return
     }
 
     // In interactiveOnly mode, drop any container landmark that enclosed zero interactive elements
@@ -299,8 +353,10 @@ export function formatAXTree(nodes: RawAXNode[], options: FormatAXTreeOptions = 
     }
   }
 
-  renderNode(rootNode, 0, '', '')
-  return { lines, refs, nextRefIndex: refCounter }
+  for (const start of startNodes) {
+    renderNode(start, 0, '', '', false)
+  }
+  return { lines, refs, nextRefIndex: refCounter, skippedOffscreen }
 }
 
 export function filterSnapshotLines(fullText: string, search: string | RegExp, maxMatches = 40): string {
@@ -375,6 +431,81 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+export function applyCharBudget(
+  headerLine: string,
+  lines: string[],
+  maxChars: number,
+): { text: string; truncated: boolean; omittedLines: number } {
+  const fullBody = lines.join('\n')
+  const fullText = `${headerLine}\n\n${fullBody}`
+  if (!maxChars || maxChars <= 0 || fullText.length <= maxChars) {
+    return { text: fullText, truncated: false, omittedLines: 0 }
+  }
+
+  const reserveFooter = 180
+  const budget = Math.max(200, maxChars - headerLine.length - reserveFooter)
+  const kept: string[] = []
+  let used = 0
+  for (const line of lines) {
+    const cost = line.length + 1
+    if (used + cost > budget && kept.length > 0) break
+    kept.push(line)
+    used += cost
+  }
+  const omitted = Math.max(0, lines.length - kept.length)
+  if (omitted === 0) {
+    return { text: fullText, truncated: false, omittedLines: 0 }
+  }
+  const footer = `\n... [Truncated: showing ${kept.length}/${lines.length} lines (${used}/${fullBody.length} chars, ${omitted} omitted). Narrow with viewportOnly: true, interactiveOnly: true, scope: "#selector", or search: "keyword"]`
+  return {
+    text: `${headerLine}\n\n${kept.join('\n')}${footer}`,
+    truncated: true,
+    omittedLines: omitted,
+  }
+}
+
+async function collectViewportVisibleBackendIds(
+  session: TabCDPSession,
+  viewport: { vw: number; vh: number; scrollX: number; scrollY: number },
+  marginPx = 120,
+): Promise<Set<number> | undefined> {
+  try {
+    const snap = await session.send<{
+      documents?: Array<{
+        nodes?: { backendNodeId?: number[] }
+        layout?: { nodeIndex?: number[]; bounds?: number[][] }
+      }>
+    }>('DOMSnapshot.captureSnapshot', { computedStyles: [] })
+    const doc = snap.documents?.[0]
+    const backendIds = doc?.nodes?.backendNodeId
+    const nodeIndices = doc?.layout?.nodeIndex
+    const bounds = doc?.layout?.bounds
+    if (!backendIds || !nodeIndices || !bounds) return undefined
+
+    const minX = viewport.scrollX - marginPx
+    const maxX = viewport.scrollX + viewport.vw + marginPx
+    const minY = viewport.scrollY - marginPx
+    const maxY = viewport.scrollY + viewport.vh + marginPx
+    const visible = new Set<number>()
+
+    for (let i = 0; i < nodeIndices.length; i++) {
+      const idx = nodeIndices[i]
+      const rect = bounds[i]
+      if (!rect || rect.length < 4) continue
+      const [x, y, w, h] = rect
+      if (w <= 0 || h <= 0) continue
+      const bid = backendIds[idx]
+      if (!bid) continue
+      if (x + w >= minX && x <= maxX && y + h >= minY && y <= maxY) {
+        visible.add(bid)
+      }
+    }
+    return visible.size > 0 ? visible : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * Per-tab stateful Accessibility Snapshot engine with ref registry and diff history.
  */
@@ -393,6 +524,7 @@ export class SnapshotEngine {
           title: string
           vw: number
           vh: number
+          scrollX: number
           scrollY: number
           scrollHeight: number
         }
@@ -403,6 +535,7 @@ export class SnapshotEngine {
         title: document.title,
         vw: window.innerWidth,
         vh: window.innerHeight,
+        scrollX: Math.round(window.scrollX || document.documentElement.scrollLeft || 0),
         scrollY: Math.round(window.scrollY || document.documentElement.scrollTop || 0),
         scrollHeight: Math.round(document.documentElement.scrollHeight || document.body?.scrollHeight || 0),
       })`,
@@ -479,7 +612,7 @@ export class SnapshotEngine {
       }
     }
 
-    // Resolve optional scope element
+    // Resolve optional scope element (ref, standard CSS selector, or deep Shadow-DOM CSS selector)
     let scopeBackendNodeId: number | undefined
     if (options.scope) {
       const existingRef = this.getRef(session.tabId, options.scope)
@@ -487,27 +620,107 @@ export class SnapshotEngine {
         scopeBackendNodeId = existingRef.backendDOMNodeId
       } else {
         const doc = await session.send<{ root: { nodeId: number } }>('DOM.getDocument', { depth: 0 })
-        const found = await session.send<{ nodeId: number }>('DOM.querySelector', {
-          nodeId: doc.root.nodeId,
-          selector: options.scope,
-        })
-        if (!found.nodeId) {
-          throw new Error(`Snapshot scope selector not found: ${options.scope}`)
+        const found = await session
+          .send<{ nodeId: number }>('DOM.querySelector', {
+            nodeId: doc.root.nodeId,
+            selector: options.scope,
+          })
+          .catch(() => ({ nodeId: 0 }))
+        if (found.nodeId) {
+          const desc = await session.send<{ node: { backendNodeId: number } }>('DOM.describeNode', {
+            nodeId: found.nodeId,
+          })
+          scopeBackendNodeId = desc.node.backendNodeId
+        } else {
+          // Deep Shadow DOM / role fallback
+          const evalFound = await session
+            .send<{ result?: { objectId?: string } }>('Runtime.evaluate', {
+              expression: `(() => {
+                const raw = ${JSON.stringify(options.scope)};
+                const roleMatch = /^role=([a-z0-9_-]+)$/i.exec(raw.trim());
+                const queue = [document];
+                while (queue.length) {
+                  const root = queue.shift();
+                  if (roleMatch) {
+                    const hit = root.querySelector('[role="' + roleMatch[1] + '"], ' + roleMatch[1]);
+                    if (hit) return hit;
+                  } else {
+                    try {
+                      const hit = root.querySelector(raw);
+                      if (hit) return hit;
+                    } catch {}
+                  }
+                  for (const el of root.querySelectorAll('*')) {
+                    if (el.shadowRoot) queue.push(el.shadowRoot);
+                  }
+                }
+                return null;
+              })()`,
+            })
+            .catch(() => null)
+          if (evalFound?.result?.objectId) {
+            const desc = await session.send<{ node: { backendNodeId: number } }>('DOM.describeNode', {
+              objectId: evalFound.result.objectId,
+            })
+            scopeBackendNodeId = desc.node.backendNodeId
+          } else {
+            throw new Error(`Snapshot scope selector not found: ${options.scope}`)
+          }
         }
-        const desc = await session.send<{ node: { backendNodeId: number } }>('DOM.describeNode', {
-          nodeId: found.nodeId,
-        })
-        scopeBackendNodeId = desc.node.backendNodeId
       }
     }
 
+    const visibleBackendNodeIds =
+      options.viewportOnly && m?.vw && m?.vh
+        ? await collectViewportVisibleBackendIds(session, {
+            vw: m.vw,
+            vh: m.vh,
+            scrollX: m.scrollX ?? 0,
+            scrollY: m.scrollY ?? 0,
+          })
+        : undefined
+
     // Main frame AXTree
     const mainRes = await session.send<{ nodes: RawAXNode[] }>('Accessibility.getFullAXTree')
-    const mainFormatted = formatAXTree(mainRes.nodes ?? [], {
+    const mainNodes = mainRes.nodes ?? []
+
+    // If scope targets a Web Component / Shadow host or generic wrapper omitted from AXTree,
+    // pierce into its shadowRoots & DOM children to collect matching descendant AX backendNodeIds.
+    let scopeBackendNodeIds: Set<number> | undefined
+    if (scopeBackendNodeId !== undefined && !mainNodes.some((n) => n.backendDOMNodeId === scopeBackendNodeId)) {
+      type DomDescNode = { backendNodeId?: number; children?: DomDescNode[]; shadowRoots?: DomDescNode[] }
+      const desc = await session
+        .send<{ node?: DomDescNode }>('DOM.describeNode', {
+          backendNodeId: scopeBackendNodeId,
+          depth: 4,
+          pierce: true,
+        })
+        .catch(() => null)
+      if (desc?.node) {
+        const axBackendIds = new Set(
+          mainNodes.map((n) => n.backendDOMNodeId).filter((id): id is number => id !== undefined),
+        )
+        const matched = new Set<number>()
+        const walkDom = (node: DomDescNode): void => {
+          if (node.backendNodeId && node.backendNodeId !== scopeBackendNodeId && axBackendIds.has(node.backendNodeId)) {
+            matched.add(node.backendNodeId)
+            return
+          }
+          for (const sr of node.shadowRoots ?? []) walkDom(sr)
+          for (const ch of node.children ?? []) walkDom(ch)
+        }
+        walkDom(desc.node)
+        if (matched.size > 0) scopeBackendNodeIds = matched
+      }
+    }
+
+    const mainFormatted = formatAXTree(mainNodes, {
       includeText: options.includeText,
       interactiveOnly: options.interactiveOnly,
       maxDepth: options.maxDepth,
       scopeBackendNodeId,
+      scopeBackendNodeIds,
+      visibleBackendNodeIds,
       startingRefIndex: 1,
     })
 
@@ -548,20 +761,28 @@ export class SnapshotEngine {
 
     this.refMaps.set(session.tabId, allRefs)
 
-    const modeLabel = options.interactiveOnly ? ' | Mode: interactive' : ''
+    const modeFlags: string[] = []
+    if (options.interactiveOnly) modeFlags.push('interactive')
+    if (options.viewportOnly) modeFlags.push('viewport')
+    if (options.scope) modeFlags.push(`scope=${cleanText(options.scope, 40)}`)
+    const modeLabel = modeFlags.length ? ` | Mode: ${modeFlags.join(',')}` : ''
     const headerLine = `URL: ${url}${title ? ` | Title: ${title}` : ''}${scrollInfo}${modeLabel}`
-    const emptyMsg = options.interactiveOnly ? '(no interactive elements)' : '(empty accessibility tree)'
-    const fullText = `${headerLine}\n\n${allLines.join('\n') || emptyMsg}`
+    const emptyMsg = options.viewportOnly
+      ? '(no visible elements in current viewport — try scrolling or disabling viewportOnly)'
+      : options.interactiveOnly
+        ? '(no interactive elements)'
+        : '(empty accessibility tree)'
 
-    const snapshotCacheKey = `${session.tabId}:${options.interactiveOnly ? 'interactive' : 'full'}`
+    const rawFullText = `${headerLine}\n\n${allLines.join('\n') || emptyMsg}`
+    const snapshotCacheKey = `${session.tabId}:${options.interactiveOnly ? 'interactive' : 'full'}${options.viewportOnly ? ':vp' : ''}`
     const prevFull = this.lastFullSnapshot.get(snapshotCacheKey)
     if (!options.scope) {
-      this.lastFullSnapshot.set(snapshotCacheKey, fullText)
+      this.lastFullSnapshot.set(snapshotCacheKey, rawFullText)
     }
 
     if (options.search !== undefined) {
       const wantDiff = options.showDiffSinceLastCall === true && prevFull !== undefined
-      const source = wantDiff ? computeDiffIfShorter(prevFull, fullText, headerLine).text : fullText
+      const source = wantDiff ? computeDiffIfShorter(prevFull, rawFullText, headerLine).text : rawFullText
       return {
         url,
         title,
@@ -569,29 +790,45 @@ export class SnapshotEngine {
         isDiff: wantDiff,
         totalRefs: Object.keys(allRefs).length,
         refs: allRefs,
+        truncated: false,
+        omittedLines: 0,
       }
     }
 
     const showDiff = options.showDiffSinceLastCall ?? !options.scope
     if (showDiff && prevFull !== undefined) {
-      const diffed = computeDiffIfShorter(prevFull, fullText, headerLine)
+      const diffed = computeDiffIfShorter(prevFull, rawFullText, headerLine)
+      const diffLines = diffed.text.split('\n').slice(2)
+      const budgetedDiff =
+        options.maxChars && options.maxChars > 0 && diffed.text.length > options.maxChars
+          ? applyCharBudget(headerLine, diffLines, options.maxChars)
+          : { text: diffed.text, truncated: false, omittedLines: 0 }
       return {
         url,
         title,
-        text: diffed.text,
+        text: budgetedDiff.text,
         isDiff: diffed.isDiff,
         totalRefs: Object.keys(allRefs).length,
         refs: allRefs,
+        truncated: budgetedDiff.truncated,
+        omittedLines: budgetedDiff.omittedLines,
       }
     }
+
+    const budgeted =
+      options.maxChars && options.maxChars > 0 && allLines.length > 0
+        ? applyCharBudget(headerLine, allLines, options.maxChars)
+        : { text: rawFullText, truncated: false, omittedLines: 0 }
 
     return {
       url,
       title,
-      text: fullText,
+      text: budgeted.text,
       isDiff: false,
       totalRefs: Object.keys(allRefs).length,
       refs: allRefs,
+      truncated: budgeted.truncated,
+      omittedLines: budgeted.omittedLines,
     }
   }
 
@@ -607,6 +844,8 @@ export class SnapshotEngine {
   clearTab(tabId: number): void {
     this.lastFullSnapshot.delete(`${tabId}:full`)
     this.lastFullSnapshot.delete(`${tabId}:interactive`)
+    this.lastFullSnapshot.delete(`${tabId}:full:vp`)
+    this.lastFullSnapshot.delete(`${tabId}:interactive:vp`)
     this.refMaps.delete(tabId)
   }
 }

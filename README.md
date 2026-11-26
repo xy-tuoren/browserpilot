@@ -27,14 +27,15 @@
 | Built-in Security Guardrails (High-Risk Action Approval, Secret Redaction, Untrusted Content Boundary) | No | No | Partial | **Yes** |
 | Direct CDP Mode (`--remote-debugging-port` for CI/Headless) & Windows/macOS/Linux CI | Yes | Yes | No | **Yes** |
 
-### Measured Context & Package Efficiency
+### Measured Context & Package Efficiency (Reproducible via `node scripts/agent-eval.mjs`)
 
 | Metric | Baseline | BrowserPilot Optimized | Delta |
 | :--- | :---: | :---: | :---: |
-| MCP upfront tool schema payload (`tools/list`) | 53 tools (`--full`): `30.8 KB` (~7,711 tokens) | 19-tool `core` default (+ `browser_exec`): `12.2 KB` (~3,038 tokens) | **-60.6% tokens** |
-| Dense page AXTree perception | Full AXTree snapshot | `snapshot -i` (`interactiveOnly: true`) + incremental diff | **~65–75% fewer tokens** |
-| Post-action page observation round-trips | `click` + separate `snapshot` (2 LLM turns) | `click --diff` / `returnDiff: true` (1 LLM turn) | **-50% turns** |
-| Published npm tarball (`browserpilot-cdp`) | `3.2 MB` unpacked | `~840 KB` unpacked (ESM code-split + full `.d.ts` SDK) | **-74% size** |
+| MCP upfront tool schema payload (`tools/list`) | 53 tools (`--full`): `30.1 KB` (~7,711 tokens) | 19-tool `core` default (+ `browser_exec`): `11.9 KB` (~3,038 tokens) | **-60.6% tokens** |
+| 11,000-node enterprise admin table snapshot | Full AXTree: `20,517` tokens | `snapshot -i --viewport`: `257` tokens (`scope`: `53` tokens) | **-98.7% tokens** |
+| Real public pages (`GitHub` / `Wikipedia` / `MDN`) | Full AXTree: `10.8k` / `22.4k` / `6.0k` tokens | `snapshot -i --viewport`: `1.4k` / `1.7k` / `1.3k` tokens | **-78% to -92% tokens** |
+| Post-action page observation round-trips | `click` + separate `snapshot` (2 LLM turns) | `click --diff` / `returnDiff: true` (1 LLM turn, captures status + UI diff) | **-50% turns** |
+| Published npm tarball (`browserpilot-cdp`) | `3.2 MB` unpacked | `~930 KB` unpacked (ESM code-split + full `.d.ts` SDK) | **-71% size** |
 
 ---
 
@@ -160,7 +161,8 @@ browserpilot clients                                 # List connected browsers/p
 browserpilot daemon use edge                         # Pin default target browser/profile
 browserpilot tabs --browser chrome                   # List open tabs in a specific browser
 browserpilot open https://example.com                # Open & zero-click attach a tab
-browserpilot snapshot -i                             # Compact interactive-only AXTree (~70% fewer tokens)
+browserpilot snapshot -i --viewport                  # Interactive + viewport-only AXTree (-87% to -98.7% tokens)
+browserpilot snapshot --scope "#modal" --max-chars 8000 # Shadow-piercing scoped + char-budgeted snapshot
 browserpilot click e3 --diff                         # Trusted click + inline post-action page diff
 browserpilot fill e4 "hello world" --diff            # Rich-text & SPA-safe input + inline diff
 browserpilot scroll down --until 'text="Load More"'  # Virtual-scroll finder
@@ -175,7 +177,9 @@ browserpilot styles "#submit-btn"                    # DevTools Styles cascade (
 browserpilot react "#submit-btn"                     # React Fiber component + _debugSource
 browserpilot perf metrics                            # Core Web Vitals + CDP metrics
 browserpilot codegen https://example.com --format batch -o flow.json  # Live workflow recorder
-browserpilot run flow.json --trace replay.html --open                 # Replay recorded flow + visual Trace
+browserpilot run flow.json --trace replay.html --open                 # Replay in logged-in Chrome + visual Trace
+browserpilot run flow.json --headless --trace ci-replay.html          # Zero-daemon headless CI replay + Trace
+browserpilot launch --headless && browserpilot launch status && browserpilot launch stop  # Managed isolated Chrome
 browserpilot trace open replay.html                                   # Open single-file HTML Trace Viewer
 ```
 
@@ -198,7 +202,8 @@ Default `browserpilot mcp` advertises the **19-tool `core` profile** (`--caps` u
 
 ## Safety & Built-in Guardrails
 
-1. **Action-Level Risk Approval (`BROWSERPILOT_APPROVAL_MODE=high-risk|strict`)**: Automatically detects destructive/financial actions (e.g. `立即支付`, `删除账号`, `Pay Now`, `Delete Account`, checkout/banking domains) and displays an in-page confirmation card (`允许本次` / `拒绝`) before proceeding.
+1. **Action-Level Risk Approval & Side Panel Security Controls**: Configure `Off` / `High-Risk` / `Strict` confirmation mode, Browser Profile Label, and visual Blocked/Allowed Domain chip lists (plus one-click **Block Current Site**) right inside the Chrome Side Panel **`Security`** tab — or via `BROWSERPILOT_APPROVAL_MODE=high-risk|strict`. High-risk financial/destructive actions display a bilingual closed-Shadow-DOM confirmation card (`允许本次` / `拒绝`) before proceeding.
+2. **Live AI Activity Timeline & One-Click `flow.json` Export**: Every MCP/CLI action streams cleanly into the Side Panel **`Activity`** tab with timing and one-click `Export flow.json` (both from live AI sessions and recorded Codegen flows) for instant replay via `browserpilot run`.
 2. **Automatic Secret Redaction**: `Authorization`, `Cookie`, `Set-Cookie`, `X-API-Key`, password fields, Bearer tokens, and secret query params are redacted by default in HTML Trace reports and `browser_network` detail responses (`includeSensitive: true` to inspect explicitly).
 3. **Prompt-Injection Untrusted Content Boundary**: Pass `--wrap-untrusted` (`wrapUntrusted: true` or `BROWSERPILOT_UNTRUSTED_BOUNDARY=1`) on `snapshot` / `markdown` / `html` to wrap external webpage data in `<untrusted_page_content>` boundary tags.
 4. **Optional Restricted `exec` Sandbox**: Set `--restricted-sandbox` (`BROWSERPILOT_SANDBOX_MODE=restricted`) to block `child_process`, `fs`, `net`, `http`, and arbitrary module imports inside `browser_exec` while keeping all pure-CDP browser APIs intact.

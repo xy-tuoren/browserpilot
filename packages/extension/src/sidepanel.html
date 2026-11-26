@@ -192,6 +192,77 @@
       word-break: break-word;
     }
     .muted { color: var(--muted); font-size: 12px; }
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .section-head h2 { margin: 0; }
+    .head-actions { display: flex; gap: 5px; align-items: center; }
+    .seg-group {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .seg-btn {
+      padding: 6px 8px;
+      font-size: 12px;
+      text-align: center;
+    }
+    .input-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    input[type="text"] {
+      flex: 1;
+      min-width: 0;
+      border: 1px solid var(--border-strong);
+      background: var(--bg);
+      color: var(--text-strong);
+      border-radius: 7px;
+      padding: 6px 9px;
+      font: 12px/1.3 inherit;
+      outline: none;
+    }
+    input[type="text"]:focus { border-color: var(--accent); }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font: 500 11.5px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: var(--pill-bg);
+      color: var(--text-strong);
+      border: 1px solid var(--border-strong);
+    }
+    .chip.blocked { border-color: rgba(248, 113, 113, 0.45); color: var(--err); }
+    .chip.allowed { border-color: rgba(52, 211, 153, 0.45); color: var(--ok); }
+    .chip button {
+      border: 0;
+      background: transparent;
+      color: inherit;
+      padding: 0 2px;
+      font-size: 13px;
+      line-height: 1;
+    }
+    .sec-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 10px 11px;
+      margin-bottom: 10px;
+    }
   </style>
 </head>
 <body>
@@ -213,6 +284,7 @@
   <div class="tabs">
     <button id="tab-activity" class="tab-btn active">动态</button>
     <button id="tab-record" class="tab-btn">录制</button>
+    <button id="tab-security" class="tab-btn">安全</button>
     <button id="tab-errors" class="tab-btn"><span id="lbl-tab-errors">报错</span> (<span id="err-count">0</span>)</button>
     <button id="tab-network" class="tab-btn"><span id="lbl-tab-network">失败请求</span> (<span id="net-count">0</span>)</button>
   </div>
@@ -224,7 +296,13 @@
     </section>
 
     <section id="feed-section">
-      <h2 id="feed-heading">AI 实时操作动态</h2>
+      <div class="section-head">
+        <h2 id="feed-heading">AI 实时操作动态</h2>
+        <div id="activity-actions" class="head-actions">
+          <button id="act-export" class="fmt-btn">导出 flow.json</button>
+          <button id="act-clear" class="fmt-btn">清空</button>
+        </div>
+      </div>
       <div id="sp-feed" class="muted">等待 AI 指令…</div>
     </section>
 
@@ -233,6 +311,7 @@
         <button id="rec-toggle" class="primary">开始录制</button>
         <button id="rec-assert">+ 断言</button>
         <button id="rec-clear">清空</button>
+        <button id="rec-export" style="margin-left:auto">导出 flow.json</button>
       </div>
       <h2 id="rec-code-heading">生成代码</h2>
       <div class="fmt-row">
@@ -245,6 +324,48 @@
       <pre id="rec-code" class="code-out"></pre>
       <h2 id="rec-steps-heading">已录制步骤</h2>
       <div id="rec-steps" class="muted"></div>
+    </section>
+
+    <section id="security-section" style="display:none">
+      <div class="sec-card">
+        <h2 id="sec-approval-heading">高危操作二次确认</h2>
+        <div class="seg-group">
+          <button id="appr-off" class="seg-btn">关闭</button>
+          <button id="appr-high" class="seg-btn">仅高危</button>
+          <button id="appr-strict" class="seg-btn">严格</button>
+        </div>
+        <div id="sec-approval-desc" class="muted"></div>
+      </div>
+
+      <div class="sec-card">
+        <h2 id="sec-profile-heading">浏览器资料标签（多浏览器路由用）</h2>
+        <div class="input-row" style="margin-bottom:0">
+          <input id="sec-profile-input" type="text" placeholder="例如：Work / Personal" />
+          <button id="sec-profile-save" class="primary">保存设置</button>
+        </div>
+      </div>
+
+      <div class="sec-card">
+        <div class="section-head">
+          <h2 id="sec-blocked-heading">禁止接管域名（黑名单）</h2>
+          <button id="sec-block-current" class="fmt-btn danger">禁止当前站点</button>
+        </div>
+        <div class="input-row">
+          <input id="sec-blocked-input" type="text" placeholder="例如 *.bank.com" />
+          <button id="sec-blocked-add">添加</button>
+        </div>
+        <div id="sec-blocked-chips" class="chips"></div>
+      </div>
+
+      <div class="sec-card">
+        <h2 id="sec-allowed-heading">仅允许域名（白名单）</h2>
+        <div class="input-row">
+          <input id="sec-allowed-input" type="text" placeholder="例如 app.company.com" />
+          <button id="sec-allowed-add">添加</button>
+        </div>
+        <div id="sec-allowed-chips" class="chips"></div>
+        <div id="sec-allowed-hint" class="muted"></div>
+      </div>
     </section>
   </main>
 

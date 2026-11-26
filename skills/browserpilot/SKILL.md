@@ -24,12 +24,13 @@ BrowserPilot controls the user's running Chrome browser (with existing logins, c
    Always pass `--tab <id>` (or `tabId` in MCP) when multiple tabs are open so you never act on the wrong tab.
 2. **Perceive the page before acting**:
    ```bash
-   browserpilot snapshot -i --tab <id>
+   browserpilot snapshot -i --viewport --tab <id>
    browserpilot snapshot --tab <id> --search "Sign in|Submit"
    browserpilot snapshot --tab <id> --scope "main" --full
    browserpilot labeled-screenshot ./som.png --tab <id>
    ```
-   - `snapshot -i` (`interactiveOnly: true`) returns **only interactive controls** (`[e1]`, `[e2]`...) and their enclosing landmarks (~70% fewer tokens — ideal for clicking buttons and filling forms on dense pages).
+   - `snapshot -i` (`interactiveOnly: true`) returns **only interactive controls** (`[e1]`, `[e2]`...) and their enclosing landmarks (~70% fewer tokens); add `--viewport` (`viewportOnly: true`) on massive 10k-DOM admin tables or long articles to cut snapshot tokens by **87%–98.7%**.
+   - `browser_snapshot` enforces a soft `maxChars` budget (`32000` by default; `0` disables) so huge pages never blow up context windows, and `scope` pierces open Shadow DOM Web Components automatically.
    - `snapshot` (without `-i`) includes headings and static text; repeated calls return concise diffs by default (pass `--full` / `showDiffSinceLastCall: false` to force full output).
    - Use `labeled-screenshot` (Set-of-Mark overlays) when spatial layout or icon-only buttons matter.
 3. **Interact & wait with trusted CDP input**:
@@ -50,13 +51,16 @@ BrowserPilot controls the user's running Chrome browser (with existing logins, c
    browserpilot perf metrics --tab <id>
    browserpilot codegen https://example.com --format playwright -o flow.spec.ts
    browserpilot run ./flow.json --trace ./replay-trace.html --open
+   browserpilot run ./flow.json --headless --trace ./ci-trace.html
+   browserpilot launch --headless && browserpilot launch status && browserpilot launch stop
    browserpilot trace start --title "Checkout Debug" --tab <id>
    browserpilot trace stop ./trace.html --open --tab <id>
    ```
    - `browser_network_intercept` / sandbox `route()` — mock, fulfill, modify, or abort API responses via CDP `Fetch`.
    - `browser_debugger` / `browser_live_edit` — breakpoints, call frames, live JS/CSS patching.
    - `browser_action_recorder` / `browserpilot codegen` — records clicks, checks, fills, Shadow DOM/iframes, and `Alt+Shift+Click` assertions into Playwright TS, BrowserPilot JS, `browser_batch` JSON, or Agent Skill Markdown.
-   - `browserpilot run <flow.json> --trace report.html` — replays recorded JSON / `browser_batch` workflows with assertions and optional HTML Trace generation.
+   - `browserpilot run <flow.json> [--headless] --trace report.html` — replays recorded JSON / `browser_batch` workflows on either your logged-in Chrome or an ephemeral headless Chrome for CI (`--headless`), with assertions and automatic HTML Trace generation.
+   - `browserpilot launch [--headless] | status | stop` — manages isolated Chrome instances with auto-allocated ports and automatic ephemeral profile cleanup.
    - `browser_trace` / `browserpilot trace` / `browserpilot exec --trace report.html` — self-contained interactive HTML Trace Viewer with automatic sensitive header/token redaction, Before/After screenshots, click reticle, DOM summary, Console logs, and Network response previews.
 
 ## 3. Stateful JS Sandbox (`browserpilot exec`)

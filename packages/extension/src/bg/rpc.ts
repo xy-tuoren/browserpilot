@@ -117,6 +117,18 @@ export async function executeBridgeMethod(method: string, params: Record<string,
       return await saveConfig(params as Partial<ExtensionConfig>)
     }
 
+    case 'extension.logActivity': {
+      const action = typeof params.action === 'string' && params.action ? params.action : 'tool'
+      const status = params.status === 'error' ? 'error' : params.status === 'info' ? 'info' : 'ok'
+      const detail = typeof params.detail === 'string' ? params.detail : undefined
+      const tabId = typeof params.tabId === 'number' ? params.tabId : undefined
+      const durationMs = typeof params.durationMs === 'number' ? params.durationMs : undefined
+      const step =
+        params.step && typeof params.step === 'object' ? (params.step as Record<string, unknown>) : undefined
+      logActivity(action, status, detail, tabId, durationMs, step)
+      return { ok: true }
+    }
+
     case 'extension.reload': {
       const attachedCount = bgState.attachedTabs.size
       if (attachedCount > 0 && !params.force) {

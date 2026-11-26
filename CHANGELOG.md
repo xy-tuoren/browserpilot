@@ -6,6 +6,25 @@ All notable changes to **BrowserPilot** (`browserpilot-cdp`) are documented in t
 
 ## [Unreleased]
 
+### Added
+- **Smart Large-Page Snapshot Budgeting (`viewportOnly`, `maxChars`, Shadow-Piercing `scope`) (`packages/core/src/snapshot.ts`, `tools/navigation.ts`, `cli/commands.ts`)**:
+  - Added single-call `DOMSnapshot.captureSnapshot` viewport filtering (`viewportOnly: true` / `--viewport`) cutting 11,000-node admin table snapshots by **98.7%** (`20,517 -> 257` tokens) and real public pages (GitHub / Wikipedia / MDN) by **78%–92%**.
+  - Added soft `maxChars` budgeting (default `32000` in MCP `browser_snapshot`, `0` disables) applied *after* incremental diffing so diffs remain compact even on gigantic pages, plus Shadow-DOM-piercing `scope` resolution via `DOM.describeNode({ pierce: true })`.
+- **Extension Side Panel Security Controls & Live AI Action Feed Export (`packages/extension/src/{sidepanel,background,bg,i18n}`, `packages/server/src/{tools,daemon}.ts`)**:
+  - Added a dedicated **`安全 / Security`** tab in the Companion Side Panel for 3-way approval mode switching (`关闭 / 仅高危 / 严格`), live `profileLabel` sync to Daemon, and interactive Blocked/Allowed domain chip lists (with one-click **Block Current Site**).
+  - Streamed high-level MCP/CLI tool actions with timing and replayable step metadata into Side Panel **`动态 / Activity`** via `extension.logActivity`, with one-click **`导出 flow.json`** in both Activity and Record tabs.
+- **Managed Chrome Launcher & Zero-Daemon Headless CI Replay (`packages/server/src/cli/launch.ts`, `cli/replay.ts`)**:
+  - Added `browserpilot launch [--headless] [--port N] [--profile <dir>|--ephemeral] | status | stop` (plus SDK `launchManagedBrowser` / `stopManagedBrowser` / `getManagedBrowserStatus`) with automatic free-port allocation and ephemeral temp-profile cleanup.
+  - Added `browserpilot run <flow.json> --headless [--trace report.html]` so the exact same recorded workflow runs zero-edit in both your logged-in Chrome and isolated headless CI with zero daemon dependency.
+- **Multi-Archetype Complex-Page E2E Suite & Reproducible MCP Agent Eval (`packages/core/test/complex-pages-{a,b}.test.ts`, `scripts/agent-eval.mjs`)**:
+  - Added 7 real-Chromium complex page archetypes (11k-DOM enterprise admin table + cascading selects + Portal combobox + stacked Modal/Drawer, collaborative `contenteditable` slash/`@mention`/CodeMirror editor, 3-level nested Shadow DOM Web Components + `<slot>`, 2-level nested cross-origin + OOPIF iframes, IntersectionObserver infinite scroll + Kanban HTML5 DnD + Pointer sortable list, interactive Canvas + SVG/`foreignObject` + Mobile H5 touch gestures, and strict CSP + History SPA + OAuth popup + 503 route recovery + prompt-injection boundary) plus runnable `node scripts/agent-eval.mjs`.
+
+### Fixed
+- **Table-Layout Websites Returning 0 Snapshot Refs (`packages/core/src/snapshot.ts`)**: Stopped hard-skipping `LayoutTable`, `LayoutTableRow`, and `LayoutTableCell` without recursing children, restoring full AXTree refs on table-layout sites such as Hacker News (`0 -> 223` refs) and legacy enterprise ERPs.
+- **Same-Site Cross-Origin + Nested OOPIF Locator & Coordinate Resolution (`packages/core/src/locator/evaluator.ts`, `cdp-client.ts`, `page/actionability.ts`)**: Fixed `matchChildSession()` not to fall back blindly to an unrelated OOPIF when `desc.src` does not match, added `session.resolveFrame()` `contextId` handoff for in-process same-site cross-origin iframes (e.g. `app.company.com -> billing.company.com`), enabled recursive `Target.setAutoAttach` inside child iframe sessions, and walked nested `parentSessionId` chains in `getIframeOffset()`.
+- **Post-Action `returnDiff: true` Missing Status Text Updates (`packages/server/src/tools/guardrails.ts`)**: Switched `appendPostActionDiff` from `interactiveOnly: true` to `viewportOnly: true, showDiffSinceLastCall: true, maxChars: 6000` so status labels, error toasts, and newly mounted controls all appear cleanly in single-turn diffs.
+- **CLI Boolean Flag Parsing (`packages/server/src/cli/args.ts`)**: Prevented strictly boolean CLI flags (such as `--headless`, `--viewport`, `--diff`) from consuming subsequent positional arguments (e.g. `browserpilot run --headless flow.json`).
+
 ## [0.3.0] - 2026-11-26
 
 ### Changed

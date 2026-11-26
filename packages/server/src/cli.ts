@@ -11,6 +11,7 @@ import {
   runSessionCommand,
   runTraceCommand,
 } from './cli/daemon-browser.js'
+import { runLaunchCommand } from './cli/launch.js'
 import { runReplayCommand } from './cli/replay.js'
 import { runDoctorCommand, runSetupCommand } from './cli/setup-doctor.js'
 import { startMcpServer } from './mcp.js'
@@ -67,8 +68,18 @@ async function main(): Promise<void> {
     return
   }
 
+  if (cmd === 'launch') {
+    await runLaunchCommand(positional[1], flags)
+    return
+  }
+
   if (cmd === 'browser' && positional[1] === 'start') {
     await runBrowserStartCommand(flags)
+    return
+  }
+
+  if (cmd === 'run' && (flags.headless || typeof flags.cdp === 'string')) {
+    await runReplayCommand(null, positional[1], flags, {})
     return
   }
 

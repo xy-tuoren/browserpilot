@@ -432,11 +432,15 @@ function buildInPageChainEvaluator(
 function matchChildSession(session: TabCDPSession, desc: CrossOriginHandoff) {
   const children = session.getChildSessions()
   if (!children.length) return undefined
-  if (desc.src) {
-    const exact = children.find((c) => c.url === desc.src)
+  const src = (desc.src || '').trim()
+  if (src && src !== 'about:blank') {
+    const exact = children.find((c) => c.url === src)
     if (exact) return exact
-    const partial = children.find((c) => c.url && (c.url.startsWith(desc.src) || desc.src.startsWith(c.url)))
+    const partial = children.find((c) => c.url && (c.url.startsWith(src) || src.startsWith(c.url)))
     if (partial) return partial
+    // Do NOT blindly return an unrelated OOPIF whose URL differs from desc.src;
+    // allow caller to resolve in-process same-site cross-origin frames via resolveFrame().
+    return children.find((c) => !c.url || c.url === 'about:blank')
   }
   if (children.length === 1) return children[0]
   return children.find((c) => c.type === 'iframe')
@@ -485,17 +489,31 @@ async function evaluateStages(
     const desc = handoff?.result?.value
     if (desc && desc.__bpCrossOrigin) {
       const child = matchChildSession(session, desc)
-      if (!child) return { count: 0, frameOffset: opts.frameOffset }
-      await session.send('Runtime.enable', {}, { sessionId: child.sessionId }).catch(() => {})
-      await session.send('DOM.enable', {}, { sessionId: child.sessionId }).catch(() => {})
-      return await evaluateStages(session, desc.remainingStages, {
-        visibilityMode: opts.visibilityMode,
-        sessionId: child.sessionId,
-        frameOffset: {
-          x: opts.frameOffset.x + desc.offsetX,
-          y: opts.frameOffset.y + desc.offsetY,
-        },
-      })
+      const nextOffset = {
+        x: opts.frameOffset.x + desc.offsetX,
+        y: opts.frameOffset.y + desc.offsetY,
+      }
+      if (child) {
+        await session.send('Runtime.enable', {}, { sessionId: child.sessionId }).catch(() => {})
+        await session.send('DOM.enable', {}, { sessionId: child.sessionId }).catch(() => {})
+        return await evaluateStages(session, desc.remainingStages, {
+          visibilityMode: opts.visibilityMode,
+          sessionId: child.sessionId,
+          frameOffset: nextOffset,
+        })
+      }
+      // Fallback for in-process same-site cross-origin iframes (e.g. app.example.com -> billing.example.com,
+      // or 127.0.0.1:portA -> 127.0.0.1:portB) where contentDocument is blocked by SOP but no OOPIF target is spawned.
+      const resolvedFrame = await session.resolveFrame(desc.src || desc.name || desc.id).catch(() => null)
+      if (resolvedFrame && (resolvedFrame.sessionId || resolvedFrame.contextId !== undefined)) {
+        return await evaluateStages(session, desc.remainingStages, {
+          visibilityMode: opts.visibilityMode,
+          sessionId: resolvedFrame.sessionId,
+          contextId: resolvedFrame.contextId,
+          frameOffset: nextOffset,
+        })
+      }
+      return { count: 0, frameOffset: opts.frameOffset }
     }
     return { count: 0, frameOffset: opts.frameOffset }
   }
@@ -545,12 +563,23 @@ async function evaluateStagesCount(
   const val = res?.result?.value
   if (!val) return 0
   if (val.__bpCrossOrigin && val.remainingStages) {
-    const child = matchChildSession(session, val as CrossOriginHandoff)
-    if (!child) return 0
-    return await evaluateStagesCount(session, val.remainingStages, {
-      visibilityMode: opts.visibilityMode,
-      sessionId: child.sessionId,
-    })
+    const desc = val as CrossOriginHandoff
+    const child = matchChildSession(session, desc)
+    if (child) {
+      return await evaluateStagesCount(session, desc.remainingStages, {
+        visibilityMode: opts.visibilityMode,
+        sessionId: child.sessionId,
+      })
+    }
+    const resolvedFrame = await session.resolveFrame(desc.src || desc.name || desc.id).catch(() => null)
+    if (resolvedFrame && (resolvedFrame.sessionId || resolvedFrame.contextId !== undefined)) {
+      return await evaluateStagesCount(session, desc.remainingStages, {
+        visibilityMode: opts.visibilityMode,
+        sessionId: resolvedFrame.sessionId,
+        contextId: resolvedFrame.contextId,
+      })
+    }
+    return 0
   }
   return val.count ?? 0
 }
