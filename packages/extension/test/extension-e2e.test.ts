@@ -258,9 +258,12 @@ describe('@browserpilot/extension real Chrome MV3 zero-click E2E', () => {
     expect(await popupTab.page.evaluate<string>('document.body.innerText')).toContain('Popup Ready')
     await manager.closeTab(popupInfo.tabId)
 
-    // 7. Theme & language persistence toggle (dark <-> light, default zh <-> en)
+    // 7. Theme & language persistence toggle (dark <-> light, default zh <-> en) + in-page overlay mount
     const initState = (await transport.rpc('extension.getState')) as { config: { theme: string; language?: string } }
     expect(initState.config.language).toBe('zh')
+    expect(
+      await tab.page.evaluate<number>('document.querySelectorAll("#__browserpilot_ui_host").length'),
+    ).toBe(1)
     await transport.rpc('extension.setConfig', { theme: 'light', language: 'en' })
     const lightState = (await transport.rpc('extension.getState')) as { config: { theme: string; language?: string } }
     expect(lightState.config.theme).toBe('light')

@@ -194,6 +194,23 @@ export function updateBadge(): void {
   void chrome.action.setBadgeBackgroundColor({ color: count > 0 ? '#10b981' : '#0ea5e9' }).catch(() => {})
 }
 
+export function getContextMenuPinTitle(lang?: ExtensionConfig['language']): string {
+  return lang === 'en' ? 'Pin Element for BrowserPilot' : '固定此元素到 BrowserPilot'
+}
+
+export function syncContextMenuLanguage(): void {
+  if (!chrome.contextMenus?.update) return
+  try {
+    chrome.contextMenus.update(
+      CONTEXT_MENU_PIN_ID,
+      { title: getContextMenuPinTitle(bgState.config.language) },
+      () => {
+        void chrome.runtime.lastError
+      },
+    )
+  } catch {}
+}
+
 export async function loadConfig(): Promise<void> {
   const stored = await chrome.storage.local.get(STORAGE_CONFIG_KEY)
   const saved = stored[STORAGE_CONFIG_KEY] as Partial<ExtensionConfig> | undefined
@@ -201,12 +218,14 @@ export async function loadConfig(): Promise<void> {
     bgState.config = {
       ...DEFAULT_CONFIG,
       ...saved,
+      language: saved.language === 'en' ? 'en' : 'zh',
       domainRules: {
         blockedDomains: saved.domainRules?.blockedDomains ?? [],
         allowedDomains: saved.domainRules?.allowedDomains ?? [],
       },
     }
   }
+  syncContextMenuLanguage()
 }
 
 export function pushControlBanner(
@@ -214,17 +233,30 @@ export function pushControlBanner(
   opts: { active: boolean; status?: string; mode?: 'working' | 'handoff' },
 ): void {
   const show = opts.active && bgState.config.showHighlights
-  void chrome.tabs
-    .sendMessage(tabId, {
-      type: 'browserpilot:control-banner',
-      active: show,
-      status: opts.status,
-      paused: bgState.config.paused,
-      theme: bgState.config.theme,
-      language: bgState.config.language ?? 'zh',
-      mode: opts.mode ?? 'working',
-    })
-    .catch(() => {})
+  const payload = {
+    type: 'browserpilot:control-banner',
+    active: show,
+    status: opts.status,
+    paused: bgState.config.paused,
+    theme: bgState.config.theme,
+    language: bgState.config.language === 'en' ? 'en' : 'zh',
+    mode: opts.mode ?? 'working',
+  }
+  void chrome.tabs.sendMessage(tabId, payload).catch(async () => {
+    if (!show) {
+      await chrome.scripting
+        .executeScript({
+          target: { tabId },
+          func: () => {
+            document.getElementById('__browserpilot_ui_host')?.remove()
+          },
+        })
+        .catch(() => {})
+      return
+    }
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content-script.js'] }).catch(() => {})
+    await chrome.tabs.sendMessage(tabId, payload).catch(() => {})
+  })
 }
 
 export function broadcastBannerToAttachedTabs(): void {
@@ -236,7 +268,7 @@ export function broadcastBannerToAttachedTabs(): void {
 export async function saveConfig(patch: Partial<ExtensionConfig>): Promise<ExtensionConfig> {
   const prevUrl = bgState.config.daemonUrl
   const prevToken = bgState.config.authToken
-  bgState.config = {
+  const next = {
     ...bgState.config,
     ...patch,
     domainRules: patch.domainRules
@@ -246,8 +278,11 @@ export async function saveConfig(patch: Partial<ExtensionConfig>): Promise<Exten
         }
       : bgState.config.domainRules,
   }
+  next.language = next.language === 'en' ? 'en' : 'zh'
+  bgState.config = next
   await chrome.storage.local.set({ [STORAGE_CONFIG_KEY]: bgState.config })
   updateBadge()
+  syncContextMenuLanguage()
   broadcastUiUpdate()
   broadcastBannerToAttachedTabs()
 

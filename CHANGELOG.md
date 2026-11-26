@@ -6,6 +6,11 @@ All notable changes to **BrowserPilot** (`browserpilot-cdp`) are documented in t
 
 ## [Unreleased]
 
+### Changed
+- **Full Simplified Chinese Default Across All In-Page UI Surfaces (`packages/extension`, `packages/core/src/page/handoff.ts`)**:
+  - In-page floating control capsule (`运行中` / `已暂停` / `暂停` / `恢复` / `接管`), live action status & highlight labels (`正在点击` / `正在输入` / `向下滚动` / `等待你操作…`), Element Picker / Pin / Codegen assertion toasts, right-click context menu (`固定此元素到 BrowserPilot`), and Human Handoff card (`请你手动完成操作` / `我已完成，继续执行` / `取消`) now all default to Simplified Chinese (`zh`) and follow the Popup / Side Panel `中文` <-> `EN` toggle.
+  - Added automatic cleanup of orphaned `#__browserpilot_ui_host` overlays and on-demand `content-script.js` injection across already-open tabs after extension reload so open webpages update immediately without refreshing.
+
 ### Added
 - **Interactive-Only Compact Snapshot Mode (`snapshot -i` / `--interactive` / `interactiveOnly: true`)**:
   - Emits only interactive controls (`[e1]`, `[e2]`...) and enclosing container landmarks that actually hold interactive descendants, cutting snapshot token usage by ~60–75% on content-heavy pages while maintaining independent full vs interactive diff baselines.

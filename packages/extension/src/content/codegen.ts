@@ -1,5 +1,5 @@
 import { computeStableDomSelector } from '@browserpilot/protocol'
-import { safeSendRuntimeMessage, showToast } from './overlay.js'
+import { getContentLanguage, safeSendRuntimeMessage, showToast } from './overlay.js'
 
 let codegenActive = false
 let codegenAssertMode = false
@@ -86,7 +86,7 @@ function bindDocumentListeners(doc: Document): void {
           if (txt) emitCodegenStep({ action: 'assert_text', target: sel, value: txt, text: txt })
           else emitCodegenStep({ action: 'assert_visible', target: sel })
         }
-        showToast(`BrowserPilot: + assert ${sel}`)
+        showToast(getContentLanguage() === 'en' ? `BrowserPilot: + assert ${sel}` : `已添加断言：${sel}`)
         return
       }
 

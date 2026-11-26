@@ -133,13 +133,16 @@ export async function executeBridgeMethod(method: string, params: Record<string,
     case 'extension.highlight': {
       if (!bgState.config.showHighlights) return { ok: true }
       const tabId = Number(params.tabId)
-      await chrome.tabs
-        .sendMessage(tabId, {
-          type: 'browserpilot:highlight',
-          box: params.box,
-          label: params.label,
-        })
-        .catch(() => {})
+      const payload = {
+        type: 'browserpilot:highlight',
+        box: params.box,
+        label: params.label,
+        language: bgState.config.language === 'en' ? 'en' : 'zh',
+      }
+      await chrome.tabs.sendMessage(tabId, payload).catch(async () => {
+        await chrome.scripting.executeScript({ target: { tabId }, files: ['content-script.js'] }).catch(() => {})
+        await chrome.tabs.sendMessage(tabId, payload).catch(() => {})
+      })
       return { ok: true }
     }
 

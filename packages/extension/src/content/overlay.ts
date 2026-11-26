@@ -25,6 +25,52 @@ let toastEl: HTMLDivElement | null = null
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
 let pickerHoverBox: HTMLDivElement | null = null
+let currentLanguage: 'zh' | 'en' = 'zh'
+
+export function getContentLanguage(): 'zh' | 'en' {
+  return currentLanguage
+}
+
+export function setContentLanguage(lang?: string): void {
+  currentLanguage = lang === 'en' ? 'en' : 'zh'
+}
+
+export function removeOrphanedOverlayHost(): void {
+  const existing = document.getElementById('__browserpilot_ui_host')
+  if (existing && existing !== hostEl) {
+    existing.remove()
+  }
+}
+
+function localizeBannerStatus(status: string | undefined, isEn: boolean): string {
+  const fallback = isEn ? 'Active' : '运行中'
+  if (!status) return fallback
+  if (isEn) {
+    if (status === '运行中') return 'Active'
+    if (status === '已暂停') return 'Paused'
+    return status
+  }
+  if (status === 'Active') return '运行中'
+  if (status === 'Paused') return '已暂停'
+  if (status === 'Waiting for you...') return '等待你操作…'
+  if (status.startsWith('Clicking ')) return `正在点击 ${status.slice('Clicking '.length)}`
+  if (status.startsWith('Filling ')) return `正在输入 ${status.slice('Filling '.length)}`
+  if (status === 'Scrolling down') return '向下滚动'
+  if (status === 'Scrolling up') return '向上滚动'
+  if (status === 'Scrolling left') return '向左滚动'
+  if (status === 'Scrolling right') return '向右滚动'
+  if (status.startsWith('Scrolling ')) return `正在滚动 ${status.slice('Scrolling '.length)}`
+  return status
+}
+
+function localizeHighlightLabel(label: string | undefined, isEn: boolean): string {
+  if (!label) return 'BrowserPilot'
+  if (isEn) return label
+  if (label.startsWith('click ')) return `点击 ${label.slice('click '.length)}`
+  if (label.startsWith('fill ')) return `输入 ${label.slice('fill '.length)}`
+  if (label.startsWith('hover ')) return `悬停 ${label.slice('hover '.length)}`
+  return label
+}
 
 export function safeSendRuntimeMessage<T = unknown>(message: unknown): Promise<T | null> {
   try {
@@ -37,6 +83,7 @@ export function safeSendRuntimeMessage<T = unknown>(message: unknown): Promise<T
 
 export function ensureOverlay(): ShadowRoot {
   if (shadowRoot && hostEl?.isConnected) return shadowRoot
+  removeOrphanedOverlayHost()
   hostEl?.remove()
   hostEl = document.createElement('div')
   hostEl.id = '__browserpilot_ui_host'
@@ -97,7 +144,7 @@ export function ensureOverlay(): ShadowRoot {
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
       box-shadow: 0 10px 28px rgba(2, 6, 23, 0.34), 0 0 0 1px rgba(56, 189, 248, 0.14);
-      font: 500 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font: 500 12px/1.2 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
       pointer-events: none;
       opacity: 0;
       transition: opacity 180ms ease, transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
@@ -262,17 +309,17 @@ export function ensureOverlay(): ShadowRoot {
   brand.textContent = '>_ BrowserPilot'
   pillStatusEl = document.createElement('span')
   pillStatusEl.className = 'bp-pill-status'
-  pillStatusEl.textContent = 'Active'
+  pillStatusEl.textContent = currentLanguage === 'en' ? 'Active' : '运行中'
   pillPauseBtn = document.createElement('button')
   pillPauseBtn.className = 'bp-pill-btn'
-  pillPauseBtn.textContent = '暂停'
+  pillPauseBtn.textContent = currentLanguage === 'en' ? 'Pause' : '暂停'
   pillPauseBtn.addEventListener('click', (e) => {
     e.stopPropagation()
     void safeSendRuntimeMessage({ type: 'browserpilot:toggle-pause' })
   })
   pillStopBtn = document.createElement('button')
   pillStopBtn.className = 'bp-pill-btn stop'
-  pillStopBtn.textContent = '接管'
+  pillStopBtn.textContent = currentLanguage === 'en' ? 'Take Over' : '接管'
   pillStopBtn.addEventListener('click', (e) => {
     e.stopPropagation()
     void safeSendRuntimeMessage({ type: 'browserpilot:stop-this-tab' })
@@ -323,7 +370,11 @@ export function updateControlBanner(opts: {
   language?: 'zh' | 'en'
   mode?: 'working' | 'handoff'
 }): void {
+  if (opts.language) {
+    setContentLanguage(opts.language)
+  }
   if (!opts.active) {
+    removeOrphanedOverlayHost()
     if (borderEl) borderEl.className = 'bp-border'
     if (pillEl) pillEl.classList.remove('visible')
     return
@@ -332,7 +383,7 @@ export function updateControlBanner(opts: {
   if (!borderEl || !pillEl || !pillDotEl || !pillStatusEl || !pillPauseBtn || !pillStopBtn) return
 
   const isLight = opts.theme === 'light'
-  const isEn = opts.language === 'en'
+  const isEn = (opts.language ?? currentLanguage) === 'en'
   pillEl.classList.toggle('light', isLight)
 
   if (opts.mode === 'handoff') {
@@ -345,15 +396,11 @@ export function updateControlBanner(opts: {
   pillDotEl.className = opts.paused ? 'bp-pill-dot paused' : 'bp-pill-dot'
   pillPauseBtn.textContent = opts.paused ? (isEn ? 'Resume' : '恢复') : isEn ? 'Pause' : '暂停'
   pillStopBtn.textContent = isEn ? 'Take Over' : '接管'
-  const defaultActive = isEn ? 'Active' : '运行中'
   const defaultPaused = isEn ? 'Paused' : '已暂停'
-  if (opts.status !== undefined) {
-    const normalized = !isEn && opts.status === 'Active' ? defaultActive : opts.status
-    pillStatusEl.textContent = opts.paused ? defaultPaused : normalized || defaultActive
-  } else if (opts.paused) {
+  if (opts.paused) {
     pillStatusEl.textContent = defaultPaused
   } else {
-    pillStatusEl.textContent = defaultActive
+    pillStatusEl.textContent = localizeBannerStatus(opts.status, isEn)
   }
   pillEl.classList.add('visible')
 }
@@ -365,7 +412,7 @@ export function showHighlight(box: { x: number; y: number; width: number; height
   highlightEl.style.top = `${box.y}px`
   highlightEl.style.width = `${box.width}px`
   highlightEl.style.height = `${box.height}px`
-  highlightLabelEl.textContent = label || 'BrowserPilot'
+  highlightLabelEl.textContent = localizeHighlightLabel(label, currentLanguage === 'en')
   highlightEl.style.opacity = '1'
   if (highlightTimer) clearTimeout(highlightTimer)
   highlightTimer = setTimeout(() => {

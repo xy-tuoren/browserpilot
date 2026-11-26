@@ -8,18 +8,35 @@ export interface HandoffDeps {
 }
 
 /**
- * Displays an interactive in-page Human Handoff card ("Your Turn") and pauses until
- * the user clicks "Done, Continue AI" or "Cancel" inside the browser tab.
+ * Displays an interactive in-page Human Handoff card ("请你手动完成操作" / "Your Turn") and pauses until
+ * the user clicks "我已完成，继续执行" ("Done, Continue AI") or "取消" ("Cancel") inside the browser tab.
  */
 export async function requestHumanHandoff(
   deps: HandoffDeps,
   message: string,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; language?: 'zh' | 'en' } = {},
 ): Promise<HumanHandoffResult> {
   const tabId = deps.session.tabId
   const timeoutMs = options.timeoutMs ?? 300_000
   const start = Date.now()
   const bindingName = '__browserpilotHandoffDone'
+
+  let lang: 'zh' | 'en' = options.language === 'en' ? 'en' : 'zh'
+  if (!options.language) {
+    const extRpc = (
+      deps.session.transport as {
+        rpc?: (method: string) => Promise<{ config?: { language?: string } } | null>
+      }
+    ).rpc
+    if (typeof extRpc === 'function') {
+      const extState = await extRpc.call(deps.session.transport, 'extension.getState').catch(() => null)
+      if (extState?.config?.language === 'en') lang = 'en'
+    }
+  }
+  const isEn = lang === 'en'
+  const cardTitle = isEn ? 'BrowserPilot · Your Turn' : 'BrowserPilot · 请你手动完成操作'
+  const resumeLabel = isEn ? 'Done, Continue AI' : '我已完成，继续执行'
+  const cancelLabel = isEn ? 'Cancel' : '取消'
 
   await deps.session.ensureBaseDomains()
   await deps.session.send('Runtime.addBinding', { name: bindingName }).catch(() => {})
@@ -62,7 +79,7 @@ export async function requestHumanHandoff(
             backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
             border-radius: 14px; padding: 12px 16px;
             box-shadow: 0 14px 36px rgba(2, 6, 23, 0.45);
-            font: 500 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font: 500 13px/1.45 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
           }
           .bp-dot {
             width: 10px; height: 10px; border-radius: 999px; flex: none;
@@ -73,7 +90,7 @@ export async function requestHumanHandoff(
           .bp-actions { display: flex; gap: 8px; flex: none; }
           button {
             cursor: pointer; border-radius: 8px; border: 1px solid transparent;
-            padding: 7px 12px; font: 600 12px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+            padding: 7px 12px; font: 600 12px/1 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
           }
           .bp-resume { background: linear-gradient(135deg, #2dd4bf, #06b6d4); color: #042f2e; }
           .bp-resume:hover { filter: brightness(1.06); }
@@ -91,7 +108,7 @@ export async function requestHumanHandoff(
         msgWrap.className = 'bp-msg';
         const title = document.createElement('div');
         title.className = 'bp-title';
-        title.textContent = 'BrowserPilot · Your Turn';
+        title.textContent = ${JSON.stringify(cardTitle)};
         const body = document.createElement('div');
         body.textContent = ${JSON.stringify(message)};
         msgWrap.append(title, body);
@@ -99,11 +116,11 @@ export async function requestHumanHandoff(
         actions.className = 'bp-actions';
         const btnResume = document.createElement('button');
         btnResume.className = 'bp-resume';
-        btnResume.textContent = 'Done, Continue AI';
+        btnResume.textContent = ${JSON.stringify(resumeLabel)};
         btnResume.onclick = () => { globalThis.${bindingName}?.('resume'); host.remove(); };
         const btnCancel = document.createElement('button');
         btnCancel.className = 'bp-cancel';
-        btnCancel.textContent = 'Cancel';
+        btnCancel.textContent = ${JSON.stringify(cancelLabel)};
         btnCancel.onclick = () => { globalThis.${bindingName}?.('cancel'); host.remove(); };
         actions.append(btnResume, btnCancel);
         card.append(dot, msgWrap, actions);

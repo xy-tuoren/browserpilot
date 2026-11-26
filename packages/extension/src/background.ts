@@ -16,8 +16,10 @@ import {
 import { executeBridgeMethod } from './bg/rpc.js'
 import {
   bgState,
+  broadcastBannerToAttachedTabs,
   broadcastUiUpdate,
   CONTEXT_MENU_PIN_ID,
+  getContextMenuPinTitle,
   getExtensionState,
   KEEPALIVE_ALARM,
   loadConfig,
@@ -225,7 +227,7 @@ chrome.runtime.onInstalled.addListener(() => {
     chrome.contextMenus.create(
       {
         id: CONTEXT_MENU_PIN_ID,
-        title: 'Pin Element for BrowserPilot',
+        title: getContextMenuPinTitle(bgState.config.language),
         contexts: ['all'],
       },
       () => {
@@ -233,13 +235,33 @@ chrome.runtime.onInstalled.addListener(() => {
       },
     )
   })
+
+  // Refresh content scripts in already-open http(s) tabs so orphaned capsules from prior extension reloads are cleaned immediately
+  void chrome.tabs
+    .query({ url: ['http://*/*', 'https://*/*'] })
+    .then(async (tabs) => {
+      for (const t of tabs) {
+        if (t.id !== undefined && !isRestrictedUrl(t.url)) {
+          await chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['content-script.js'] }).catch(() => {})
+        }
+      }
+    })
+    .catch(() => {})
 })
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== CONTEXT_MENU_PIN_ID || !tab?.id) return
   const tabId = tab.id
   void (async () => {
-    const resp = (await chrome.tabs.sendMessage(tabId, { type: 'browserpilot:pin-last-right-clicked' }).catch(() => null)) as {
+    const lang = bgState.config.language === 'en' ? 'en' : 'zh'
+    const resp = (await chrome.tabs
+      .sendMessage(tabId, { type: 'browserpilot:pin-last-right-clicked', language: lang })
+      .catch(async () => {
+        await chrome.scripting.executeScript({ target: { tabId }, files: ['content-script.js'] }).catch(() => {})
+        return (await chrome.tabs
+          .sendMessage(tabId, { type: 'browserpilot:pin-last-right-clicked', language: lang })
+          .catch(() => null)) as { globalVar?: string; selector?: string } | null
+      })) as {
       globalVar?: string
       selector?: string
     } | null
@@ -370,10 +392,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true
   }
   if (msg.type === 'browserpilot:start-picker') {
+    const lang = bgState.config.language === 'en' ? 'en' : 'zh'
     void resolveTargetContentTab()
       .then((tab) => {
         if (tab?.id !== undefined) {
-          return sendTabMessageEnsureInjected(tab.id, { type: 'browserpilot:start-picker' })
+          return sendTabMessageEnsureInjected(tab.id, { type: 'browserpilot:start-picker', language: lang })
         }
       })
       .then(() => safeRespond({ ok: true }))
@@ -489,5 +512,6 @@ void loadConfig()
   .catch(() => {})
   .finally(() => {
     updateBadge()
+    broadcastBannerToAttachedTabs()
     void connectBridge()
   })

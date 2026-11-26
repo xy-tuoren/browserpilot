@@ -1,5 +1,11 @@
 import { computeStableDomSelector } from '@browserpilot/protocol'
-import { ensureOverlay, getPickerHoverBox, safeSendRuntimeMessage, showToast } from './overlay.js'
+import {
+  ensureOverlay,
+  getContentLanguage,
+  getPickerHoverBox,
+  safeSendRuntimeMessage,
+  showToast,
+} from './overlay.js'
 
 let pickerActive = false
 let lastRightClicked: Element | null = null
@@ -38,7 +44,7 @@ function onPickerClick(e: MouseEvent): void {
   const selector = computeStableDomSelector(target)
   const text = (target.textContent || '').trim().slice(0, 80)
   void navigator.clipboard?.writeText(selector).catch(() => {})
-  showToast(`BrowserPilot picked: ${selector}`)
+  showToast(getContentLanguage() === 'en' ? `BrowserPilot picked: ${selector}` : `已选取并复制：${selector}`)
   void safeSendRuntimeMessage({
     type: 'browserpilot:picked-element',
     selector,
@@ -50,7 +56,7 @@ function onPickerClick(e: MouseEvent): void {
 function onPickerKey(e: KeyboardEvent): void {
   if (e.key === 'Escape') {
     stopPicker()
-    showToast('Element picker cancelled')
+    showToast(getContentLanguage() === 'en' ? 'Element picker cancelled' : '已取消选取元素')
   }
 }
 
@@ -60,7 +66,11 @@ export function startElementPicker(): void {
   document.addEventListener('mousemove', onPickerMove, true)
   document.addEventListener('click', onPickerClick, true)
   document.addEventListener('keydown', onPickerKey, true)
-  showToast('Click any element to inspect with BrowserPilot (Esc to cancel)')
+  showToast(
+    getContentLanguage() === 'en'
+      ? 'Click any element to inspect with BrowserPilot (Esc to cancel)'
+      : '点击页面任意元素即可选取（按 Esc 取消）',
+  )
 }
 
 export function recordContextMenuTarget(target: EventTarget | null): void {
@@ -76,6 +86,10 @@ export function pinLastRightClickedElement(): { ok: boolean; globalVar?: string;
   ;(globalThis as Record<string, unknown>)[varName] = lastRightClicked
   const selector = computeStableDomSelector(lastRightClicked)
   void navigator.clipboard?.writeText(selector).catch(() => {})
-  showToast(`Pinned as ${varName} (${selector})`)
+  showToast(
+    getContentLanguage() === 'en'
+      ? `Pinned as ${varName} (${selector})`
+      : `已固定为 ${varName}（${selector}）`,
+  )
   return { ok: true, globalVar: `globalThis.${varName}`, selector }
 }
